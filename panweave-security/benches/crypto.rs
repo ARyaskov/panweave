@@ -2,6 +2,8 @@
 //! securing / unsecuring a full-size NWK frame and of hashing an install
 //! code.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use panweave_security::ccm::{decrypt_in_place, encrypt_in_place};
 use panweave_security::cipher::{BlockCipher, SoftwareAes};

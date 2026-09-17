@@ -2,6 +2,8 @@
 //! (Supported Key Negotiation Methods, Router Information, Fragmentation
 //! Parameters).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use panweave_codec::tlv::TlvSet;
 use std::hint::black_box;

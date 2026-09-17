@@ -1,6 +1,8 @@
 //! NWK header / frame codec: the per-hop cost of parsing and rebuilding a
 //! routed data frame with and without the source IEEE address.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use panweave_codec::{Decode, Encode};
 use panweave_nwk::frame::{Frame, FrameType, Header};

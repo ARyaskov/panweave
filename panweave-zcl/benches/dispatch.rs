@@ -2,6 +2,8 @@
 //! attribute store, an On command executed by the layer, and the
 //! reporting engine's periodic scan of an idle endpoint.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use panweave_aps::layer::{DataIndication, Delivery, SecurityStatus};
 use panweave_aps::tables::GroupTable;
