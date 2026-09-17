@@ -20,6 +20,8 @@ crypto-software = ["panweave-security/crypto-software"]
 dlk = ["panweave-runtime/dlk", "panweave-security/dlk"]
 # Zigbee Direct 1.1 device (ZDD) binding of the commissioning service.
 direct = ["dep:panweave-direct"]
+# Smart Energy 1.4a endpoints (Table 5-13 devices) and clusters.
+smart-energy = ["dep:panweave-smart-energy"]
 
 [dependencies]
 panweave-types = { workspace = true }
@@ -36,13 +38,14 @@ panweave-runtime = { workspace = true }
 panweave-storage = { workspace = true }
 panweave-testkit = { workspace = true }
 panweave-direct = { workspace = true, optional = true }
+panweave-smart-energy = { workspace = true, optional = true }
 heapless = { workspace = true }
 
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-sim = { workspace = true }
 panweave-direct = { workspace = true }
-panweave = { path = ".", features = ["direct"] }
+panweave = { path = ".", features = ["direct", "smart-energy"] }
 
 [[test]]
 name = "direct"

@@ -646,6 +646,7 @@ dependencies = [
  "panweave-runtime",
  "panweave-security",
  "panweave-sim",
+ "panweave-smart-energy",
  "panweave-storage",
  "panweave-testkit",
  "panweave-types",

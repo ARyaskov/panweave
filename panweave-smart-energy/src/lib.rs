@@ -26,6 +26,7 @@ extern crate alloc;
 pub mod clusters;
 pub mod commissioning;
 pub mod devices;
+pub mod endpoints;
 pub mod interpan;
 pub mod key_establishment;
 pub mod profile;

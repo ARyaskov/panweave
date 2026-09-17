@@ -312,6 +312,12 @@ Keep a Changelog; versions follow SemVer.
   Establishment pacing without leaving, the leave-instruction rules,
   rediscovery periods, the 24-hour keep-alive failure limit and the
   rejoin-and-recovery procedure with its hourly slow-down.
+* `panweave-smart-energy::endpoints` and the facade's
+  `smart_energy_endpoints` (feature `smart-energy`): server and client
+  instances of every Smart Energy cluster with their mandatory
+  attributes, and builders for the ten Table 5-13 devices on profile
+  0x0109 with the Table 6-1 common clusters, checked against the
+  device's cluster rules.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

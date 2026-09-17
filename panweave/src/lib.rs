@@ -51,6 +51,10 @@ pub use panweave_zdo as zdo;
 #[cfg(feature = "direct")]
 pub mod direct;
 pub mod endpoints;
+#[cfg(feature = "smart-energy")]
+pub use panweave_smart_energy as smart_energy;
+#[cfg(feature = "smart-energy")]
+pub mod smart_energy_endpoints;
 
 use heapless::Deque;
 use panweave_bdb::{Bdb, Config as BdbConfig, Failure, Outcome};

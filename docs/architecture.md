@@ -164,7 +164,7 @@ See `docs/storage-model.md`.
 | `defmt` / `log` / `tracing` | Logging back-ends; at most one should be enabled by the application. |
 | `crypto-software` | RustCrypto AES back-end (default for host and most MCUs). |
 | `coordinator` / `router` / `end-device` | Role code paths; enabling a role never changes wire behaviour, only which state machines are compiled. |
-| `green-power` / `direct` / `smart-energy` | Optional subsystems. `green-power` on `panweave-runtime` adds the Basic Proxy; `direct` on `panweave` makes `Node` a Zigbee Direct device (`panweave::direct`, the `Zdd` trait of the Commissioning Service) and adds `Event::Direct`. |
+| `green-power` / `direct` / `smart-energy` | Optional subsystems. `green-power` on `panweave-runtime` adds the Basic Proxy; `direct` on `panweave` makes `Node` a Zigbee Direct device (`panweave::direct`, the `Zdd` trait of the Commissioning Service) and adds `Event::Direct`; `smart-energy` on `panweave` re-exports the crate as `panweave::smart_energy` and adds `panweave::smart_energy_endpoints`, the Table 5-13 device builders on profile 0x0109. |
 | `pcap` | PCAP export in the runtime and CLI. |
 
 Invalid combinations (e.g. `end-device` without any role for a coordinator

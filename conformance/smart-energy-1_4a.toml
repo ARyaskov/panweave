@@ -74,8 +74,8 @@ summary = "SE device types (ESI, metering, IHD, PCT, load control, range extende
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::devices"
-tests = ["device_table_and_checks"]
-notes = "Table 5-13 device identifiers with the mandatory / optional server and client clusters of Tables 6-1 and 6-3 to 6-10, the prohibition of unlisted clusters and the at-least-one rules of the In-Home Display and Remote Communications Device, with an endpoint checker. The Table 6-2 features and functions (time synchronization, fragmentation support, reporting) are not verified, and no facade endpoint builders exist for the SE devices yet (TODO(PW-SE-ENDPOINTS))."
+tests = ["device_table_and_checks", "every_profile_cluster_of_every_device_is_instantiable", "every_device_builds_and_conforms", "rules_are_enforced"]
+notes = "Table 5-13 device identifiers with the mandatory / optional server and client clusters of Tables 6-1 and 6-3 to 6-10, the prohibition of unlisted clusters and the at-least-one rules of the In-Home Display and Remote Communications Device, with an endpoint checker; panweave-smart-energy::endpoints instantiates every profile cluster with its mandatory attributes and the facade's smart_energy_endpoints (feature smart-energy) builds each device on profile 0x0109 with the common clusters, checked against the rules. The Table 6-2 features and functions (time synchronization, fragmentation support, reporting) are not verified (TODO(PW-SE-FEATURES))."
 [[requirement]]
 id = "PW-SE-CL-001"
 section = "Annex D.2"
@@ -138,7 +138,7 @@ level = "optional"
 status = "implemented"
 module = "panweave-smart-energy::clusters::calendar"
 tests = ["codecs_round_trip", "store_resolves_the_day_profile_in_force", "special_day_tables_replace_and_cancel", "log_pages_most_recent_first_and_clears_where_allowed", "manage_event_applies_opt_out_rules", "duty_time_algorithm", "server_fragments_and_client_reassembles", "suspension_holds_traffic_for_the_period", "event_configuration_selectors_and_reports", "pending_changes_apply_and_cancel"]
-notes = "Calendar (D.9), Device Management (D.10), Events (D.11), Energy Management (D.12, provisional), MDU Pairing (D.13, provisional) and Sub-GHz (D.14) codecs with client/server state helpers. Sub-GHz radio operation itself needs a sub-GHz PHY (requires hardware validation); the clusters are not yet wired into runtime endpoint builders (TODO(PW-SE-ENDPOINTS))."
+notes = "Calendar (D.9), Device Management (D.10), Events (D.11), Energy Management (D.12, provisional), MDU Pairing (D.13, provisional) and Sub-GHz (D.14) codecs with client/server state helpers, instantiable on Smart Energy endpoints through panweave-smart-energy::endpoints. Sub-GHz radio operation itself needs a sub-GHz PHY (requires hardware validation); command dispatch to the state helpers is the application's."
 [[requirement]]
 id = "PW-SE-CL-008"
 section = "Annex A.3, §6.1.6"
