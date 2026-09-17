@@ -282,6 +282,13 @@ Keep a Changelog; versions follow SemVer.
   by" selectors), a client `EventConfig` table with fragmented reports
   and a client `Pending` store applying the implementation-time,
   cancellation (0xFFFFFFFF) and provider-match rules.
+* `panweave-smart-energy::clusters::drlc::Scheduler` follows the Annex E
+  overlapping-event rules: a start in the past runs from now with the
+  original end kept, a superseded running event holds its state until
+  the successor's effective start, successive events with randomization
+  are never reported superseded and leave no artificial gap, and an
+  event for a subset of the device classes supersedes only when it
+  covers every class of the previous event this device has.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

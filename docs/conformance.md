@@ -12,10 +12,10 @@ Panweave is an independent implementation; this table records the maintainers' o
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
-| SE1.4a | 18 | 2 | 9 | 6 | 0 | 0 | 1 |
+| SE1.4a | 18 | 3 | 9 | 5 | 0 | 0 | 1 |
 | ZCL8 | 36 | 24 | 11 | 1 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 18 | 8 | 2 | 0 | 0 |
-| **All** | 237 | 156 | 57 | 20 | 3 | 0 | 1 |
+| **All** | 237 | 157 | 57 | 19 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -108,7 +108,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-SE-CL-007 | Annex D.9, D.10, D.11, D.12, D.13, D.14 | optional | implemented | `panweave-smart-energy::clusters::calendar` | Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | `codecs_round_trip`, `store_resolves_the_day_profile_in_force`, `special_day_tables_replace_and_cancel`, `log_pages_most_recent_first_and_clears_where_allowed`, `manage_event_applies_opt_out_rules`, `duty_time_algorithm`, `server_fragments_and_client_reassembles`, `suspension_holds_traffic_for_the_period`, `event_configuration_selectors_and_reports`, `pending_changes_apply_and_cancel` | Calendar (D.9), Device Management (D.10), Events (D.11), Energy Management (D.12, provisional), MDU Pairing (D.13, provisional) and Sub-GHz (D.14) codecs with client/server state helpers. Sub-GHz radio operation itself needs a sub-GHz PHY (requires hardware validation); the clusters are not yet wired into runtime endpoint builders (TODO(PW-SE-ENDPOINTS)). |
 | PW-SE-CL-008 | Annex A.3, §6.1.6 | mandatory | partially-implemented | `panweave-zcl::clusters::keep_alive` | Keep-Alive cluster | `router_keep_alive_detects_a_vanished_trust_center` | The ZCL8 §3.18 cluster (TCKeepAliveBase / TCKeepAliveJitter server, router client behaviour with three-failure detection) is implemented; the Smart Energy Trust Center swap-out procedure that follows a lost Trust Center is not. |
 | PW-SE-CL-009 | Annex B | optional | not-implemented | `panweave-aps::interpan` | Enhanced inter-PAN transmission | — |  |
-| PW-SE-EV-001 | Annex E | mandatory | not-implemented | `panweave-smart-energy::events` | Overlapping DRLC event rules | — |  |
+| PW-SE-EV-001 | Annex E | mandatory | implemented | `panweave-smart-energy::clusters::drlc` | Overlapping DRLC event rules | `annex_e_overlap_rules`, `scheduler_accepts_supersedes_and_reports` | Scheduler applies rules 3 (expired events rejected 0xFB), 4 (start in the past runs from now with the original end), 5a/5b (newer overlapping events supersede; a running event keeps its state until the successor's effective start and switches directly, reported Superseded once), 6b/6d (overlap judged on scheduled periods so randomization never conflicts; a successive event's effective start truncates or extends the predecessor's effective end, no artificial gap) and 8 (supersession only when the new event covers every device class of the previous one that this device has). Rules 1, 2 and 7 bind the ESI / upstream systems and need no client code. |
 
 ## ZCL8 — Zigbee Cluster Library Specification, Revision 8
 

@@ -521,6 +521,10 @@ pub struct Scheduled {
     pub end: u32,
     /// Phase.
     pub phase: Phase,
+    /// Already reported as superseded: runs until `end` (the
+    /// successor's effective start, Annex E rule 5b) and is then
+    /// dropped without a completion report.
+    pub superseded: bool,
 }
 
 /// Client-side event scheduler (D.2.3, D.2.4.2). `N` bounds the events
@@ -594,7 +598,10 @@ impl<const N: usize> Scheduler<N> {
         if e.start_time == 0 {
             e.start_time = now;
         }
-        if e.end_time() <= now || !criticality::is_valid(e.criticality_level) {
+        // Scheduled end from the original start (Annex E rule 4
+        // preserves it when the start lies in the past).
+        let scheduled_end = e.end_time();
+        if scheduled_end <= now || !criticality::is_valid(e.criticality_level) {
             let _ = reports.push(Report {
                 issuer_event_id: e.issuer_event_id,
                 status: if e.end_time() <= now {
@@ -607,8 +614,8 @@ impl<const N: usize> Scheduler<N> {
             return Some(reports);
         }
         // A repeat of a known event is acknowledged again, not
-        // rescheduled.
-        if self.get(e.issuer_event_id).is_some() {
+        // rescheduled (a superseded one is judged like a new event).
+        if self.get(e.issuer_event_id).is_some_and(|k| !k.superseded) {
             let _ = reports.push(Report {
                 issuer_event_id: e.issuer_event_id,
                 status: EventStatus::Received,
@@ -620,7 +627,12 @@ impl<const N: usize> Scheduler<N> {
         if self.events.iter().any(|s| {
             s.event.issuer_event_id > e.issuer_event_id
                 && s.event.device_class & e.device_class != 0
-                && overlaps(s.start, s.end, e.start_time, e.end_time())
+                && overlaps(
+                    s.event.start_time,
+                    s.event.end_time(),
+                    e.start_time,
+                    scheduled_end,
+                )
         }) {
             let _ = reports.push(Report {
                 issuer_event_id: e.issuer_event_id,
@@ -629,8 +641,10 @@ impl<const N: usize> Scheduler<N> {
             });
             return Some(reports);
         }
-        let mut start = e.start_time;
-        let mut end = e.end_time();
+        // Rule 4: a start in the past runs from now.
+        let scheduled_start = e.start_time.max(now);
+        let mut start = scheduled_start;
+        let mut end = scheduled_end;
         if e.event_control & event_control::RANDOMIZE_START != 0 {
             let r = u32::from(random(self.start_randomization_minutes)) * 60;
             start = start.saturating_add(r);
@@ -639,18 +653,44 @@ impl<const N: usize> Scheduler<N> {
         if e.event_control & event_control::RANDOMIZE_DURATION != 0 {
             end = end.saturating_add(u32::from(random(self.duration_randomization_minutes)) * 60);
         }
-        // Newer overlapping events with common device classes supersede
-        // (D.2.4 note; Annex E).
+        // Newer overlapping events supersede (D.2.4 note; Annex E rule
+        // 5). Overlap is judged on the scheduled periods so that
+        // randomization never creates a conflict (rule 6b); the
+        // previous event is superseded only when the new one covers
+        // every device class of it this device has (rule 8).
         let mut i = 0;
         while i < self.events.len() {
             let s = &self.events[i];
-            if s.event.device_class & e.device_class != 0 && overlaps(s.start, s.end, start, end) {
+            let common = s.event.device_class & self.device_class;
+            let covered = common != 0 && common & !e.device_class == 0;
+            let scheduled_overlap = overlaps(
+                s.event.start_time,
+                s.event.end_time(),
+                scheduled_start,
+                scheduled_end,
+            );
+            let successive =
+                s.event.end_time() == e.start_time || s.event.end_time() == scheduled_start;
+            if covered && scheduled_overlap && !s.superseded {
                 let _ = reports.push(Report {
                     issuer_event_id: s.event.issuer_event_id,
                     status: EventStatus::Superseded,
                     event: Some(s.event),
                 });
-                self.events.remove(i);
+                if matches!(s.phase, Phase::Active | Phase::ActiveOptOut) && start > now {
+                    // Rule 5b: keep the current state until the new
+                    // event's effective start, then switch directly.
+                    self.events[i].end = start;
+                    self.events[i].superseded = true;
+                    i += 1;
+                } else {
+                    self.events.remove(i);
+                }
+            } else if common != 0 && successive && s.event.start_time < e.start_time {
+                // Rules 6b / 6d: the successor's effective start takes
+                // precedence and no artificial gap is left.
+                self.events[i].end = start;
+                i += 1;
             } else {
                 i += 1;
             }
@@ -667,6 +707,7 @@ impl<const N: usize> Scheduler<N> {
                 start,
                 end,
                 phase: Phase::Scheduled,
+                superseded: false,
             })
             .is_err()
         {
@@ -798,6 +839,10 @@ impl<const N: usize> Scheduler<N> {
         while i < self.events.len() {
             let s = self.events[i];
             if now >= s.end {
+                if s.superseded {
+                    self.events.remove(i);
+                    continue;
+                }
                 let opted_out = matches!(s.phase, Phase::ActiveOptOut | Phase::ScheduledOptOut);
                 let _ = out.push(Report {
                     issuer_event_id: s.event.issuer_event_id,
@@ -931,6 +976,97 @@ mod tests {
         let mut w = Writer::new(&mut buf);
         c.encode(&mut w).unwrap();
         assert_eq!(CancelLoadControlEvent::parse(&buf[..12]).unwrap(), c);
+    }
+
+    #[test]
+    fn annex_e_overlap_rules() {
+        // Rule 4: a start in the past runs from now, the end is kept.
+        let mut s: Scheduler<4> = Scheduler::new(device_class::HVAC | device_class::POOL_PUMP);
+        let r = s
+            .on_event(&event(1, 1000, 60, device_class::HVAC, 0), 1600, |_| 0)
+            .unwrap();
+        assert_eq!(r[0].status, EventStatus::Received);
+        let e1 = s.get(1).unwrap();
+        assert_eq!((e1.start, e1.end), (1600, 1000 + 3600));
+        assert_eq!(s.poll(1600)[0].status, EventStatus::Started);
+
+        // Rule 5b: an overlapping event starting later supersedes the
+        // running one now, but the device keeps its state until the
+        // successor's effective start and then switches directly.
+        let r = s
+            .on_event(&event(2, 3000, 60, device_class::HVAC, 0), 2000, |_| 0)
+            .unwrap();
+        assert_eq!(r[0].status, EventStatus::Superseded);
+        assert_eq!(r[0].issuer_event_id, 1);
+        assert_eq!(r[1].status, EventStatus::Received);
+        let e1 = s.get(1).unwrap();
+        assert!(e1.superseded && e1.end == 3000);
+        assert!(s.active().is_some_and(|a| a.event.issuer_event_id == 1));
+        assert_eq!(s.next_deadline(), Some(3000));
+        let reports = s.poll(3000);
+        // Event 1 leaves silently, event 2 starts: one report only.
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            (reports[0].issuer_event_id, reports[0].status),
+            (2, EventStatus::Started)
+        );
+        assert!(s.get(1).is_none());
+
+        // Rule 8: an event for a subset of the device classes does not
+        // supersede an event this device also follows for another class.
+        let r = s
+            .on_event(
+                &event(3, 4000, 60, device_class::HVAC | device_class::POOL_PUMP, 0),
+                3500,
+                |_| 0,
+            )
+            .unwrap();
+        assert_eq!(r[0].status, EventStatus::Superseded);
+        assert_eq!(r[0].issuer_event_id, 2);
+        let r = s
+            .on_event(&event(4, 4000, 30, device_class::POOL_PUMP, 0), 3500, |_| 0)
+            .unwrap();
+        assert_eq!(r.len(), 1, "event 3 stays for the HVAC class: {r:?}");
+        assert_eq!(r[0].status, EventStatus::Received);
+        assert!(s.get(3).is_some() && s.get(4).is_some());
+
+        // Rules 6b / 6d: successive events with randomization are not
+        // superseded; the successor's effective start wins and no gap
+        // is left.
+        let mut s: Scheduler<4> = Scheduler::new(device_class::HVAC);
+        s.start_randomization_minutes = 10;
+        s.duration_randomization_minutes = 10;
+        s.on_event(
+            &event(
+                10,
+                10_000,
+                60,
+                device_class::HVAC,
+                event_control::RANDOMIZE_DURATION,
+            ),
+            9000,
+            |_| 8,
+        )
+        .unwrap();
+        assert_eq!(s.get(10).unwrap().end, 13_600 + 480);
+        let r = s
+            .on_event(
+                &event(
+                    11,
+                    13_600,
+                    60,
+                    device_class::HVAC,
+                    event_control::RANDOMIZE_START,
+                ),
+                9000,
+                |_| 2,
+            )
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].status, EventStatus::Received);
+        // Event 10 now ends exactly when event 11 effectively starts.
+        assert_eq!(s.get(10).unwrap().end, 13_600 + 120);
+        assert_eq!(s.get(11).unwrap().start, 13_600 + 120);
     }
 
     #[test]
