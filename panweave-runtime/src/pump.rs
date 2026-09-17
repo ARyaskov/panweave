@@ -22,6 +22,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy};
 use panweave_storage::{Key, Kind, Storage};
+use panweave_types::time::Duration;
 use panweave_types::{
     ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyType, LogicalDeviceType, NwkStatus,
     ProfileId, ShortAddress,
@@ -29,13 +30,14 @@ use panweave_types::{
 use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
 use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
 use panweave_zdo::security::{
+    ChallengeReq, ChallengeRsp, FrameCounterChallenge, FrameCounterResponse,
     RetrieveAuthenticationTokenRsp, SelectedKeyNegotiationMethod, StartKeyNegotiationRsp,
     StartKeyUpdateReq,
 };
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
-use crate::stack::{PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData};
+use crate::stack::{Challenge, PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData};
 
 /// Largest NWK payload copied out of a MAC frame.
 const NPDU_BUF: usize = 116;
@@ -228,6 +230,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         == cluster::response_of(cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ)
                     {
                         self.on_authentication_token(src_ieee, security, data);
+                    }
+                    if cluster == cluster::response_of(cluster::SECURITY_CHALLENGE_REQ) {
+                        self.on_challenge_response(data);
                     }
                     if let Ok(data) = Vec::from_slice(data) {
                         self.push_event(StackEvent::Zdp(ZdpData {
@@ -854,6 +859,78 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         });
     }
 
+    /// Initiates an APS frame counter challenge to `partner`
+    /// (§4.6.3.8.1), at most one per `apsChallengePeriodTimeoutSeconds`.
+    fn issue_challenge(&mut self, partner: ExtendedAddress) {
+        if let Some(c) = self.challenge
+            && c.target == partner
+            && !self.now.has_reached(c.deadline)
+        {
+            return;
+        }
+        let Some(short) = AddrView(&self.nwk).short_of(partner) else {
+            return;
+        };
+        let mut v = [0u8; 8];
+        self.nwk.rng().fill_bytes(&mut v);
+        let value = u64::from_le_bytes(v);
+        let mut tlvs = [0u8; 18];
+        let mut w = panweave_codec::Writer::new(&mut tlvs);
+        let ch = FrameCounterChallenge {
+            sender: self.config.ieee,
+            challenge: value,
+        };
+        if ch.write(&mut w).is_err() {
+            return;
+        }
+        let req = ChallengeReq { tlvs: &tlvs };
+        if self
+            .zdo
+            .request(short, cluster::SECURITY_CHALLENGE_REQ, &req)
+            .is_err()
+        {
+            return;
+        }
+        let period = Duration::from_secs(u64::from(self.aps.aib.challenge_period_timeout_secs));
+        self.challenge = Some(Challenge {
+            target: partner,
+            value,
+            deadline: self.now + period,
+        });
+    }
+
+    /// Security_Challenge_rsp (§4.6.3.8.5): validates the MIC and marks
+    /// the partner's frame counter verified.
+    fn on_challenge_response(&mut self, data: &[u8]) {
+        let Some(c) = self.challenge else { return };
+        let Ok(rsp) = ChallengeRsp::decode_exact(data) else {
+            return;
+        };
+        if rsp.status != ZdpStatus::Success {
+            return;
+        }
+        let Some(r) = panweave_zdo::security::validate(rsp.tlvs)
+            .ok()
+            .and_then(|set| FrameCounterResponse::find(&set))
+        else {
+            return;
+        };
+        if r.responder != c.target || r.challenge != c.value {
+            return;
+        }
+        if self.aps.security.validate_challenge(
+            c.target,
+            c.value,
+            r.aps_frame_counter,
+            r.challenge_frame_counter,
+            &r.mic,
+        ) {
+            self.challenge = None;
+            self.aps.request_link_key_persistence();
+            self.push_event(StackEvent::FrameCounterSynchronized { partner: c.target });
+        }
+    }
+
     /// Security_Retrieve_Authentication_Token_rsp (§2.4.4.4.2.2): store
     /// the passphrase handed out by the Trust Center once.
     fn on_authentication_token(
@@ -1040,13 +1117,24 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     {
                         let mut k = [0u8; 16];
                         self.nwk.rng().fill_bytes(&mut k);
+                        // Link-Key Features & Capabilities: this Trust
+                        // Center synchronizes frame counters (§4.6.3.8).
+                        let mut features = [0u8; 3];
+                        let mut w = panweave_codec::Writer::new(&mut features);
+                        let _ = panweave_aps::command::write_link_key_features(
+                            &mut w,
+                            panweave_aps::command::LINK_KEY_FEATURE_FRAME_COUNTER_SYNC,
+                        );
                         let _ = self.aps.transport_trust_center_link_key(
                             src,
                             src_short,
                             &Key128::from_bytes(k),
-                            &[],
+                            &features,
                         );
                     }
+                }
+                ApsEvent::FrameCounterUnverified { partner } => {
+                    self.issue_challenge(partner);
                 }
                 ApsEvent::KeyVerified {
                     partner, relayed, ..

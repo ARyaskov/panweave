@@ -348,6 +348,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         self.restore_link_keys(&partners)?;
+        // §4.6.3.8: after a reboot every partner's incoming counter is
+        // unverified until a challenge succeeds.
+        self.aps.security.invalidate_frame_counters();
         self.restore_bindings_and_groups()?;
         self.restore_children()?;
         self.nwk.warm_start();

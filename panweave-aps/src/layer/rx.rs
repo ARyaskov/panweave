@@ -4,10 +4,11 @@
 
 use panweave_security::aux_header::KeyIdentifier;
 use panweave_security::cipher::BlockCipher;
+use panweave_security::frame::SecurityError;
 use panweave_types::time::Instant;
 use panweave_types::{ClusterId, Endpoint, ExtendedAddress, GroupAddress, ProfileId, ShortAddress};
 
-use super::{Aps, ApsAction, AsduBuf, DeviceState, NwkView};
+use super::{Aps, ApsAction, ApsEvent, AsduBuf, DeviceState, NwkView};
 use crate::aib::constants;
 use crate::frame::{Addressing, DeliveryMode, ExtendedHeader, Fragmentation, FrameType, Header};
 
@@ -196,6 +197,13 @@ impl<
                         key_id: u.key_id,
                         extended_nonce: u.extended_nonce,
                     };
+                }
+                Err(SecurityError::UnverifiedFrameCounter) => {
+                    if let Some(partner) = sender {
+                        self.push_event(ApsEvent::FrameCounterUnverified { partner });
+                    }
+                    self.stats.security_dropped = self.stats.security_dropped.saturating_add(1);
+                    return None;
                 }
                 Err(_) => {
                     self.stats.security_dropped = self.stats.security_dropped.saturating_add(1);

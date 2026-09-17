@@ -260,6 +260,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 e.negotiation_state = KeyNegotiationState::Complete;
                 e.negotiation_method = protocol;
                 e.post_join_key_update = update_method(secret);
+                // A negotiating partner implements Revision 23 and therefore
+                // frame counter synchronization (§4.6.3.8).
+                e.frame_counter_sync = true;
                 if self.phase == Phase::AwaitingKey {
                     e.initial_join_authentication =
                         if secret == SelectedKeyNegotiationMethod::SECRET_ANONYMOUS {

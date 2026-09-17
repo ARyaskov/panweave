@@ -625,6 +625,16 @@ tests = ["end_device_and_coordinator_survive_reboots"]
 notes = "The outgoing frame counter of each entry is restored from its last persisted reservation bound so that values are never reused; the incoming counter is stored for freshness after reboot but reset by the peer's key verification as usual. The record set is indexed from the AIB record because the Storage trait has no enumeration."
 
 [[requirement]]
+id = "PW-R23-SEC-033"
+section = "§4.6.3.8, §2.4.3.4.8, §2.4.4.4.8"
+summary = "APS frame counter verification: VerifiedFrameCounter per key-pair entry (false after reboot), UNVERIFIED_FRAME_COUNTER drops the frame and triggers Security_Challenge_req; challenge key/nonce derivation and CCM MIC-64 over the response TLV; response validation sets the incoming counter and marks it verified"
+level = "mandatory"
+status = "implemented"
+module = "panweave-security::challenge"
+tests = ["key_derivation_matches_the_worked_example", "mic_depends_on_every_input", "rebooted_trust_center_synchronizes_frame_counters"]
+notes = "One outstanding challenge at a time (apsChallengeTargetEui64 / apsChallengeValue), rate limited by apsChallengePeriodTimeoutSeconds; the frame counter synchronization capability is advertised in the Link-Key Features TLV of the Trust Center link key transport and assumed for negotiating partners. The Security_Challenge_rsp carries a status octet (ADR-0009)."
+
+[[requirement]]
 id = "PW-R23-NWK-068"
 section = "§3.6.10.7, §3.6.10.8"
 summary = "Parent routers persist end-device neighbor entries and give every child a full timeout period after reboot; end devices should send a keep-alive immediately after reboot"
@@ -841,10 +851,10 @@ id = "PW-R23-ZDP-019"
 section = "§2.4.3.4.5, §2.4.3.4.6, §2.4.3.4.7 and responses"
 summary = "Security_Get_Configuration, Security_Start_Key_Update, Security_Decommission"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::security"
-tests = ["security_services", "anonymous_key_negotiation_join_through_router"]
-notes = "Get_Configuration serves Configuration Parameters, Next PAN ID / Channel, PAN ID Conflict Report (reset on read), Supported Key Negotiation Methods, Router Information and Fragmentation Parameters; Start_Key_Update and Decommission are implemented (NO_MATCH stands in for NOT_FOUND, ADR-0007). Security_Challenge (0x0047) is decoded but not processed."
+tests = ["security_services", "anonymous_key_negotiation_join_through_router", "rebooted_trust_center_synchronizes_frame_counters"]
+notes = "Get_Configuration serves Configuration Parameters, Next PAN ID / Channel, PAN ID Conflict Report (reset on read), Supported Key Negotiation Methods, Router Information and Fragmentation Parameters; Start_Key_Update, Decommission (NO_MATCH stands in for NOT_FOUND, ADR-0007) and Security_Challenge are implemented."
 [[requirement]]
 id = "PW-R23-ZDP-020"
 section = "§2.4.3.1.8–§2.4.3.1.10, §2.4.3.1.13–§2.4.3.1.23, §2.4.3.2.1, §2.4.3.2.4–§2.4.3.2.11, §2.4.3.3.1, §2.4.3.3.6, §2.4.3.3.8"
@@ -957,7 +967,7 @@ level = "mandatory"
 status = "implemented"
 module = "panweave-aps::security"
 tests = ["data_key_round_trip_with_and_without_extended_nonce", "derived_keys_and_fallback_entry", "unverified_key_cannot_encrypt_and_counter_needs_reservation", "link_key_secured_data_round_trip"]
-notes = "Incoming frame-counter freshness is enforced for unique link keys only (§4.4.1.2 step 4); APS frame counter synchronization (§4.6.3.8, step 8) is not implemented."
+notes = "Incoming frame-counter freshness is enforced for unique link keys only (§4.4.1.2 step 4); frames from partners whose counter is unverified are dropped and synchronized with a challenge (PW-R23-SEC-033)."
 
 [[requirement]]
 id = "PW-R23-SEC-009"

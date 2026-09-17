@@ -42,6 +42,7 @@ extern crate alloc;
 
 pub mod aux_header;
 pub mod ccm;
+pub mod challenge;
 pub mod cipher;
 #[cfg(feature = "dlk")]
 pub mod dlk;

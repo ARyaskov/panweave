@@ -485,6 +485,15 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
         }
     }
 
+    fn answer_frame_counter_challenge(
+        &mut self,
+        sender: ExtendedAddress,
+        challenge: u64,
+    ) -> Option<(u32, u32, [u8; 8])> {
+        let local = self.nwk.nib.ieee_address;
+        self.aps.security.answer_challenge(local, sender, challenge)
+    }
+
     fn get_configuration(&mut self, tag: u8, w: &mut Writer<'_>) -> bool {
         match tag {
             tlv_tag::CONFIGURATION_PARAMETERS => {

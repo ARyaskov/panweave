@@ -221,6 +221,12 @@ pub enum StackEvent {
     /// The Trust Center handed out a symmetric authentication token
     /// (passphrase) for future key negotiations (§2.4.3.4.2).
     AuthenticationTokenStored,
+    /// `partner`'s APS frame counter was synchronized with a challenge
+    /// (§4.6.3.8): APS-encrypted frames from it are accepted again.
+    FrameCounterSynchronized {
+        /// The partner.
+        partner: ExtendedAddress,
+    },
     /// Identify server state changed (`seconds` remaining, 0 = stopped).
     Identify {
         /// Endpoint.
@@ -254,6 +260,14 @@ pub(crate) enum Phase {
     Joining(JoinMode),
     AwaitingKey,
     Operating,
+}
+
+/// An outstanding APS frame counter challenge (§4.6.3.8.1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Challenge {
+    pub target: ExtendedAddress,
+    pub value: u64,
+    pub deadline: Instant,
 }
 
 /// A child whose network key is in flight (Trust Center side).
@@ -290,6 +304,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) next_poll: Option<Instant>,
     pub(crate) fast_polls_left: u8,
     pub(crate) dlk: crate::dlk::DlkState,
+    /// Outstanding APS frame counter challenge (`apsChallengeTargetEui64`,
+    /// `apsChallengeValue`, `apsChallengePeriodRemainingSeconds`).
+    pub(crate) challenge: Option<Challenge>,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -371,6 +388,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             next_poll: None,
             fast_polls_left: 0,
             dlk: crate::dlk::DlkState::default(),
+            challenge: None,
             dropped_events: 0,
         }
     }
@@ -582,6 +600,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.zdo.poll_timers(now);
         self.zcl.poll_timers(now);
         self.poll_dlk(now);
+        if self.challenge.is_some_and(|c| now.has_reached(c.deadline)) {
+            self.challenge = None;
+        }
         self.service_polling(now);
         self.pump();
     }
@@ -627,6 +648,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.zdo.next_deadline(),
             self.zcl.next_deadline(),
             self.dlk_deadline(),
+            self.challenge.map(|c| c.deadline),
             self.next_poll
                 .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]

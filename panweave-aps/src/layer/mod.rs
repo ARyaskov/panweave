@@ -293,6 +293,16 @@ pub enum ApsAction {
     Persist(PersistItem),
 }
 
+/// Frame counter synchronization is needed with `partner`
+/// (`UNVERIFIED_FRAME_COUNTER`, §4.6.3.8): the runtime issues a
+/// Security_Challenge_req, rate limited by `apsChallengePeriodTimeoutSeconds`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ChallengeNeeded {
+    /// The partner whose incoming counter is unverified.
+    pub partner: ExtendedAddress,
+}
+
 /// A key delivered by a Transport Key command.
 #[derive(Clone, Debug)]
 pub enum TransportedKey {
@@ -412,6 +422,12 @@ pub enum ApsEvent {
         key_type: KeyType,
         /// Status.
         status: ApsStatus,
+    },
+    /// A frame from `partner` authenticated but its counter is unverified
+    /// (§4.6.3.8): challenge the partner.
+    FrameCounterUnverified {
+        /// The partner.
+        partner: ExtendedAddress,
     },
 }
 

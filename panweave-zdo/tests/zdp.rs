@@ -187,6 +187,13 @@ impl ZdoContext for Ctx {
     fn get_configuration(&mut self, _tag: u8, _w: &mut panweave_codec::Writer<'_>) -> bool {
         false
     }
+    fn answer_frame_counter_challenge(
+        &mut self,
+        _sender: ExtendedAddress,
+        _challenge: u64,
+    ) -> Option<(u32, u32, [u8; 8])> {
+        Some((77, 1, [9; 8]))
+    }
 }
 
 fn node_desc(lt: LogicalDeviceType) -> NodeDescriptor {

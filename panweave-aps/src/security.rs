@@ -9,12 +9,14 @@
 //! that a value is never reused after a reset.
 
 use panweave_security::aux_header::{AuxHeader, KeyIdentifier, SecurityLevel};
+use panweave_security::challenge;
 use panweave_security::cipher::BlockCipher;
 use panweave_security::frame::{self, SecurityError};
 use panweave_security::frame_counter::{CounterError, Reservation};
 use panweave_security::key_hierarchy;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind, LinkKeyTable};
 use panweave_types::{ExtendedAddress, FrameCounter, Key128, KeyAttributes};
+use subtle::ConstantTimeEq;
 
 /// Result of unprotecting an incoming APS frame.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -167,6 +169,58 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
         }
     }
 
+    /// Answers an APS frame counter challenge from `partner`
+    /// (§4.6.3.8.4): returns the outgoing counter, the challenge frame
+    /// counter used and the MIC, or `None` without a key-pair entry.
+    pub fn answer_challenge(
+        &mut self,
+        local: ExtendedAddress,
+        partner: ExtendedAddress,
+        challenge: u64,
+    ) -> Option<(u32, u32, [u8; challenge::MIC_LEN])> {
+        let e = self.keys.get_mut(partner)?;
+        let outgoing = e.outgoing.peek();
+        let challenge_fc = e.challenge_frame_counter;
+        e.challenge_frame_counter = e.challenge_frame_counter.wrapping_add(1);
+        let aad = challenge::response_authenticated_octets(local, challenge, outgoing);
+        let mic = challenge::challenge_mic::<C>(&e.key, outgoing, local, challenge_fc, &aad);
+        Some((outgoing, challenge_fc, mic))
+    }
+
+    /// Validates a challenge response from `partner` (§4.6.3.8.5) and,
+    /// when it authenticates, marks the partner's counter verified with
+    /// `aps_frame_counter` as the next acceptable value.
+    pub fn validate_challenge(
+        &mut self,
+        partner: ExtendedAddress,
+        challenge: u64,
+        aps_frame_counter: u32,
+        challenge_fc: u32,
+        mic: &[u8; challenge::MIC_LEN],
+    ) -> bool {
+        let Some(e) = self.keys.get_mut(partner) else {
+            return false;
+        };
+        let aad = challenge::response_authenticated_octets(partner, challenge, aps_frame_counter);
+        let expected =
+            challenge::challenge_mic::<C>(&e.key, aps_frame_counter, partner, challenge_fc, &aad);
+        if !bool::from(expected.ct_eq(mic)) {
+            return false;
+        }
+        e.incoming = aps_frame_counter;
+        e.verified_frame_counter = true;
+        true
+    }
+
+    /// Marks every entry's incoming counter unverified (after a reboot,
+    /// §4.6.3.8).
+    pub fn invalidate_frame_counters(&mut self) {
+        for e in self.keys.iter_mut() {
+            e.verified_frame_counter = false;
+            e.challenge_frame_counter = 0;
+        }
+    }
+
     /// Finds an entry whose outgoing counter needs a reservation and
     /// starts it.
     pub fn start_counter_reservation(&mut self) -> Option<(ExtendedAddress, Reservation)> {
@@ -245,10 +299,14 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
             if e.attributes == KeyAttributes::UnverifiedKey {
                 return Err(SecureError::NoKey);
             }
-            e.outgoing.allocate().map_err(|err| match err {
+            let c = e.outgoing.allocate().map_err(|err| match err {
                 CounterError::Exhausted => SecureError::CounterExhausted,
                 CounterError::ReservationRequired => SecureError::CounterPending,
-            })?
+            })?;
+            // §4.6.3.8.2: the challenge frame counter restarts whenever
+            // the outgoing counter advances.
+            e.challenge_frame_counter = 0;
+            c
         };
         let aux = AuxHeader::link(
             level,
@@ -307,6 +365,12 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
             .ok_or(SecurityError::NoKey)?;
         let u = frame::unprotect_in_place(cipher, level, source, buf, header_len)?;
         if let Some(e) = self.keys.get_mut(partner) {
+            // §4.6.3.8: while the partner's counter is unverified and the
+            // partner supports synchronization, nothing is stored and the
+            // frame is dropped pending a challenge.
+            if e.kind == LinkKeyKind::Unique && e.frame_counter_sync && !e.verified_frame_counter {
+                return Err(SecurityError::UnverifiedFrameCounter);
+            }
             e.incoming = aux.frame_counter.0.saturating_add(1);
         }
         Ok(ApsUnsecured {

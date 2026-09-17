@@ -32,6 +32,10 @@ pub enum SecurityError {
     NoKey,
     /// Received frame counter is stale (`bad frame counter`).
     BadFrameCounter,
+    /// The frame authenticated but the partner's incoming counter is
+    /// not verified (`UNVERIFIED_FRAME_COUNTER`, §4.6.3.8): the frame is
+    /// dropped and a challenge is due.
+    UnverifiedFrameCounter,
     /// The auxiliary header or trailer could not be parsed.
     Malformed,
     /// The buffer cannot hold the secured frame.
@@ -55,6 +59,7 @@ impl fmt::Display for SecurityError {
             SecurityError::FrameCounter => f.write_str("frame counter unavailable"),
             SecurityError::NoKey => f.write_str("no key"),
             SecurityError::BadFrameCounter => f.write_str("bad frame counter"),
+            SecurityError::UnverifiedFrameCounter => f.write_str("unverified frame counter"),
             SecurityError::Malformed => f.write_str("malformed secured frame"),
             SecurityError::BufferTooSmall => f.write_str("buffer too small"),
             SecurityError::Ccm(_) => f.write_str("frame security failed"),

@@ -152,6 +152,20 @@ Implemented in `panweave-runtime::dlk` over the ZDO security services of
   Key (`TrustCenterPolicy::allow_tclk_request` refuses negotiated
   entries).
 
+## APS frame counter verification (R23.2 §4.6.3.8)
+
+Each key-pair entry carries `VerifiedFrameCounter`. Fresh entries created
+by a key transport or negotiation are verified; a warm start marks every
+entry unverified. An APS-encrypted frame from a partner that supports
+synchronization (Link-Key Features bit 0, assumed for negotiating
+partners) is authenticated and then dropped while the entry is
+unverified, and a Security_Challenge_req is sent (one outstanding
+challenge, `apsChallengePeriodTimeoutSeconds` rate limit). The response
+MIC is computed with the link key XORed with the responder's outgoing
+counter and a nonce built from `apsChallengeFrameCounter`, so a replayed
+response cannot advance the counter; on success the incoming counter is
+set to the reported value.
+
 ## Zigbee Direct boundary
 
 BLE transport is abstract. `panweave-direct` treats every GATT write as

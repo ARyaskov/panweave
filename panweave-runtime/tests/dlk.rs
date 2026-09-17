@@ -260,3 +260,110 @@ fn wrong_passphrase_fails_and_restores_the_entry() {
         StackEvent::DeviceAuthorized { ieee, .. } if *ieee == JOINER
     )));
 }
+
+#[test]
+fn rebooted_trust_center_synchronizes_frame_counters() {
+    use panweave_codec::Writer;
+    use panweave_zdo::security::{GetAuthenticationLevelReq, TargetIeee};
+    let (mut sim, c, r) = network(InstallCodePolicy::OptionalWithAnonymousNegotiation);
+    // The router negotiated its key: the Trust Center marked it as
+    // supporting frame counter synchronization.
+    assert!(
+        sim.stack(c)
+            .aps
+            .security
+            .entry(ROUTER)
+            .unwrap()
+            .frame_counter_sync
+    );
+    assert!(
+        sim.stack(r)
+            .aps
+            .security
+            .entry(COORD)
+            .unwrap()
+            .frame_counter_sync
+    );
+
+    // Reboot the Trust Center from its storage: incoming counters are
+    // unverified (§4.6.3.8).
+    let storage = sim.stack(c).storage.clone();
+    sim.isolate(c);
+    let mut ccfg = StackConfig::new(LogicalDeviceType::Coordinator, COORD);
+    ccfg.trust_center_policy.allow_joins = true;
+    let mut fresh = stack(ccfg, 9);
+    fresh.storage = storage;
+    assert_eq!(
+        fresh.restore().unwrap(),
+        panweave_runtime::Restored::OnNetwork
+    );
+    assert!(
+        !fresh
+            .aps
+            .security
+            .entry(ROUTER)
+            .unwrap()
+            .verified_frame_counter
+    );
+    fresh.poll(sim.clock.now());
+    fresh.resume().unwrap();
+    let c2 = sim.add_stack("coord2", fresh, Box::new(OnOffApp::default()));
+    sim.run_for(Duration::from_secs(3));
+    sim.take_events(r);
+
+    // The router sends an APS-encrypted request: dropped, challenged,
+    // synchronized; the request itself times out.
+    let mut buf = [0u8; 16];
+    let mut w = Writer::new(&mut buf);
+    TargetIeee(JOINER).write(&mut w).unwrap();
+    let n = w.position();
+    let req = GetAuthenticationLevelReq { tlvs: &buf[..n] };
+    sim.stack(r)
+        .zdo
+        .request_secured(
+            panweave_types::ShortAddress::COORDINATOR,
+            panweave_zdo::cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ,
+            &req,
+        )
+        .unwrap();
+    sim.stack(r).flush();
+    assert!(sim.run_until(Duration::from_secs(20), |x| {
+        x.events(c2)
+            .iter()
+            .any(|e| matches!(e, StackEvent::FrameCounterSynchronized { partner } if *partner == ROUTER))
+    }), "{:?}", sim.events(c2));
+    assert!(
+        sim.stack(c2)
+            .aps
+            .security
+            .entry(ROUTER)
+            .unwrap()
+            .verified_frame_counter
+    );
+    assert!(
+        sim.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::ZdpTimeout { .. }))
+    );
+    sim.take_events(r);
+    // A retry is answered (NO_MATCH: JOINER never joined this network).
+    sim.stack(r)
+        .zdo
+        .request_secured(
+            panweave_types::ShortAddress::COORDINATOR,
+            panweave_zdo::cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ,
+            &req,
+        )
+        .unwrap();
+    sim.stack(r).flush();
+    assert!(
+        sim.run_until(Duration::from_secs(10), |x| {
+            x.events(r).iter().any(|e| matches!(
+            e,
+            StackEvent::Zdp(z) if z.cluster == ClusterId(0x8042) && z.data.first() == Some(&0x86)
+        ))
+        }),
+        "{:?}",
+        sim.events(r)
+    );
+}

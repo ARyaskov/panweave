@@ -249,6 +249,12 @@ pub struct LinkKeyEntry {
     /// Peer supports APS frame counter synchronisation (bit 0 of
     /// Features & Capabilities).
     pub frame_counter_sync: bool,
+    /// `VerifiedFrameCounter` (§4.6.3.8): the incoming counter is known
+    /// to be recent. False after a reboot until a challenge succeeds.
+    pub verified_frame_counter: bool,
+    /// `apsChallengeFrameCounter`: challenge responses issued under the
+    /// current outgoing frame counter (reset when it advances).
+    pub challenge_frame_counter: u32,
     /// Expiry in seconds from installation; `0xFFFF` never expires.
     pub timeout_secs: u16,
 }
@@ -270,6 +276,8 @@ impl LinkKeyEntry {
             passphrase: None,
             passphrase_update_allowed: true,
             frame_counter_sync: false,
+            verified_frame_counter: true,
+            challenge_frame_counter: 0,
             timeout_secs: 0xFFFF,
         }
     }

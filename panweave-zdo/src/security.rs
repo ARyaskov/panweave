@@ -133,8 +133,10 @@ tlvs_only!(
     /// Security_Challenge_req (§2.4.3.4.8).
     ChallengeReq
 );
-tlvs_only!(
-    /// Security_Challenge_rsp (§2.4.4.4.8).
+status_and_tlvs!(
+    /// Security_Challenge_rsp (§2.4.4.4.8): the status octet carries the
+    /// SUCCESS / MISSING_TLV / NO_MATCH results named by §2.4.3.4.8.4
+    /// and §4.6.3.8.4 (ADR-0009).
     ChallengeRsp
 );
 
@@ -455,18 +457,6 @@ pub struct FrameCounterResponse {
 impl FrameCounterResponse {
     /// Length of the TLV value.
     pub const VALUE_LEN: usize = 8 + 8 + 4 + 4 + 8;
-
-    /// The octets the MIC covers: tag, length, responder, challenge and
-    /// APS frame counter (§2.4.4.4.8.2).
-    pub fn authenticated_octets(&self) -> [u8; 22] {
-        let mut a = [0u8; 22];
-        a[0] = LOCAL_TAG;
-        a[1] = u8::try_from(Self::VALUE_LEN - 1).unwrap_or(0);
-        a[2..10].copy_from_slice(&self.responder.to_le_bytes());
-        a[10..18].copy_from_slice(&self.challenge.to_le_bytes());
-        a[18..22].copy_from_slice(&self.aps_frame_counter.to_le_bytes());
-        a
-    }
 
     /// Writes the TLV.
     pub fn write(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {

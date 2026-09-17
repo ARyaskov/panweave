@@ -144,6 +144,14 @@ pub trait ZdoContext {
     /// global TLV `tag`; false when the device has no value for it
     /// (§2.4.3.4.5.2 step 2).
     fn get_configuration(&mut self, tag: u8, w: &mut Writer<'_>) -> bool;
+    /// Security_Challenge_req from `sender` (§4.6.3.8.4): the responder's
+    /// current APS frame counter, the challenge frame counter used and
+    /// the MIC; `None` without a key-pair entry for the sender.
+    fn answer_frame_counter_challenge(
+        &mut self,
+        sender: ExtendedAddress,
+        challenge: u64,
+    ) -> Option<(u32, u32, [u8; 8])>;
 }
 
 /// Outputs for the runtime.
@@ -1048,7 +1056,8 @@ impl<const EPS: usize> Zdo<EPS> {
             | cluster::SECURITY_SET_CONFIGURATION_REQ
             | cluster::SECURITY_GET_CONFIGURATION_REQ
             | cluster::SECURITY_START_KEY_UPDATE_REQ
-            | cluster::SECURITY_DECOMMISSION_REQ => {
+            | cluster::SECURITY_DECOMMISSION_REQ
+            | cluster::SECURITY_CHALLENGE_REQ => {
                 self.handle_security(ind, frame, broadcast, ctx);
             }
             other => {
@@ -1309,6 +1318,36 @@ impl<const EPS: usize> Zdo<EPS> {
                             }
                         },
                     }
+                }
+            }
+            cluster::SECURITY_CHALLENGE_REQ => {
+                // §2.4.3.4.8.4: never APS encrypted, never broadcast.
+                if broadcast {
+                    return;
+                }
+                match security::validate(data) {
+                    Err(e) => e,
+                    Ok(set) => match security::FrameCounterChallenge::find(&set) {
+                        None => ZdpStatus::MissingTlv,
+                        Some(ch) => {
+                            match ctx.answer_frame_counter_challenge(ch.sender, ch.challenge) {
+                                None => ZdpStatus::NoMatch,
+                                Some((aps_frame_counter, challenge_frame_counter, mic)) => {
+                                    let rsp = security::FrameCounterResponse {
+                                        responder: ctx.local_ieee(),
+                                        challenge: ch.challenge,
+                                        aps_frame_counter,
+                                        challenge_frame_counter,
+                                        mic,
+                                    };
+                                    if rsp.write(&mut w).is_err() {
+                                        return;
+                                    }
+                                    ZdpStatus::Success
+                                }
+                            }
+                        }
+                    },
                 }
             }
             _ => return,
