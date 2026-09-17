@@ -15,6 +15,7 @@ pub mod drlc;
 pub mod messaging;
 pub mod metering;
 pub mod price;
+pub mod trust_center;
 
 use panweave_aps::layer::{Destination, TxOptions};
 use panweave_runtime::{Stack, StackEvent};

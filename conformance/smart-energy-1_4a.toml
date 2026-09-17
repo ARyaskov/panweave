@@ -17,10 +17,10 @@ id = "PW-SE-SEC-001"
 section = "§5.4.1–§5.4.3"
 summary = "Joining with preinstalled TCLKs (install codes), rejoin policy, leaving"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-smart-energy::security"
-tests = ["registry_applies_key_usage_policies", "permit_join_broadcasts_are_bounded_and_repeated", "scan_backoff_grows_to_an_hour_and_resets_on_user_action"]
-notes = "Install-code provisioning (CRC check, MMO-derived preconfigured key with the §5.4.8.1.2 vectors), the Trust Center registry of §5.4.1.1 with join authorization for Trust Center rejoins (§5.4.2.2), the permit-join broadcast rule of §5.4.1.2 (never 255, at most 254 s, repeated every 240 s or on a device announce), the §5.4.1 step 5 scan back-off and the §5.4.3 rule that a leave keeps the link key are implemented as policy objects. Joining itself (Annex F key-transport under the preconfigured key, Secure / Trust Center rejoin) is the R23 runtime's; wiring the registry into the runtime Trust Center and the automatic CBKE start after joining are not done (TODO(PW-SE-TC-RUNTIME))."
+status = "implemented"
+module = "panweave-smart-energy::security,panweave::smart_energy_drivers::trust_center"
+tests = ["registry_applies_key_usage_policies", "permit_join_broadcasts_are_bounded_and_repeated", "scan_backoff_grows_to_an_hour_and_resets_on_user_action", "the_trust_center_provisions_opens_authenticates_and_prunes"]
+notes = "Install-code provisioning (CRC check, MMO-derived preconfigured key with the §5.4.8.1.2 vectors), the Trust Center registry of §5.4.1.1 with join authorization for Trust Center rejoins (§5.4.2.2), the permit-join broadcast rule of §5.4.1.2 (never 255, at most 254 s, repeated every 240 s or on a device announce), the §5.4.1 step 5 scan back-off and the §5.4.3 rule that a leave keeps the link key are implemented as policy objects. The facade SeTrustCenter driver (feature smart-energy) wires them into the runtime Trust Center: provisioning installs the install-code key as the device's provisional unique link key (with the runtime's InstallCodePolicy::Required refusing unprovisioned joiners), permit joining runs the broadcast schedule (immediately, every 240 s and on every Device_annce), DeviceAuthorized / DeviceLeft keep the registry, the Trust Center's CbkeDriver outcome authenticates the device and records its hashed key for the Table 5-10 backup, and devices that never establish a key are removed after the §5.5.5.5 grace period. Joining itself (Annex F key transport under the preconfigured key, Secure / Trust Center rejoin) is the R23 runtime's; the joiner side runs Key Establishment after joining through SeCommissioning / CbkeDriver."
 [[requirement]]
 id = "PW-SE-SEC-002"
 section = "§5.4.4, §5.4.5"
@@ -29,7 +29,7 @@ level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::security"
 tests = ["registry_applies_key_usage_policies"]
-notes = "Network key update with the nwkNetworkBroadcastDeliveryTime wait before the switch is the R23 runtime's (§5.4.4). The link key retirement rule of §5.4.5 is in Registry: a stale key drops data frames without an APS ACK and triggers renegotiation, commands still pass, and the stale mark clears on a new CBKE key. Periodic link-key refresh scheduling is left to the application (TODO(PW-SE-TC-RUNTIME))."
+notes = "Network key update with the nwkNetworkBroadcastDeliveryTime wait before the switch is the R23 runtime's (§5.4.4). The link key retirement rule of §5.4.5 is in Registry: a stale key drops data frames without an APS ACK and triggers renegotiation, commands still pass, and the stale mark clears on a new CBKE key; SeTrustCenter::retire_key applies it. Periodic link-key refresh scheduling is left to the application (TODO(PW-SE-TC-RUNTIME))."
 [[requirement]]
 id = "PW-SE-SEC-003"
 section = "§5.4.6"

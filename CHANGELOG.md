@@ -176,6 +176,14 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave::smart_energy_drivers::trust_center::SeTrustCenter` (SE
+  1.4a §5.4.1, §5.4.2, §5.5.5.5): the Trust Center registry over a
+  `Stack` — install-code provisioning installing the provisional unique
+  link key, the permit-join broadcast schedule (254 s at most, every
+  240 s and on every Device_annce), joins / leaves / Key Establishment
+  results tracked, hashed-key backup records, key retirement,
+  de-registration and the removal of devices that never establish a
+  key.
 * `panweave::smart_energy_drivers::commissioning::SeCommissioning`
   (SE 1.4a §5.5.5): the device life-cycle over a `Stack` — the
   auto-join scan schedule driving `Stack::join`, CBKE through
