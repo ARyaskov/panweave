@@ -145,10 +145,10 @@ id = "PW-ZCL-GEN-002"
 section = "§3.3"
 summary = "Power Configuration cluster"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::power_configuration"
-tests = ["battery_thresholds_drive_alarm_state_and_codes", "battery_alarm_reaches_the_bound_client_with_a_time_stamp"]
-notes = "Mains and battery source 1 attributes (information, settings, thresholds, BatteryAlarmState with reporting), the alarm masks and codes, threshold evaluation into BatteryAlarmState bits and Alarms codes, mains voltage threshold checks and mains-lost handling. Battery sources 2 and 3 (0x0040-0x007e) are not instantiated and the MainsVoltageDwellTripPoint timer is left to the application."
+tests = ["battery_thresholds_drive_alarm_state_and_codes", "mains_dwell_delays_the_alarm", "battery_sources_two_and_three_have_their_own_sets", "battery_alarm_reaches_the_bound_client_with_a_time_stamp"]
+notes = "Mains and battery attributes for sources 1-3 (information, settings, thresholds; Table 3-27 layout through battery_attr / add_battery_source), BatteryAlarmState with reporting and per-source bits, the alarm masks and codes, threshold evaluation into BatteryAlarmState bits and Alarms codes, mains voltage threshold checks with the MainsVoltageDwellTripPoint timer run by the dispatcher (mains_tick raises through the Alarms server) and mains-lost handling. Readings come from the application (set_battery_source, set_mains_voltage, set_mains_available), which raises the battery alarms it is handed."
 [[requirement]]
 id = "PW-ZCL-GEN-003"
 section = "§3.5"

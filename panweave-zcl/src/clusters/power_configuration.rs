@@ -1,12 +1,15 @@
 //! Power Configuration cluster (ZCL8 §3.3): the mains and battery
-//! information / settings attributes, the alarm masks and codes, and the
-//! threshold evaluation that turns readings into `BatteryAlarmState`
-//! bits and Alarms-cluster codes (§3.3.2.2.4.6–§3.3.2.2.4.9).
+//! information / settings attributes for up to three battery sources,
+//! the alarm masks and codes, the threshold evaluation that turns
+//! readings into `BatteryAlarmState` bits and Alarms-cluster codes
+//! (§3.3.2.2.4.6–§3.3.2.2.4.9) and the mains voltage dwell timer
+//! (§3.3.2.2.2.2).
 
+use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId};
 
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
 use crate::frame::ZclStatus;
 use crate::types::{DataType, Value};
 
@@ -134,6 +137,17 @@ pub mod alarm_code {
 pub const fn battery_alarm_state_bit(source: u8, level: u8) -> u32 {
     1u32 << (10 * (source as u32 - 1) + level as u32)
 }
+/// The `BatteryAlarmState` bits of one source (levels 0–3).
+const fn battery_alarm_state_bits(source: u8) -> u32 {
+    0b1111 << (10 * (source as u32 - 1))
+}
+
+/// The attribute of battery `source` (1–3) corresponding to the source
+/// 1 attribute `base` (§3.3.2.2.3, Table 3-27: sources 2 and 3 repeat
+/// the set at 0x0040 and 0x0060).
+pub const fn battery_attr(source: u8, base: AttributeDef) -> AttributeDef {
+    AttributeDef::new(base.id.0 + 0x20 * (source as u16 - 1), base.ty, base.access)
+}
 /// `BatteryAlarmState` bit 30: mains power supply lost.
 pub const BATTERY_ALARM_STATE_MAINS_LOST: u32 = 1 << 30;
 
@@ -186,23 +200,44 @@ fn u8v(v: u8) -> Value<'static> {
 /// thresholds (all 0 = disabled) and `BatteryAlarmState`.
 pub fn battery_server<const A: usize>(rated_voltage: u8) -> Result<ClusterInstance<A>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
-    c.add_attribute(BATTERY_VOLTAGE, &u8v(UNKNOWN))?;
-    c.add_reported_attribute(
-        BATTERY_PERCENTAGE_REMAINING,
-        &u8v(UNKNOWN),
-        PERCENTAGE_REPORTING,
-    )?;
-    c.add_attribute(BATTERY_RATED_VOLTAGE, &u8v(rated_voltage))?;
-    c.add_attribute(BATTERY_ALARM_MASK, &Value::Bits { width: 1, bits: 0 })?;
-    for t in VOLTAGE_THRESHOLDS.iter().chain(&PERCENTAGE_THRESHOLDS) {
-        c.add_attribute(*t, &u8v(0))?;
-    }
+    add_battery_source(&mut c, 1, rated_voltage)?;
     c.add_reported_attribute(
         BATTERY_ALARM_STATE,
         &Value::Bits { width: 4, bits: 0 },
         ALARM_STATE_REPORTING,
     )?;
     Ok(c)
+}
+
+/// Adds the information and settings set of battery `source` (1–3,
+/// Table 3-27) to a server: voltage, reported percentage, rated
+/// voltage, alarm mask and the eight thresholds (0 = disabled).
+pub fn add_battery_source<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    source: u8,
+    rated_voltage: u8,
+) -> Result<(), ZclStatus> {
+    if !(1..=3).contains(&source) {
+        return Err(ZclStatus::InvalidValue);
+    }
+    c.add_attribute(battery_attr(source, BATTERY_VOLTAGE), &u8v(UNKNOWN))?;
+    c.add_reported_attribute(
+        battery_attr(source, BATTERY_PERCENTAGE_REMAINING),
+        &u8v(UNKNOWN),
+        PERCENTAGE_REPORTING,
+    )?;
+    c.add_attribute(
+        battery_attr(source, BATTERY_RATED_VOLTAGE),
+        &u8v(rated_voltage),
+    )?;
+    c.add_attribute(
+        battery_attr(source, BATTERY_ALARM_MASK),
+        &Value::Bits { width: 1, bits: 0 },
+    )?;
+    for t in VOLTAGE_THRESHOLDS.iter().chain(&PERCENTAGE_THRESHOLDS) {
+        c.add_attribute(battery_attr(source, *t), &u8v(0))?;
+    }
+    Ok(())
 }
 
 /// Builds a mains-powered device's server: mains information and the
@@ -230,6 +265,7 @@ pub fn mains_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
         MAINS_VOLTAGE_DWELL_TRIP_POINT,
         &Value::Uint { width: 2, value: 0 },
     )?;
+    c.state = ClusterState::Mains(MainsDwell::default());
     Ok(c)
 }
 
@@ -251,32 +287,52 @@ pub fn set_battery<const A: usize>(
     voltage: Option<u8>,
     percentage: Option<u8>,
 ) -> BatteryAlarms {
-    c.set_u8(BATTERY_VOLTAGE.id, voltage.unwrap_or(UNKNOWN));
+    set_battery_source(c, 1, voltage, percentage)
+}
+
+/// [`set_battery`] for battery `source` (1–3): its own thresholds and
+/// mask, its own ten `BatteryAlarmState` bits and alarm codes
+/// `0x{source}{level}`; the other sources' bits are left alone.
+pub fn set_battery_source<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    source: u8,
+    voltage: Option<u8>,
+    percentage: Option<u8>,
+) -> BatteryAlarms {
+    let source = source.clamp(1, 3);
     c.set_u8(
-        BATTERY_PERCENTAGE_REMAINING.id,
+        battery_attr(source, BATTERY_VOLTAGE).id,
+        voltage.unwrap_or(UNKNOWN),
+    );
+    c.set_u8(
+        battery_attr(source, BATTERY_PERCENTAGE_REMAINING).id,
         percentage.unwrap_or(UNKNOWN),
     );
-    let mask = c.u8(BATTERY_ALARM_MASK.id).unwrap_or(0);
+    let mask = c
+        .u8(battery_attr(source, BATTERY_ALARM_MASK).id)
+        .unwrap_or(0);
     let previous = c
         .u64(BATTERY_ALARM_STATE.id)
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(0);
-    let mut state = previous & BATTERY_ALARM_STATE_MAINS_LOST;
+    let mut state = previous & !battery_alarm_state_bits(source);
     let mut alarms = BatteryAlarms::new();
     for level in 0..4u8 {
-        let vt = c.u8(VOLTAGE_THRESHOLDS[usize::from(level)].id).unwrap_or(0);
+        let vt = c
+            .u8(battery_attr(source, VOLTAGE_THRESHOLDS[usize::from(level)]).id)
+            .unwrap_or(0);
         let pt = c
-            .u8(PERCENTAGE_THRESHOLDS[usize::from(level)].id)
+            .u8(battery_attr(source, PERCENTAGE_THRESHOLDS[usize::from(level)]).id)
             .unwrap_or(0);
         let reached = matches!(voltage, Some(v) if vt != 0 && v < vt)
             || matches!(percentage, Some(p) if pt != 0 && p < pt);
         if !reached {
             continue;
         }
-        let bit = battery_alarm_state_bit(1, level);
+        let bit = battery_alarm_state_bit(source, level);
         state |= bit;
         if previous & bit == 0 && mask & (1 << level) != 0 {
-            let _ = alarms.push((alarm_code::battery(1, level), bit));
+            let _ = alarms.push((alarm_code::battery(source, level), bit));
         }
     }
     c.set(
@@ -321,12 +377,28 @@ pub fn set_mains_available<const A: usize>(
         .then_some(alarm_code::MAINS_POWER_LOST)
 }
 
-/// Mains voltage evaluation: `Some(code)` when the reading is beyond an
-/// enabled threshold (the dwell timer of §3.3.2.2.2.2 is the
-/// application's: raise the alarm once the condition persisted for
-/// `MainsVoltageDwellTripPoint` seconds).
-pub fn set_mains_voltage<const A: usize>(c: &mut ClusterInstance<A>, voltage: u16) -> Option<u8> {
-    c.set_u16(MAINS_VOLTAGE.id, voltage);
+/// The mains voltage dwell timer of a mains server (§3.3.2.2.2.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct MainsDwell {
+    /// The alarm the current reading calls for and when the reading
+    /// has dwelt beyond the threshold long enough to raise it.
+    pub pending: Option<(u8, Instant)>,
+    /// The pending alarm was raised; nothing more until the voltage
+    /// comes back within the thresholds.
+    pub raised: bool,
+}
+
+fn dwell<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut MainsDwell> {
+    match &mut c.state {
+        ClusterState::Mains(d) => Some(d),
+        _ => None,
+    }
+}
+
+/// The alarm a mains reading calls for under the enabled thresholds
+/// and mask, before the dwell.
+fn mains_condition<const A: usize>(c: &ClusterInstance<A>, voltage: u16) -> Option<u8> {
     let mask = c.u8(MAINS_ALARM_MASK.id).unwrap_or(0);
     let min = c
         .u16(MAINS_VOLTAGE_MIN_THRESHOLD.id)
@@ -343,6 +415,62 @@ pub fn set_mains_voltage<const A: usize>(c: &mut ClusterInstance<A>, voltage: u1
     {
         Some(alarm_code::MAINS_VOLTAGE_TOO_HIGH)
     } else {
+        None
+    }
+}
+
+/// Records a mains voltage reading (§3.3.2.2.2.2): `Some(code)` when the
+/// reading has been beyond an enabled threshold for
+/// `MainsVoltageDwellTripPoint` seconds (at once when that is 0). A
+/// condition that starts now arms the dwell timer instead; the layer
+/// raises the alarm from [`mains_tick`] when it expires without a
+/// further reading. Each excursion is reported once.
+pub fn set_mains_voltage<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    voltage: u16,
+    now: Instant,
+) -> Option<u8> {
+    c.set_u16(MAINS_VOLTAGE.id, voltage);
+    let condition = mains_condition(c, voltage);
+    let dwell_secs = c.u16(MAINS_VOLTAGE_DWELL_TRIP_POINT.id).unwrap_or(0);
+    let Some(d) = dwell(c) else {
+        // A server without the dwell state (built by hand): immediate.
+        return condition;
+    };
+    match condition {
+        None => {
+            *d = MainsDwell::default();
+            c.tick = None;
+            None
+        }
+        Some(code) => {
+            match d.pending {
+                Some((pending, _)) if pending == code => {}
+                _ => {
+                    d.pending = Some((code, now + Duration::from_secs(u64::from(dwell_secs))));
+                    d.raised = false;
+                }
+            }
+            mains_tick(c, now)
+        }
+    }
+}
+
+/// Raises the pending mains alarm once its dwell has elapsed (`None`
+/// otherwise); arms the cluster tick for the dwell's end.
+pub fn mains_tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u8> {
+    let d = dwell(c)?;
+    let (code, due) = d.pending?;
+    if d.raised {
+        c.tick = None;
+        return None;
+    }
+    if now.has_reached(due) {
+        d.raised = true;
+        c.tick = None;
+        Some(code)
+    } else {
+        c.tick = Some(due);
         None
     }
 }
@@ -412,8 +540,9 @@ mod tests {
         assert_eq!(set_mains_available(&mut c, true), None);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(0));
 
+        let t0 = Instant::from_millis(0);
         let mut m: ClusterInstance<16> = mains_server().unwrap();
-        assert_eq!(set_mains_voltage(&mut m, 1000), None);
+        assert_eq!(set_mains_voltage(&mut m, 1000, t0), None);
         m.set_u16(MAINS_VOLTAGE_MIN_THRESHOLD.id, 2000);
         m.set_u16(MAINS_VOLTAGE_MAX_THRESHOLD.id, 2600);
         m.set(
@@ -424,15 +553,99 @@ mod tests {
             },
         );
         assert_eq!(
-            set_mains_voltage(&mut m, 1900),
+            set_mains_voltage(&mut m, 1900, t0),
             Some(alarm_code::MAINS_VOLTAGE_TOO_LOW)
         );
+        // Reported once per excursion.
+        assert_eq!(set_mains_voltage(&mut m, 1800, t0), None);
         assert_eq!(
-            set_mains_voltage(&mut m, 2700),
+            set_mains_voltage(&mut m, 2700, t0),
             Some(alarm_code::MAINS_VOLTAGE_TOO_HIGH)
         );
-        assert_eq!(set_mains_voltage(&mut m, 2300), None);
+        assert_eq!(set_mains_voltage(&mut m, 2300, t0), None);
         assert_eq!(alarm_code::battery(2, 3), 0x23);
         assert_eq!(battery_alarm_state_bit(3, 0), 1 << 20);
+    }
+
+    #[test]
+    fn mains_dwell_delays_the_alarm() {
+        let t0 = Instant::from_millis(0);
+        let mut m: ClusterInstance<16> = mains_server().unwrap();
+        m.set_u16(MAINS_VOLTAGE_MIN_THRESHOLD.id, 2000);
+        m.set_u16(MAINS_VOLTAGE_DWELL_TRIP_POINT.id, 5);
+        m.set(
+            MAINS_ALARM_MASK.id,
+            &Value::Bits {
+                width: 1,
+                bits: u64::from(mains_alarm::VOLTAGE_TOO_LOW),
+            },
+        );
+        // Below the threshold: the timer is armed, nothing raised yet.
+        assert_eq!(set_mains_voltage(&mut m, 1900, t0), None);
+        assert_eq!(m.tick, Some(t0 + Duration::from_secs(5)));
+        assert_eq!(mains_tick(&mut m, t0 + Duration::from_secs(4)), None);
+        // A recovery in between disarms it.
+        assert_eq!(
+            set_mains_voltage(&mut m, 2100, t0 + Duration::from_secs(2)),
+            None
+        );
+        assert_eq!(m.tick, None);
+        assert_eq!(mains_tick(&mut m, t0 + Duration::from_secs(6)), None);
+        // Persisting for the dwell raises the alarm from the tick, once.
+        let t1 = t0 + Duration::from_secs(10);
+        assert_eq!(set_mains_voltage(&mut m, 1900, t1), None);
+        assert_eq!(
+            set_mains_voltage(&mut m, 1950, t1 + Duration::from_secs(3)),
+            None
+        );
+        assert_eq!(
+            mains_tick(&mut m, t1 + Duration::from_secs(5)),
+            Some(alarm_code::MAINS_VOLTAGE_TOO_LOW)
+        );
+        assert_eq!(m.tick, None);
+        assert_eq!(
+            set_mains_voltage(&mut m, 1900, t1 + Duration::from_secs(9)),
+            None
+        );
+        assert_eq!(mains_tick(&mut m, t1 + Duration::from_secs(20)), None);
+        // A reading arriving after the dwell raises it directly.
+        set_mains_voltage(&mut m, 2100, t1 + Duration::from_secs(20));
+        let t2 = t1 + Duration::from_secs(30);
+        assert_eq!(set_mains_voltage(&mut m, 1900, t2), None);
+        assert_eq!(
+            set_mains_voltage(&mut m, 1900, t2 + Duration::from_secs(5)),
+            Some(alarm_code::MAINS_VOLTAGE_TOO_LOW)
+        );
+    }
+
+    #[test]
+    fn battery_sources_two_and_three_have_their_own_sets() {
+        let mut c: ClusterInstance<48> = battery_server(30).unwrap();
+        add_battery_source(&mut c, 2, 36).unwrap();
+        add_battery_source(&mut c, 3, 90).unwrap();
+        assert!(add_battery_source(&mut c, 4, 1).is_err());
+        assert_eq!(battery_attr(2, BATTERY_VOLTAGE).id.0, 0x0040);
+        assert_eq!(battery_attr(3, BATTERY_PERCENTAGE_THRESHOLD_3).id.0, 0x007d);
+        assert_eq!(c.u8(AttributeId(0x0074)), Some(90));
+        // Source 2 below its minimum: bit 10 and code 0x20; source 1 and
+        // 3 untouched, and a source 3 reading keeps source 2's bit.
+        c.set_u8(battery_attr(2, BATTERY_VOLTAGE_MIN_THRESHOLD).id, 30);
+        c.set(
+            battery_attr(2, BATTERY_ALARM_MASK).id,
+            &Value::Bits {
+                width: 1,
+                bits: u64::from(battery_alarm::MIN_THRESHOLD),
+            },
+        );
+        let a = set_battery_source(&mut c, 2, Some(25), None);
+        assert_eq!(a.as_slice(), &[(0x20, 1 << 10)]);
+        assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(1 << 10));
+        assert_eq!(c.u8(battery_attr(2, BATTERY_VOLTAGE).id), Some(25));
+        assert_eq!(c.u8(BATTERY_VOLTAGE.id), Some(UNKNOWN));
+        c.set_u8(battery_attr(3, BATTERY_PERCENTAGE_THRESHOLD_2).id, 50);
+        assert!(set_battery_source(&mut c, 3, None, Some(20)).is_empty());
+        assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some((1 << 10) | (1 << 22)));
+        assert!(set_battery_source(&mut c, 2, Some(31), None).is_empty());
+        assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(1 << 22));
     }
 }

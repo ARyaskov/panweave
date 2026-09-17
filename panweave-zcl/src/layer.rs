@@ -18,7 +18,7 @@ use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
-    identify, level, on_off, poll_control, scenes, time, window_covering,
+    identify, level, on_off, poll_control, power_configuration, scenes, time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -2204,6 +2204,18 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 }
             }
             let local_time = self.local_time(i);
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(power_configuration::ID, Role::Server)
+                && c.tick.is_some_and(|t| now.has_reached(t))
+                && let Some(code) = power_configuration::mains_tick(c, now)
+            {
+                // The mains voltage dwelt beyond a threshold
+                // (§3.3.2.2.2.2): the alarm goes through the endpoint's
+                // Alarms server.
+                let _ = self.raise_alarm(endpoint, power_configuration::ID, code);
+            }
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;
             };

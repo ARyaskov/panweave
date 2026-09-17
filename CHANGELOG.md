@@ -152,6 +152,12 @@ Keep a Changelog; versions follow SemVer.
   `ZclEvent::AlarmReset`) and Power Configuration (mains and battery
   attributes, threshold evaluation into `BatteryAlarmState` and alarm
   codes).
+* Power Configuration battery sources 2 and 3 (`add_battery_source`,
+  `set_battery_source`, `battery_attr`, ZCL8 Table 3-27) and the mains
+  voltage dwell timer (§3.3.2.2.2.2): `set_mains_voltage` takes the
+  time, arms `MainsVoltageDwellTripPoint` and the dispatcher raises the
+  alarm through the endpoint's Alarms server when the excursion
+  persists.
 * `panweave-zcl::clusters::ias_zone`: the IAS Zone server executed by
   the dispatcher — the three enrolment procedures, Zone Status Change
   Notifications with the Delay field, Zone Enroll Request / Response,

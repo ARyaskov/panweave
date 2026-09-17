@@ -88,6 +88,8 @@ pub enum ClusterState {
     Commissioning(crate::clusters::commissioning::State),
     /// Thermostat server state: the weekly setpoint schedule (§6.3).
     Thermostat(crate::clusters::hvac::thermostat::Schedule),
+    /// Power Configuration mains server: the voltage dwell timer (§3.3).
+    Mains(crate::clusters::power_configuration::MainsDwell),
 }
 
 /// A cluster instance.
@@ -218,6 +220,9 @@ impl<const A: usize> ClusterInstance<A> {
                     dirty: true,
                     ..crate::clusters::hvac::thermostat::Schedule::default()
                 })
+            }
+            ClusterState::Mains(_) => {
+                ClusterState::Mains(crate::clusters::power_configuration::MainsDwell::default())
             }
             ClusterState::None => ClusterState::None,
         };
