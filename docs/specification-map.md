@@ -211,7 +211,7 @@ annexes (R23.2 Annex D.12–D.14).
 | 5.2–5.3 | Stack profile requirements, startup attribute set | `panweave-smart-energy::profile` |
 | 5.4 | Security: preinstalled TCLKs, rejoin, leave, key updates, key usage per cluster (`link_key_required`, ADR-0012), CBKE policies, TC swap-out | `panweave-smart-energy` (`security`: planned) |
 | 5.5–5.14 | Commissioning, federated TC, multiple ESI, best practices, coexistence, multi-MAC | `panweave-smart-energy::commissioning` |
-| 6 | Device specifications (ESI, meter, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote comms) | `panweave-smart-energy::devices` |
+| 6 | Device specifications (ESI, meter, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote comms) | `panweave-smart-energy::devices` (descriptions and checker; Table 6-2 features: planned) |
 | Annex A | Keep-Alive cluster, status enumerations | `panweave-zcl::clusters::keep_alive` |
 | Annex B | Enhanced inter-PAN | `panweave-aps::interpan` |
 | Annex C | Key Establishment cluster (CBKE suites 1 and 2) and test vectors | `panweave-smart-energy::key_establishment` (curve arithmetic through the `Ecmqv` trait, ADR-0012) |

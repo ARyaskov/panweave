@@ -136,6 +136,9 @@ Keep a Changelog; versions follow SemVer.
   and the client's message display), Price (Publish Price with its
   optional fields, the client requests and a client-side price table)
   and Metering (mandatory attributes, formatting helpers, Get Profile).
+* `panweave-smart-energy::devices`: the Smart Energy device descriptions
+  (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
+  checker.
 * `Stack` provisioning helpers: `form_network_params`
   (`FormationParams`: key, extended PAN ID, PAN ID, channels, network
   address, update ID), `adopt_network` (`AdoptParams`: join a network

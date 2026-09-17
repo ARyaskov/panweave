@@ -72,10 +72,10 @@ id = "PW-SE-DEV-001"
 section = "§6.3"
 summary = "SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications)"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::devices"
-tests = []
-
+tests = ["device_table_and_checks"]
+notes = "Table 5-13 device identifiers with the mandatory / optional server and client clusters of Tables 6-1 and 6-3 to 6-10, the prohibition of unlisted clusters and the at-least-one rules of the In-Home Display and Remote Communications Device, with an endpoint checker. The Table 6-2 features and functions (time synchronization, fragmentation support, reporting) are not verified, and no facade endpoint builders exist for the SE devices yet (TODO(PW-SE-ENDPOINTS))."
 [[requirement]]
 id = "PW-SE-CL-001"
 section = "Annex D.2"
