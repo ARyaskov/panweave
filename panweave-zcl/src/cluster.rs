@@ -104,6 +104,10 @@ pub struct ClusterInstance<const A: usize> {
     pub state: ClusterState,
     /// Cluster-specific validation of network writes.
     pub write_guard: Option<WriteGuard<A>>,
+    /// A multi-frame report is in progress: the previous Report
+    /// Attributes ended with `AttributeReportingStatus` = Pending
+    /// (§2.3.4.5.2).
+    report_pending: bool,
 }
 
 impl<const A: usize> ClusterInstance<A> {
@@ -125,6 +129,7 @@ impl<const A: usize> ClusterInstance<A> {
             tick: None,
             state: ClusterState::None,
             write_guard: None,
+            report_pending: false,
         }
     }
 
@@ -822,6 +827,9 @@ impl<const A: usize> ClusterInstance<A> {
     /// Appends Report Attributes records for every due attribute and
     /// marks them reported; returns the number of records written.
     pub fn collect_reports(&mut self, now: Instant, out: &mut Writer<'_>) -> usize {
+        // Room for the AttributeReportingStatus record that closes a
+        // frame of a multi-frame report (§2.3.4.5.2).
+        const STATUS_LEN: usize = 4;
         let mut n = 0;
         for a in self.attributes.iter_mut() {
             if !a.report_due(now) {
@@ -831,7 +839,7 @@ impl<const A: usize> ClusterInstance<A> {
                 id: a.def.id,
                 value: a.value(),
             };
-            if rec.encoded_len() > out.remaining() {
+            if rec.encoded_len() + STATUS_LEN > out.remaining() {
                 break;
             }
             if rec.encode(out).is_err() {
@@ -840,6 +848,27 @@ impl<const A: usize> ClusterInstance<A> {
             a.mark_reported(now);
             n += 1;
         }
+        if n == 0 {
+            return 0;
+        }
+        let more = self.attributes.iter().any(|a| a.report_due(now));
+        let status = if more {
+            Some(0x00)
+        } else if self.report_pending {
+            Some(0x01)
+        } else {
+            None
+        };
+        if let Some(s) = status {
+            let rec = AttributeValue {
+                id: AttributeDef::ATTRIBUTE_REPORTING_STATUS.id,
+                value: Value::Enum8(s),
+            };
+            if rec.encode(out).is_ok() {
+                n += 1;
+            }
+        }
+        self.report_pending = more;
         n
     }
 
@@ -900,5 +929,69 @@ fn change_value(ty: DataType, change: u64) -> Value<'static> {
             raw: change as u32,
         },
         _ => Value::NoData,
+    }
+}
+
+#[cfg(test)]
+mod reporting_status_tests {
+    use panweave_codec::Writer;
+    use panweave_types::time::Instant;
+    use panweave_types::{AttributeId, ClusterId};
+
+    use super::*;
+    use crate::attribute::Access;
+    use crate::types::DataType;
+
+    #[test]
+    fn multi_frame_reports_carry_attribute_reporting_status() {
+        let def = ClusterDef {
+            id: ClusterId(0x0402),
+            revision: 1,
+            received: &[],
+            generated: &[],
+        };
+        let mut c: ClusterInstance<8> = ClusterInstance::new(def, Role::Server);
+        let now = Instant::ZERO;
+        for i in 0..4u16 {
+            let id = AttributeId(i);
+            c.add_attribute(
+                AttributeDef::new(id.0, DataType::Uint(2), Access::RO),
+                &Value::Uint {
+                    width: 2,
+                    value: 100 + u64::from(i),
+                },
+            )
+            .unwrap();
+            c.attributes
+                .get_mut(id, None)
+                .unwrap()
+                .configure_reporting(0, 10, 0, now);
+        }
+        let later = now + panweave_types::time::Duration::from_secs(11);
+        // Room for two 5-octet records plus the status record.
+        let mut buf = [0u8; 14];
+        let n = {
+            let mut w = Writer::new(&mut buf);
+            c.collect_reports(later, &mut w)
+        };
+        assert_eq!(n, 3, "two attributes and a Pending status");
+        assert_eq!(&buf[10..14], &[0xFE, 0xFF, 0x30, 0x00]);
+        // The rest, closed with Complete.
+        let mut buf = [0u8; 32];
+        let n = {
+            let mut w = Writer::new(&mut buf);
+            c.collect_reports(later, &mut w)
+        };
+        assert_eq!(n, 3);
+        assert_eq!(&buf[10..14], &[0xFE, 0xFF, 0x30, 0x01]);
+        // A single-frame report carries no status.
+        let again = later + panweave_types::time::Duration::from_secs(11);
+        let mut buf = [0u8; 64];
+        let n = {
+            let mut w = Writer::new(&mut buf);
+            c.collect_reports(again, &mut w)
+        };
+        assert_eq!(n, 4);
+        assert!(!buf[..20].windows(2).any(|w| w == [0xFE, 0xFF]));
     }
 }

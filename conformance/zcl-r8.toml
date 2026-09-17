@@ -125,12 +125,12 @@ id = "PW-ZCL-FND-014"
 section = "§2.3.2"
 summary = "Global attributes: ClusterRevision, AttributeReportingStatus"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zcl::cluster"
-tests = ["read_write_and_discover_attributes"]
+tests = ["multi_frame_reports_carry_attribute_reporting_status"]
 
 # Clusters (chapter 3)
-notes = "ClusterRevision is added to every instance; AttributeReportingStatus is defined but not emitted."
+notes = "ClusterRevision is added to every instance; when a report does not fit one Report Attributes frame the last record of each frame is AttributeReportingStatus (Pending in all but the final frame, which carries Complete); single-frame reports carry no status."
 [[requirement]]
 id = "PW-ZCL-GEN-001"
 section = "§3.2"

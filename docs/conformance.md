@@ -13,9 +13,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | ZD1.1 | 11 | 5 | 5 | 1 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
-| ZCL8 | 36 | 24 | 11 | 1 | 0 | 0 | 0 |
+| ZCL8 | 36 | 25 | 10 | 1 | 0 | 0 | 0 |
 | R23.2 | 133 | 119 | 10 | 2 | 2 | 0 | 0 |
-| **All** | 237 | 178 | 50 | 5 | 3 | 1 | 0 |
+| **All** | 237 | 179 | 49 | 5 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -127,7 +127,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-ZCL-FND-011 | §2.5.19–§2.5.22 | mandatory | implemented | `panweave-zcl::cluster` | Discover Commands Received/Generated and Discover Attributes Extended with responses | `discovery_and_default_response`, `read_write_and_discover_attributes` |  |
 | PW-ZCL-FND-012 | §2.6.3 | mandatory | implemented | `panweave-zcl::frame` | Status enumeration | `status_round_trip` |  |
 | PW-ZCL-FND-013 | §2.3.3, §2.4.2 | mandatory | partially-implemented | `panweave-zcl::layer` | Manufacturer-specific clusters, attributes, commands; command direction and server/client roles; unsupported cluster/attribute/command handling | `default_responses_and_cluster_specific_commands`, `group_delivery_targets_member_endpoints_only` | Direction/role dispatch, UNSUPPORTED_CLUSTER and UNSUP_GENERAL_COMMAND are implemented; manufacturer-specific attributes are supported in the store, manufacturer-specific cluster registration is not distinguished from standard clusters. |
-| PW-ZCL-FND-014 | §2.3.2 | mandatory | partially-implemented | `panweave-zcl::cluster` | Global attributes: ClusterRevision, AttributeReportingStatus | `read_write_and_discover_attributes` | ClusterRevision is added to every instance; AttributeReportingStatus is defined but not emitted. |
+| PW-ZCL-FND-014 | §2.3.2 | mandatory | implemented | `panweave-zcl::cluster` | Global attributes: ClusterRevision, AttributeReportingStatus | `multi_frame_reports_carry_attribute_reporting_status` | ClusterRevision is added to every instance; when a report does not fit one Report Attributes frame the last record of each frame is AttributeReportingStatus (Pending in all but the final frame, which carries Complete); single-frame reports carry no status. |
 | PW-ZCL-GEN-001 | §3.2 | mandatory | implemented | `panweave-zcl::clusters::basic` | Basic cluster attributes and Reset to Factory Defaults command | `read_write_and_discover_attributes`, `reset_to_factory_defaults_restores_attributes_and_reporting` | Reset to Factory Defaults is executed by the endpoint dispatcher: every attribute of every cluster on every endpoint returns to its initial value and default reporting configuration, transient cluster state is cleared, and the application is told with ZclEvent::FactoryReset; network state, bindings and groups are untouched (§3.2.2.3.1). |
 | PW-ZCL-GEN-002 | §3.3 | optional | partially-implemented | `panweave-zcl::clusters::power_configuration` | Power Configuration cluster | `battery_thresholds_drive_alarm_state_and_codes`, `battery_alarm_reaches_the_bound_client_with_a_time_stamp` | Mains and battery source 1 attributes (information, settings, thresholds, BatteryAlarmState with reporting), the alarm masks and codes, threshold evaluation into BatteryAlarmState bits and Alarms codes, mains voltage threshold checks and mains-lost handling. Battery sources 2 and 3 (0x0040-0x007e) are not instantiated and the MainsVoltageDwellTripPoint timer is left to the application. |
 | PW-ZCL-GEN-003 | §3.5 | mandatory | implemented | `panweave-zcl::clusters::identify` | Identify cluster: IdentifyTime attribute, Identify, Identify Query, Trigger Effect commands, Identify Query Response | `identify_server_countdown_and_query`, `bdb_formation_steering_finding_binding_and_rejoin` | Server executed by the endpoint dispatcher: one-second countdown, Identify Query answered only while identifying, Trigger Effect surfaced to the application as an event (effect execution is application-defined). |

@@ -451,6 +451,9 @@ Keep a Changelog; versions follow SemVer.
   parent-loss rejoins by `:Config_Rejoin_Interval` (doubling up to
   `:Config_Max_Rejoin_Interval`); Bind_req beyond `:Config_Max_Bind` is
   refused with INSUFFICIENT_SPACE.
+* ZCL reporting: a report spanning several Report Attributes frames
+  ends each frame with `AttributeReportingStatus` (Pending / Complete,
+  ZCL8 §2.3.4.5.2).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
