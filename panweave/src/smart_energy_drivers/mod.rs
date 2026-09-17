@@ -10,6 +10,7 @@
 //! UTC time comes from the Time cluster server on the driver's endpoint
 //! when there is one, otherwise from [`UtcClock`] set by the application.
 
+pub mod commissioning;
 pub mod drlc;
 pub mod messaging;
 pub mod metering;

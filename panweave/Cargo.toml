@@ -71,5 +71,9 @@ required-features = ["smart-energy"]
 name = "se_metering"
 required-features = ["smart-energy"]
 
+[[test]]
+name = "se_commissioning"
+required-features = ["smart-energy"]
+
 [lints]
 workspace = true

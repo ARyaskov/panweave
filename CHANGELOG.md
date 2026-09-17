@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave::smart_energy_drivers::commissioning::SeCommissioning`
+  (SE 1.4a §5.5.5): the device life-cycle over a `Stack` — the
+  auto-join scan schedule driving `Stack::join`, CBKE through
+  `CbkeDriver`, ESI discovery with a Smart Energy Match_Desc_req,
+  Bind_req (with IEEE_addr_req) for every client cluster at every ESI,
+  periodic rediscovery, rejoin and recovery on `TrustCenterLost`, and
+  the leave reset; `SeCommissioningEvent` reports the milestones.
 * `panweave::smart_energy_drivers` (feature `smart-energy`): Smart
   Energy cluster models bound to a `Stack` the way `CbkeDriver` is —
   `messaging::{MessagingClient, MessagingServer}` (SE 1.4a Annex D.5)
