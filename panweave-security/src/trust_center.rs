@@ -123,6 +123,10 @@ pub struct TrustCenterPolicy {
     pub require_key_exchange: bool,
     /// Whether dynamic link key negotiation is offered.
     pub dlk_enabled: bool,
+    /// Device interview (BDB 3.1 §9.9, R23.2 §4.7.3.3): after a joiner's
+    /// negotiated key is verified, hold the network key back until the
+    /// application admits the device (or the join times out).
+    pub interview_joiners: bool,
 }
 
 impl Default for TrustCenterPolicy {
@@ -140,6 +144,7 @@ impl Default for TrustCenterPolicy {
             allow_virtual_devices: false,
             require_key_exchange: true,
             dlk_enabled: true,
+            interview_joiners: false,
         }
     }
 }

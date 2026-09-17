@@ -461,6 +461,10 @@ Keep a Changelog; versions follow SemVer.
   frame counter failures, route discoveries initiated, neighbor table
   additions / removals / stale entries, join indications, children that
   moved and the average MAC retries per APS message.
+* Device interview (BDB 3.1 §9.9): `TrustCenterPolicy::interview_joiners`
+  holds the network key after a joiner's negotiated key is verified
+  (`StackEvent::JoinerVerified`) until `Stack::admit_joiner`;
+  `Stack::reject_joiner` removes the device.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

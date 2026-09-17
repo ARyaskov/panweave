@@ -197,10 +197,10 @@ id = "PW-BDB-STEER-007"
 section = "§9.9"
 summary = "Device interview procedure (R23): TC retrieves descriptors/configuration before authorising; joiner responds; timeouts"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::dlk"
-tests = ["anonymous_key_negotiation_join_through_router"]
-notes = "Authorization is withheld until the negotiated key is verified (R23.2 §4.7.3.3); the Trust Center's optional descriptor / configuration retrieval between verification and the network key is not exposed as a hook (see PW-R23-SEC-031, TODO(PW-INTERVIEW))."
+tests = ["interview_holds_the_network_key_until_admitted", "interview_rejection_removes_the_joiner"]
+notes = "The Trust Center withholds the network key until the negotiated key is verified and, with TrustCenterPolicy::interview_joiners, until the application admits the device (Stack::admit_joiner) after its own implementation-specific exchanges; Stack::reject_joiner turns it away; the pending join expires with apsSecurityTimeOutPeriod otherwise."
 [[requirement]]
 id = "PW-BDB-REJOIN-001"
 section = "§10.1"

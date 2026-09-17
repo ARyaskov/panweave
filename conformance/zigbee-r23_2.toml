@@ -1173,12 +1173,12 @@ id = "PW-R23-SEC-031"
 section = "§4.6.3.7, Annex I.4.12"
 summary = "Device interview state: TC withholds authorization until interview complete; device capability extension TLV"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::dlk"
-tests = ["anonymous_key_negotiation_join_through_router"]
+tests = ["interview_holds_the_network_key_until_admitted", "interview_rejection_removes_the_joiner", "anonymous_key_negotiation_join_through_router"]
 
 # ---------------------------------------------------------------- Annex D MAC
-notes = "Authorization is withheld until the negotiated key is verified (§4.7.3.3 steps 4–10); the optional application-level interview between verification and the network key is not exposed. Device Capability Extension TLV is parsed but virtual devices are not admitted."
+notes = "Authorization is withheld until the negotiated key is verified (section 4.7.3.3 steps 4-10); with TrustCenterPolicy::interview_joiners the verified joiner is reported (StackEvent::JoinerVerified) and the network key waits for Stack::admit_joiner, while Stack::reject_joiner drops its key-pair entry and removes it (the pending join otherwise expires with the security timeout). The application exchanges of the interview itself are implementation specific (BDB 3.1 section 9.9). The Device Capability Extension TLV is parsed; virtual devices are not admitted."
 [[requirement]]
 id = "PW-R23-MAC-001"
 section = "Annex D.2–D.9"

@@ -367,3 +367,62 @@ fn rebooted_trust_center_synchronizes_frame_counters() {
         sim.events(r)
     );
 }
+
+/// Device interview (BDB 3.1 §9.9): with `interview_joiners` the Trust
+/// Center reports the verified joiner and holds the network key until
+/// the application admits it; a rejected joiner is removed.
+#[test]
+fn interview_holds_the_network_key_until_admitted() {
+    let (mut sim, c, r) = network(InstallCodePolicy::OptionalWithAnonymousNegotiation);
+    sim.stack(c).config.trust_center_policy.interview_joiners = true;
+    let j = sim.add_stack(
+        "joiner",
+        stack(StackConfig::new(LogicalDeviceType::EndDevice, JOINER), 3),
+        Box::new(OnOffApp::default()),
+    );
+    sim.block(c, j);
+    sim.stack(j).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::JoinerVerified { device, .. } if *device == JOINER))
+    }));
+    // Nothing more happens without the application: no network key.
+    sim.run_for(Duration::from_secs(3));
+    assert!(!joined(&sim, j));
+    assert_eq!(
+        sim.stack(c).aps.security.entry(JOINER).unwrap().attributes,
+        KeyAttributes::VerifiedKey
+    );
+    // Admitted: the key goes through the router and the joiner is on.
+    sim.stack(c).admit_joiner(JOINER).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| joined(x, j)));
+    assert!(sim.stack(c).admit_joiner(JOINER).is_err());
+    let _ = r;
+}
+
+#[test]
+fn interview_rejection_removes_the_joiner() {
+    let (mut sim, c, _r) = network(InstallCodePolicy::OptionalWithAnonymousNegotiation);
+    sim.stack(c).config.trust_center_policy.interview_joiners = true;
+    let j = sim.add_stack(
+        "joiner",
+        stack(StackConfig::new(LogicalDeviceType::EndDevice, JOINER), 3),
+        Box::new(OnOffApp::default()),
+    );
+    sim.block(c, j);
+    sim.stack(j).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::JoinerVerified { device, .. } if *device == JOINER))
+    }));
+    sim.stack(c).reject_joiner(JOINER).unwrap();
+    assert!(sim.stack(c).aps.security.entry(JOINER).is_none());
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(j)
+            .iter()
+            .any(|e| matches!(e, StackEvent::JoinFailed(_) | StackEvent::Left { .. }))
+    }));
+    assert!(!joined(&sim, j));
+}

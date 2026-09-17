@@ -220,6 +220,16 @@ pub enum StackEvent {
     ZclResponse(ZclFrame),
     /// A ZCL attribute report.
     ZclReport(ZclFrame),
+    /// A joiner's negotiated link key is verified and the Trust Center
+    /// policy asks for a device interview (BDB 3.1 §9.9): the network
+    /// key waits for [`Stack::admit_joiner`] or
+    /// [`Stack::reject_joiner`], or the join times out.
+    JoinerVerified {
+        /// The joiner.
+        device: ExtendedAddress,
+        /// Its network address.
+        short: ShortAddress,
+    },
     /// The Trust Center link key was updated (verified).
     LinkKeyUpdated,
     /// The On-Network TCLK Update procedure (BDB 3.1 §10.2.4) ended

@@ -19,7 +19,6 @@
 )]
 
 use heapless::Vec;
-#[cfg(feature = "dlk")]
 use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{KeyRoute, RelayInfo};
 use panweave_security::cipher::BlockCipher;
@@ -32,7 +31,7 @@ use panweave_security::material::{KeyNegotiationState, LinkKeyKind};
 use panweave_security::material::{LinkKeyEntry, PostJoinKeyUpdate};
 use panweave_storage::Storage;
 use panweave_types::time::Instant;
-use panweave_types::{CryptoRng, ExtendedAddress, Key128, ShortAddress};
+use panweave_types::{CryptoRng, ExtendedAddress, Key128, NwkStatus, ShortAddress};
 #[cfg(feature = "dlk")]
 use panweave_types::{KeyAttributes, KeyType};
 use panweave_zdo::ZdpStatus;
@@ -334,6 +333,22 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let Some(i) = self.dlk.joins.iter().position(|j| j.device == device) else {
             return;
         };
+        if self.config.trust_center_policy.interview_joiners {
+            // BDB 3.1 §9.9: the application interviews the device before
+            // it is admitted (Stack::admit_joiner) or turned away
+            // (Stack::reject_joiner); the pending join keeps its
+            // deadline.
+            let (short, secret) = (self.dlk.joins[i].short, self.dlk.joins[i].secret);
+            if let Some(e) = self.aps.security.keys_mut().get_mut(device) {
+                e.frame_counter_sync = true;
+                if secret == SelectedKeyNegotiationMethod::SECRET_AUTH_TOKEN {
+                    e.passphrase_update_allowed = false;
+                }
+            }
+            let _ = relayed;
+            self.push_event(StackEvent::JoinerVerified { device, short });
+            return;
+        }
         let join = self.dlk.joins.swap_remove(i);
         if let Some(e) = self.aps.security.keys_mut().get_mut(device) {
             // Step 7b: the joiner supports frame counter synchronization.
@@ -356,6 +371,51 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             },
         };
         self.send_network_key(device, join.short, route);
+    }
+
+    /// Admits a joiner held for a device interview (BDB 3.1 §9.9): the
+    /// network key goes out the way it would have right after key
+    /// verification. `Err` when no such joiner is pending.
+    pub fn admit_joiner(&mut self, device: ExtendedAddress) -> Result<(), NwkStatus> {
+        let Some(i) = self.dlk.joins.iter().position(|j| j.device == device) else {
+            return Err(NwkStatus::UnknownDevice);
+        };
+        let join = self.dlk.joins.swap_remove(i);
+        let route = match join.parent {
+            Some(p) if p != self.nwk.nib.network_address => KeyRoute::Tunnel { parent: p },
+            _ => KeyRoute::Direct {
+                short: join.short,
+                nwk_secure: false,
+            },
+        };
+        self.send_network_key(device, join.short, route);
+        self.pump();
+        Ok(())
+    }
+
+    /// Turns away a joiner held for a device interview: its key-pair
+    /// entry is dropped and it is removed from the network (a NWK Leave
+    /// to our own child, an APS Remove Device through its parent).
+    pub fn reject_joiner(&mut self, device: ExtendedAddress) -> Result<(), NwkStatus> {
+        let Some(i) = self.dlk.joins.iter().position(|j| j.device == device) else {
+            return Err(NwkStatus::UnknownDevice);
+        };
+        let join = self.dlk.joins.swap_remove(i);
+        let _ = self.aps.security.remove(device);
+        self.aps.request_link_key_persistence();
+        match join.parent {
+            Some(p) if p != self.nwk.nib.network_address => {
+                let parent_ieee = crate::context::AddrView(&self.nwk).ieee_of(p);
+                if let Some(pi) = parent_ieee {
+                    let _ = self.aps.remove_device(pi, p, device);
+                }
+            }
+            _ => {
+                let _ = self.nwk.leave(Some(device), false, false);
+            }
+        }
+        self.pump();
+        Ok(())
     }
 
     /// Expires negotiations and pending joins (§4.7.3.3 steps 4a / 6a,
