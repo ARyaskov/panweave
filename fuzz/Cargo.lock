@@ -183,12 +183,24 @@ dependencies = [
  "libfuzzer-sys",
  "panweave-aps",
  "panweave-codec",
+ "panweave-green-power",
  "panweave-mac",
  "panweave-nwk",
  "panweave-security",
  "panweave-types",
  "panweave-zcl",
  "panweave-zdo",
+]
+
+[[package]]
+name = "panweave-green-power"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "panweave-codec",
+ "panweave-mac",
+ "panweave-security",
+ "panweave-types",
 ]
 
 [[package]]

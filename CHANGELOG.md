@@ -84,6 +84,15 @@ Keep a Changelog; versions follow SemVer.
   gained `OnOff`, `OffWithEffect`, `Level`, `SceneRecalled`, `CheckIn`,
   `FactoryReset`; facade endpoint builders for the Dimmable Light, Dimmer
   Switch, the Trust Center utility endpoint and `with_poll_control`.
+* `panweave-green-power`: the GPDF codec (both ApplicationIDs, both frame
+  types), GP stub security with every §A.1.5 test vector (CCM* MIC-4,
+  nonce, key derivation, TC-LK key protection), the Green Power cluster
+  codecs a Basic Proxy needs (GP Notification, GP Commissioning
+  Notification, GP Pairing, GP Proxy Commissioning Mode, GP Proxy Table
+  Request / Response, Proxy Table entry format), the Proxy Table with
+  alias derivation, and the sans-I/O Basic Proxy (pairings, duplicate and
+  freshness filtering, key recovery, tunnelling with destinations, aliases
+  and delays, commissioning mode); ADR-0011; `green_power` fuzz target.
 * Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
   targets for the ZDP security services and the ZCL dispatcher, a
   dispatcher property test, `docs/performance.md`.

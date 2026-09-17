@@ -177,11 +177,11 @@ ZCL8 (Green Power cluster 0x0021).
 
 | Area | Content | Owning module |
 |---|---|---|
-| A.1.4–A.1.5 | GPDF frame format, frame types, GP stub processing, security operation (key derivation, TC-LK protection), test vectors | `panweave-green-power::{frame, security}` |
-| A.1.6–A.1.7 | GPD addressing (SrcID / IEEE+endpoint), bidirectional operation, security parameters, GPD implementation notes | `panweave-green-power::gpd` |
+| A.1.4–A.1.5 | GPDF frame format, frame types, GP stub processing, security operation (key derivation, TC-LK protection), test vectors | `panweave-green-power::{gpdf, security}` |
+| A.1.6–A.1.7 | GPD addressing (SrcID / IEEE+endpoint), bidirectional operation, security parameters, GPD implementation notes | `panweave-green-power::gpdf::GpdId` |
 | A.3.2–A.3.4 | Infrastructure device roles (proxy basic, combo basic, commissioning tool), GP cluster server/client attributes and commands | `panweave-green-power::cluster` |
-| A.3.5–A.3.9 | Proxy/sink operation, proxy and sink tables, tunnelling (GP Notification, Commissioning Notification, Pairing, Proxy Commissioning Mode, Response), security handling, commissioning procedure | `panweave-green-power::{proxy, sink, commissioning}` |
-| A.4 | GPD command IDs and payloads | `panweave-green-power::commands` |
+| A.3.5–A.3.9 | Proxy/sink operation, proxy and sink tables, tunnelling (GP Notification, Commissioning Notification, Pairing, Proxy Commissioning Mode, Response), security handling, commissioning procedure | `panweave-green-power::{proxy, proxy_table}` (sink: planned) |
+| A.4 | GPD command IDs and payloads | `panweave-green-power::command` |
 
 State machines: proxy commissioning mode, sink commissioning (with/without
 bidirectional exchange), duplicate filtering windows, security frame-counter

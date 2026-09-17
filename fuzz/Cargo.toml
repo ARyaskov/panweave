@@ -18,6 +18,7 @@ panweave-nwk = { path = "../panweave-nwk" }
 panweave-aps = { path = "../panweave-aps" }
 panweave-zdo = { path = "../panweave-zdo" }
 panweave-zcl = { path = "../panweave-zcl" }
+panweave-green-power = { path = "../panweave-green-power" }
 
 [[bin]]
 name = "mac_frame"
@@ -82,6 +83,12 @@ doc = false
 [[bin]]
 name = "zcl_dispatch"
 path = "fuzz_targets/zcl_dispatch.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "green_power"
+path = "fuzz_targets/green_power.rs"
 test = false
 doc = false
 

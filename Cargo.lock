@@ -580,6 +580,10 @@ name = "panweave-green-power"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-codec",
+ "panweave-mac",
+ "panweave-security",
  "panweave-types",
  "serde",
 ]
