@@ -154,6 +154,10 @@ pub enum EventStatus {
     PartiallyCompletedOptIn,
     /// Completed without participation (previous opt-out).
     CompletedNoParticipation,
+    /// Invalid opt-out of a mandatory event (Energy Management, D.12.2.5.1.2).
+    InvalidOptOut,
+    /// Event not found (Energy Management, D.12.2.5.1.2).
+    EventNotFound,
     /// Rejected: invalid cancel command (default).
     RejectedInvalidCancel,
     /// Rejected: invalid cancel command (invalid effective time).
@@ -182,6 +186,8 @@ impl EventStatus {
             EventStatus::PartiallyCompletedOptOut => 0x08,
             EventStatus::PartiallyCompletedOptIn => 0x09,
             EventStatus::CompletedNoParticipation => 0x0A,
+            EventStatus::InvalidOptOut => 0xF6,
+            EventStatus::EventNotFound => 0xF7,
             EventStatus::RejectedInvalidCancel => 0xF8,
             EventStatus::RejectedInvalidEffectiveTime => 0xF9,
             EventStatus::RejectedExpired => 0xFB,
@@ -204,6 +210,8 @@ impl EventStatus {
             0x08 => EventStatus::PartiallyCompletedOptOut,
             0x09 => EventStatus::PartiallyCompletedOptIn,
             0x0A => EventStatus::CompletedNoParticipation,
+            0xF6 => EventStatus::InvalidOptOut,
+            0xF7 => EventStatus::EventNotFound,
             0xF8 => EventStatus::RejectedInvalidCancel,
             0xF9 => EventStatus::RejectedInvalidEffectiveTime,
             0xFB => EventStatus::RejectedExpired,

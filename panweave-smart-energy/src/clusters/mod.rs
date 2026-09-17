@@ -2,7 +2,9 @@
 
 pub mod calendar;
 pub mod drlc;
+pub mod energy_management;
 pub mod events;
+pub mod mdu_pairing;
 pub mod messaging;
 pub mod metering;
 pub mod prepayment;

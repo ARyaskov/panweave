@@ -255,6 +255,20 @@ Keep a Changelog; versions follow SemVer.
   response) and a bounded server `Log` with most-recent-first filtering
   by log, event id and time window, offset paging split across commands
   and per-log clear permissions.
+* `panweave-smart-energy::clusters::energy_management`: the provisional
+  Energy Management cluster — attribute definitions, the ManageEvent
+  codec and a `Server` next to the DRLC scheduler applying the opt-out /
+  opt-in / duty-cycling rules of D.12.2.4.1 (mandatory events refuse
+  opt-out with Invalid Opt-out, unknown events answer Event Not Found),
+  the derived `LoadControlState` / `CurrentEventID` /
+  `CurrentEventStatus` values, the Conformance Level rule and the
+  DutyOnTime / DutyOffTime algorithm. `drlc::EventStatus` gained the
+  `InvalidOptOut` (0xF6) and `EventNotFound` (0xF7) values.
+* `panweave-smart-energy::clusters::mdu_pairing`: the provisional MDU
+  Pairing cluster — PairingRequest / PairingResponse codecs, a server
+  `respond` fragmenting the virtual-HAN list (WAIT_FOR_DATA on a version
+  match or missing data) and a client `Assembler` collecting fragments
+  into a `VirtualHan` before it restricts discovery and binding.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
