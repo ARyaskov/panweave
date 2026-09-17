@@ -231,6 +231,60 @@ module = "panweave-zcl::clusters::poll_control"
 tests = ["poll_control_server_checks_in_and_fast_polls", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
 notes = "Server: Table 3-132 attributes with the CheckInInterval/FastPollTimeout write validation, Check-in to the bound clients at a constant CheckInInterval (§3.16.6.1, re-armed when the attribute changes), temporary fast poll mode for 7.68 s awaiting responses, Check-in Response (longest timeout wins, INVALID_FIELD above FastPollTimeoutMax, FAILURE when late), Fast Poll Stop, Set Long/Short Poll Interval with the §3.16.4.2 relationships; the runtime switches the MAC poll rate on ZclEvent::FastPoll / LongPollInterval. Client: answers Check-ins with a configured policy and raises ZclEvent::CheckIn. The 'unbound client → FAILURE' SHOULD is not enforced (the dispatcher does not see the binding table)."
 [[requirement]]
+id = "PW-ZCL-GEN-012"
+section = "§3.4"
+summary = "Device Temperature Configuration cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entry only (TODO(PW-ZCL-DEVICE-TEMPERATURE))."
+[[requirement]]
+id = "PW-ZCL-GEN-013"
+section = "§3.9"
+summary = "On/Off Switch Configuration cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entry only (TODO(PW-ZCL-SWITCH-CONFIGURATION))."
+[[requirement]]
+id = "PW-ZCL-GEN-014"
+section = "§3.13"
+summary = "RSSI Location cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entry only (TODO(PW-ZCL-RSSI-LOCATION))."
+[[requirement]]
+id = "PW-ZCL-GEN-015"
+section = "§3.14"
+summary = "Analog / Binary / Multistate Input, Output and Value clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entries only (TODO(PW-ZCL-IO-VALUE))."
+[[requirement]]
+id = "PW-ZCL-GEN-016"
+section = "§3.17"
+summary = "Power Profile cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entry only (TODO(PW-ZCL-POWER-PROFILE))."
+[[requirement]]
+id = "PW-ZCL-GEN-017"
+section = "§3.19, §3.20"
+summary = "Level Control for Lighting and Pulse Width Modulation clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; the Level Control server carries the lighting semantics of §3.19 only through the On/Off coupling (TODO(PW-ZCL-LEVEL-LIGHTING-PWM))."
+[[requirement]]
 id = "PW-ZCL-MEAS-001"
 section = "§4.2–§4.8"
 summary = "Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing"
@@ -249,6 +303,15 @@ module = "panweave-zcl::clusters::electrical_measurement"
 tests = ["dc_server_tracks_extremes_and_alarms", "ac_server_readings_and_alarms", "profile_codecs_round_trip"]
 notes = "MeasurementType, the DC set (readings, minima / maxima, formatting, overload mask and thresholds) and the single-phase / phase A AC set (frequency, RMS voltage with extremes, RMS current, active / reactive / apparent power, power factor, formatting, ACAlarmsMask with the voltage / current / active power overload thresholds); readings fed by the application with the alarm codes (the mask bit numbers) to raise through the Alarms cluster; Get Profile Info / Get Measurement Profile request and response codecs, the profile itself left to the application. Not instantiated: the AC current / active power extremes, the RMS voltage period / counter attributes and thresholds beyond the overloads, harmonics, phases B and C."
 [[requirement]]
+id = "PW-ZCL-MEAS-003"
+section = "§4.10–§4.13"
+summary = "Electrical Conductivity, pH, Wind Speed and Concentration Measurement clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entries only (TODO(PW-ZCL-MEAS-EXTRA))."
+[[requirement]]
 id = "PW-ZCL-LIGHT-001"
 section = "§5.2"
 summary = "Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions"
@@ -257,6 +320,15 @@ status = "partially-implemented"
 module = "panweave-zcl::clusters::color_control"
 tests = ["hue_directions_and_timed_transition", "xy_temperature_and_color_loop", "color_control_through_the_dispatcher_and_scenes"]
 notes = "Colour information attributes per ColorCapabilities, the Options / OptionsMask / OptionsOverride and ExecuteIfOff rules, Move to / Move / Step for hue (8-bit and enhanced, with the shortest / longest / up / down directions on the hue circle), saturation, XY and colour temperature (physical and per-command bounds, clipping), Move to Hue and Saturation, Color Loop Set with the update flags and stored hue, Stop Move Step, RemainingTime, the scene extension field set and StartUpColorTemperatureMireds, executed by the dispatcher on a 100 ms tick. Not done: the colour-mode conversions of §5.2.2.3.2 (manufacturer dependent; a command in another mode starts from that mode's attributes), the Defined Primaries / Color Points attribute sets, DriftCompensation / CompensationText and the Level Control coupling of §5.2.2.1.1 (TODO(PW-ZCL-COLOR-COUPLING))."
+[[requirement]]
+id = "PW-ZCL-LIGHT-002"
+section = "§5.3"
+summary = "Ballast Configuration cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entry only (TODO(PW-ZCL-BALLAST))."
 [[requirement]]
 id = "PW-ZCL-HVAC-001"
 section = "§6.3, §6.4"
@@ -267,6 +339,15 @@ module = "panweave-zcl::clusters::hvac"
 tests = ["setpoints_limits_dead_band_and_running_mode", "weekly_schedule_set_get_clear", "weekly_schedule_runs_against_the_clock", "fan_modes_follow_the_sequence"]
 notes = "Thermostat information and settings attributes with the setpoint limit, dead-band and control-sequence rules enforced on writes, Setpoint Raise/Lower executed by the dispatcher (ZclEvent::Setpoints), the Table 6-17 running mode, the scene extension field set and heating-only / cooling-only / dual builders; the weekly schedule extension (StartOfWeek, NumberOfWeeklyTransitions, NumberOfDailyTransitions, TemperatureSetpointHold; Set / Get / Clear Weekly Schedule with INSUFFICIENT_SPACE, INVALID_VALUE, FAILURE and INVALID_FIELD refusals, Get Weekly Schedule Response) run against the endpoint Time server per ADR-0015; Fan Control with FanMode validated against FanModeSequence; facade Thermostat device. The relay status log, AC information set and the setpoint change tracking set are not implemented (TODO(PW-ZCL-THERMOSTAT-EXTRAS))."
 [[requirement]]
+id = "PW-ZCL-HVAC-002"
+section = "§6.2, §6.5, §6.6"
+summary = "Pump Configuration and Control, Dehumidification Control and Thermostat User Interface Configuration clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entries only (TODO(PW-ZCL-HVAC-EXTRA))."
+[[requirement]]
 id = "PW-ZCL-CLOS-001"
 section = "§7.3, §7.4"
 summary = "Door Lock and Window Covering clusters"
@@ -275,6 +356,15 @@ status = "partially-implemented"
 module = "panweave-zcl::clusters::window_covering"
 tests = ["lock_operations_follow_mode_actuator_and_pin_rules", "wrong_codes_lock_the_lock_out_and_raise_the_tamper_alarm", "unlock_with_timeout_and_auto_relock_lock_again", "pin_user_table_commands", "pin_programming_unlock_with_timeout_and_auto_relock", "commands_are_validated_against_the_control", "scenes_become_timed_go_to_commands", "go_to_lift_percentage_reaches_the_application_and_the_position_is_reported"]
 notes = "Door Lock (§7.3) core: information / operational / security / event-mask attributes, Lock, Unlock, Toggle and Unlock with Timeout with the operating-mode (Privacy and No RF refuse with FAILURE), ActuatorEnabled, RequirePINforRFOperation, WrongCodeEntryLimit lockout (tamper alarm 4 via the Alarms cluster) and AutoRelockTime rules; a bounded PIN user table (Set / Get / Clear PIN Code, Clear All, Set / Get User Status and Type); Operation and Programming Event Notifications gated by the masks with PINs masked unless SendPINOverTheAir; the LockState scene extension as a delayed operation. Not implemented: week-day / year-day / holiday schedules, RFID codes, the event log, Language / LED / sound attributes and the APS-security SecurityLevel policy (TODO(PW-ZCL-DOOR-LOCK-SCHEDULES)). Window Covering (§7.4): information and settings attributes, open-/closed-loop lift and tilt, the seven commands with INVALID_VALUE / UNSUPPORTED_COMMAND validation and the Mode maintenance bit (refused with FAILURE, a status the spec does not name for this case), Mode reversal mirrored into ConfigStatus, percentage reporting by default, the scene extension recalled as a timed go-to command (ZclEvent::WindowCovering); Go To Value accepts any value between the two installed limits whichever is larger; intermediate setpoint strings and the velocity / acceleration attributes are not instantiated."
+[[requirement]]
+id = "PW-ZCL-CLOS-002"
+section = "§7.2, §7.5"
+summary = "Shade Configuration and Barrier Control clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zcl::clusters"
+tests = []
+notes = "Not implemented; metadata entries only (TODO(PW-ZCL-SHADE-BARRIER))."
 [[requirement]]
 id = "PW-ZCL-IAS-001"
 section = "§8.2"
