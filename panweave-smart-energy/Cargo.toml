@@ -14,7 +14,7 @@ default = []
 std = ["alloc", "panweave-types/std", "panweave-security/std", "panweave-zcl/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "heapless/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }

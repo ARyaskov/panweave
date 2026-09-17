@@ -117,10 +117,10 @@ id = "PW-SE-CL-005"
 section = "Annex D.6"
 summary = "Tunneling cluster"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-smart-energy::clusters::tunneling"
-tests = []
-
+tests = ["request_close_and_status_codes", "data_transfer_errors_and_flow_control", "idle_tunnels_close_with_a_notification", "supported_protocols_pages"]
+notes = "All D.6 commands as codecs (RequestTunnel / Response, CloseTunnel, TransferData both ways, TransferDataError, AckTransferData, ReadyData, Get Supported Tunnel Protocols / Response with 16-entry paging, TunnelClosureNotification) and a bounded server tunnel table: tunnel identifiers never reused while open, tunnels bound to the requesting device (WRONG_DEVICE otherwise), MaximumIncomingTransferSize overflow detection, the TunnelStatus codes (protocol / flow control not supported, no more identifiers), CloseTunnel by the owner only with NOT_FOUND otherwise, flow-control windows honoured by the server's own transfers, and the CloseTunnelTimeout inactivity closure with notification. The table is driven by the application (SE endpoint dispatch is not wired into the ZCL dispatcher); APS fragmentation for large transfers is the runtime's existing fragmentation."
 [[requirement]]
 id = "PW-SE-CL-006"
 section = "Annex D.7"

@@ -235,6 +235,10 @@ Keep a Changelog; versions follow SemVer.
   touchlink_device_information}`, `StackEvent::Touchlink`, inter-PAN
   transmission through `MacService::data_request_inter_pan`, distributed
   network formation / adoption / rejoin from the exchanged parameters).
+* `panweave-smart-energy::clusters::tunneling`: the Tunneling cluster
+  codecs and a server-side tunnel table (identifier allocation, peer
+  binding, transfer-size and `CloseTunnelTimeout` enforcement, flow
+  control windows, closure notifications, supported-protocol paging).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
