@@ -248,6 +248,28 @@ pub enum ZclEvent {
         /// What to do.
         command: window_covering::Command,
     },
+    /// Move to Closest Frequency set `CurrentFrequency` of the Level
+    /// Control (0x0008) or Pulse Width Modulation (0x001c) server on
+    /// `endpoint` (§3.10.2.3.5), in 10 Hz units.
+    Frequency {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The cluster (Level Control or PWM).
+        cluster: ClusterId,
+        /// The frequency now in force.
+        frequency: u16,
+    },
+    /// The Pulse Width Modulation duty cycle on `endpoint` moved (§3.20):
+    /// `percent` is the `CurrentLevel`, `done` when the transition
+    /// finished.
+    DutyCycle {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Duty cycle in percent.
+        percent: u8,
+        /// The transition finished.
+        done: bool,
+    },
     /// A Barrier Control command on `endpoint` (§7.5.2.2): move to
     /// `percent` open, or stop (`None`); the application reports back
     /// with `barrier_control::set_state`.
@@ -895,7 +917,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_on_off(i, &origin, cmd, payload);
                                 continue;
                             }
-                            level::ID => {
+                            level::ID | level::PWM_ID => {
                                 self.handle_level(i, &origin, cmd, payload);
                                 continue;
                             }
@@ -1911,17 +1933,28 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         Ok(before != on)
     }
 
-    /// Level Control server commands (§3.10.2.3).
+    /// Level Control (§3.10.2.3) and Pulse Width Modulation (§3.20)
+    /// server commands.
     fn handle_level(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
         let now = self.now;
+        let cluster = origin.cluster;
         let Some(ep) = self.endpoints.get_mut(ep_index) else {
             return;
         };
+        let endpoint = ep.endpoint;
         let on_off_state = ep.cluster(on_off::ID, Role::Server).map(on_off::is_on);
-        let Some(c) = ep.cluster_mut(level::ID, Role::Server) else {
+        let Some(c) = ep.cluster_mut(cluster, Role::Server) else {
             return;
         };
         match level::handle(c, cmd, payload, on_off_state, now) {
+            level::Outcome::Frequency(frequency) => {
+                self.push_event(ZclEvent::Frequency {
+                    endpoint,
+                    cluster,
+                    frequency,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
             level::Outcome::Applied { turn_on } => {
                 if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
                     scenes::invalidate(sc);
@@ -1935,6 +1968,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     self.after_on_off(ep_index, false, true, false);
                 }
                 self.service_level(ep_index);
+                self.service_pwm(ep_index);
                 let _ = self.default_response(origin, ZclStatus::Success);
             }
             level::Outcome::Suppressed => {
@@ -1959,6 +1993,8 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         let Some(t) = level::tick(c, now) else {
             return;
         };
+        let couple = t.changed
+            && c.u8(level::OPTIONS.id).unwrap_or(0) & level::OPTION_COUPLE_COLOR_TEMP_TO_LEVEL != 0;
         if t.changed || t.done {
             self.push_event(ZclEvent::Level {
                 endpoint,
@@ -1966,8 +2002,73 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 done: t.done,
             });
         }
+        if couple {
+            self.couple_color_temperature(ep_index);
+        }
         if t.turn_off {
             self.set_on_off_at(ep_index, false);
+        }
+    }
+
+    /// §5.2.2.1.1: with CoupleColorTempToLevel set and the Color Control
+    /// server in colour temperature mode, the level drives
+    /// `ColorTemperatureMireds` (full level = the coupled minimum,
+    /// minimum level = the physical maximum).
+    fn couple_color_temperature(&mut self, ep_index: usize) {
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        let Some(l) = ep.cluster(level::ID, Role::Server) else {
+            return;
+        };
+        let Some(cc) = ep.cluster(color_control::ID, Role::Server) else {
+            return;
+        };
+        let in_temperature_mode = cc.u8(color_control::ENHANCED_COLOR_MODE.id)
+            == Some(color_control::color_mode::COLOR_TEMPERATURE);
+        let (Some(couple_min), Some(physical_max)) = (
+            cc.u16(color_control::COUPLE_COLOR_TEMP_TO_LEVEL_MIN_MIREDS.id),
+            cc.u16(color_control::COLOR_TEMP_PHYSICAL_MAX_MIREDS.id),
+        ) else {
+            return;
+        };
+        if !in_temperature_mode {
+            return;
+        }
+        let mireds = level::coupled_mireds(l, couple_min, physical_max);
+        let Some(cc) = ep.cluster_mut(color_control::ID, Role::Server) else {
+            return;
+        };
+        if cc.set_u16(color_control::COLOR_TEMPERATURE_MIREDS.id, mireds) {
+            self.push_event(ZclEvent::Color {
+                endpoint,
+                mode: color_control::color_mode::COLOR_TEMPERATURE,
+                a: mireds,
+                b: 0,
+                done: true,
+            });
+        }
+    }
+
+    /// Runs the Pulse Width Modulation transition engine of one endpoint.
+    fn service_pwm(&mut self, ep_index: usize) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        let Some(c) = ep.cluster_mut(level::PWM_ID, Role::Server) else {
+            return;
+        };
+        if let Some(t) = level::tick(c, now)
+            && (t.changed || t.done)
+        {
+            self.push_event(ZclEvent::DutyCycle {
+                endpoint,
+                percent: t.level,
+                done: t.done,
+            });
         }
     }
 
@@ -2383,6 +2484,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 self.after_on_off(i, !on, on, true);
             }
             self.service_level(i);
+            self.service_pwm(i);
             self.service_color(i);
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;

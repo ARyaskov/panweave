@@ -280,10 +280,10 @@ id = "PW-ZCL-GEN-017"
 section = "§3.19, §3.20"
 summary = "Level Control for Lighting and Pulse Width Modulation clusters"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters"
-tests = []
-notes = "Not implemented; the Level Control server carries the lighting semantics of §3.19 only through the On/Off coupling (TODO(PW-ZCL-LEVEL-LIGHTING-PWM))."
+status = "implemented"
+module = "panweave-zcl::clusters::level"
+tests = ["frequency_lighting_and_pwm", "level_couples_the_colour_temperature_and_pwm_runs_beside_it"]
+notes = "Level Control for Lighting: lighting_server enforces the 1…0xfe level range; the CoupleColorTempToLevel Options bit couples CurrentLevel to ColorTemperatureMireds in colour temperature mode (full level = CoupleColorTempToLevelMinMireds, minimum level = ColorTempPhysicalMaxMireds, linear between) through the dispatcher. The frequency attributes and Move to Closest Frequency (approximated by clamping into MinFrequency…MaxFrequency; INVALID_VALUE beyond half / double the range or zero) on the base cluster; Pulse Width Modulation (0x001c) as pwm_server over the same transition engine with a 0…100 % duty cycle, its own commands and ZclEvent::DutyCycle / Frequency. Not done: the Level Control couplings of §3.19.4 beyond Table 3-55 are examples only; StateText-style semantics do not apply."
 [[requirement]]
 id = "PW-ZCL-MEAS-001"
 section = "§4.2–§4.8"
@@ -318,8 +318,8 @@ summary = "Color Control cluster: hue/saturation, XY, color temperature, enhance
 level = "optional"
 status = "partially-implemented"
 module = "panweave-zcl::clusters::color_control"
-tests = ["hue_directions_and_timed_transition", "xy_temperature_and_color_loop", "color_control_through_the_dispatcher_and_scenes"]
-notes = "Colour information attributes per ColorCapabilities, the Options / OptionsMask / OptionsOverride and ExecuteIfOff rules, Move to / Move / Step for hue (8-bit and enhanced, with the shortest / longest / up / down directions on the hue circle), saturation, XY and colour temperature (physical and per-command bounds, clipping), Move to Hue and Saturation, Color Loop Set with the update flags and stored hue, Stop Move Step, RemainingTime, the scene extension field set and StartUpColorTemperatureMireds, executed by the dispatcher on a 100 ms tick. Not done: the colour-mode conversions of §5.2.2.3.2 (manufacturer dependent; a command in another mode starts from that mode's attributes), the Defined Primaries / Color Points attribute sets, DriftCompensation / CompensationText and the Level Control coupling of §5.2.2.1.1 (TODO(PW-ZCL-COLOR-COUPLING))."
+tests = ["hue_directions_and_timed_transition", "xy_temperature_and_color_loop", "color_control_through_the_dispatcher_and_scenes", "level_couples_the_colour_temperature_and_pwm_runs_beside_it"]
+notes = "Colour information attributes per ColorCapabilities, the Options / OptionsMask / OptionsOverride and ExecuteIfOff rules, Move to / Move / Step for hue (8-bit and enhanced, with the shortest / longest / up / down directions on the hue circle), saturation, XY and colour temperature (physical and per-command bounds, clipping), Move to Hue and Saturation, Color Loop Set with the update flags and stored hue, Stop Move Step, RemainingTime, the scene extension field set, StartUpColorTemperatureMireds and the Level Control coupling of §5.2.2.1.1 (CoupleColorTempToLevel), executed by the dispatcher on a 100 ms tick. Not done: the colour-mode conversions of §5.2.2.3.2 (manufacturer dependent; a command in another mode starts from that mode's attributes), the Defined Primaries / Color Points attribute sets and DriftCompensation / CompensationText (TODO(PW-ZCL-COLOR-EXTRAS))."
 [[requirement]]
 id = "PW-ZCL-LIGHT-002"
 section = "§5.3"

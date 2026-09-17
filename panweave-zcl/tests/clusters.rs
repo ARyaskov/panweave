@@ -34,7 +34,7 @@ const CLIENT: ShortAddress = ShortAddress(0x1234);
 const EP: Endpoint = Endpoint(1);
 const T0: Instant = Instant::from_millis(1000);
 
-type Node = Zcl<2, 8, 36>;
+type Node = Zcl<2, 12, 36>;
 
 fn lamp() -> Node {
     let mut zcl = Node::new();
@@ -886,4 +886,116 @@ fn color_control_through_the_dispatcher_and_scenes() {
         c.u8(color_control::COLOR_MODE.id),
         Some(color_control::color_mode::COLOR_TEMPERATURE)
     );
+}
+
+#[test]
+fn level_couples_the_colour_temperature_and_pwm_runs_beside_it() {
+    let mut zcl = lamp();
+    let mut g = GroupTable::<4>::new();
+    zcl.endpoint_mut(EP)
+        .unwrap()
+        .add_instance(
+            color_control::server(color_control::capability::COLOR_TEMPERATURE, (153, 500))
+                .unwrap(),
+        )
+        .unwrap();
+    zcl.endpoint_mut(EP)
+        .unwrap()
+        .add_instance(level::pwm_server(0, 100, 1, 1000).unwrap())
+        .unwrap();
+    let _ = command(&mut zcl, &mut g, on_off::ID, on_off::CMD_ON, &[], true);
+    // Couple the level to the colour temperature (§5.2.2.1.1).
+    zcl.cluster_mut(EP, level::ID, Role::Server).unwrap().set(
+        level::OPTIONS.id,
+        &V::Bits {
+            width: 1,
+            bits: u64::from(level::OPTION_COUPLE_COLOR_TEMP_TO_LEVEL),
+        },
+    );
+    let _ = events(&mut zcl);
+    // Move to the full level at once: the coolest coupled colour.
+    let _ = command(
+        &mut zcl,
+        &mut g,
+        level::ID,
+        level::CMD_MOVE_TO_LEVEL,
+        &[254, 0, 0, 0, 0],
+        true,
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(200));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    let couple_min = c
+        .u16(color_control::COUPLE_COLOR_TEMP_TO_LEVEL_MIN_MIREDS.id)
+        .unwrap();
+    assert_eq!(
+        c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id),
+        Some(couple_min)
+    );
+    assert!(events(&mut zcl).iter().any(|e| matches!(
+        e,
+        ZclEvent::Color {
+            endpoint: EP,
+            mode: color_control::color_mode::COLOR_TEMPERATURE,
+            done: true,
+            ..
+        }
+    )));
+    // Down to the minimum: the warmest physical colour.
+    let _ = command(
+        &mut zcl,
+        &mut g,
+        level::ID,
+        level::CMD_MOVE_TO_LEVEL,
+        &[1, 0, 0, 0, 0],
+        true,
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(400));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    assert_eq!(c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id), Some(500));
+    // The PWM server takes its own commands: a 40 % duty cycle and a
+    // frequency of 2 kHz (200 x 10 Hz).
+    let _ = events(&mut zcl);
+    let (h, p) = command(
+        &mut zcl,
+        &mut g,
+        level::PWM_ID,
+        level::CMD_MOVE_TO_LEVEL,
+        &[40, 0, 0, 0, 0],
+        true,
+    )
+    .unwrap();
+    assert_eq!(h.command, command::DEFAULT_RESPONSE);
+    assert_eq!(p[1], ZclStatus::Success.raw());
+    let (_, p) = command(
+        &mut zcl,
+        &mut g,
+        level::PWM_ID,
+        level::CMD_MOVE_TO_CLOSEST_FREQUENCY,
+        &[0xc8, 0x00],
+        true,
+    )
+    .unwrap();
+    assert_eq!(p[1], ZclStatus::Success.raw());
+    zcl.poll_timers(T0 + Duration::from_millis(600));
+    let pwm = zcl.cluster(EP, level::PWM_ID, Role::Server).unwrap();
+    assert_eq!(level::current_level(pwm), 40);
+    assert_eq!(level::current_frequency(pwm), 200);
+    assert_eq!(level_of(&zcl), 1, "the Level Control server is untouched");
+    let ev = events(&mut zcl);
+    assert!(ev.iter().any(|e| matches!(
+        e,
+        ZclEvent::DutyCycle {
+            endpoint: EP,
+            percent: 40,
+            done: true
+        }
+    )));
+    assert!(ev.iter().any(|e| matches!(
+        e,
+        ZclEvent::Frequency {
+            endpoint: EP,
+            cluster: level::PWM_ID,
+            frequency: 200
+        }
+    )));
 }

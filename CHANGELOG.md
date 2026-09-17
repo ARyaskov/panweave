@@ -176,6 +176,14 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Level Control for Lighting and Pulse Width Modulation (ZCL8 §3.19,
+  §3.20, §3.10.2.3.5): `level::lighting_server` (1…254),
+  `enable_frequency` with `CurrentFrequency` / `MinFrequency` /
+  `MaxFrequency` and Move to Closest Frequency (`ZclEvent::Frequency`),
+  `pwm_server` for cluster 0x001c driven by the same engine
+  (`ZclEvent::DutyCycle`), and the CoupleColorTempToLevel option: the
+  dispatcher moves `ColorTemperatureMireds` with the level in colour
+  temperature mode (§5.2.2.1.1).
 * `panweave-zcl::clusters::io`: the Analog / Binary / Multistate
   Input, Output and Value clusters (ZCL8 §3.14) over one attribute set
   with the §3.14.11 rules (inputs writable out of service only,

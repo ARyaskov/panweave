@@ -41,6 +41,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     scenes::ID,
     on_off::ID,
     level::ID,
+    level::PWM_ID,
     poll_control::ID,
     keep_alive::ID,
     illuminance::ID,
@@ -80,6 +81,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     scenes::ID,
     on_off::ID,
     level::ID,
+    level::PWM_ID,
     poll_control::ID,
     keep_alive::ID,
     illuminance::ID,
@@ -137,7 +139,9 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
         groups::ID => groups::server().ok(),
         scenes::ID => scenes::server().ok(),
         on_off::ID => on_off::server().ok(),
-        level::ID => level::server(1, 254).ok(),
+        // Level Control for Lighting: 1…254 (§3.19).
+        level::ID => level::lighting_server(1, 254).ok(),
+        level::PWM_ID => level::pwm_server(0, 100, 0, 0).ok(),
         // Battery protection: check-ins at least every 30 s, long polls
         // of at least 1 s, fast polling for at most 2 minutes.
         poll_control::ID => poll_control::server(120, 4, 480).ok(),
@@ -244,6 +248,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         scenes::ID => Some(scenes::client()),
         on_off::ID => Some(on_off::client()),
         level::ID => Some(level::client()),
+        level::PWM_ID => Some(ClusterInstance::new(level::PWM_DEF, Role::Client)),
         // Check-ins are answered without requesting fast polling; the
         // application changes the policy through the cluster state.
         poll_control::ID => Some(poll_control::client(false, 0)),

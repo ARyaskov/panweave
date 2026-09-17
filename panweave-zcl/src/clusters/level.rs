@@ -23,6 +23,13 @@ pub const REMAINING_TIME: AttributeDef = AttributeDef::new(0x0001, DataType::Uin
 pub const MIN_LEVEL: AttributeDef = AttributeDef::new(0x0002, DataType::Uint(1), Access::RO);
 /// `MaxLevel`.
 pub const MAX_LEVEL: AttributeDef = AttributeDef::new(0x0003, DataType::Uint(1), Access::RO);
+/// `CurrentFrequency` (uint16, 10 Hz units, 0 unknown; reportable).
+pub const CURRENT_FREQUENCY: AttributeDef =
+    AttributeDef::new(0x0004, DataType::Uint(2), Access::RO_REPORT);
+/// `MinFrequency` (uint16, 0 undefined).
+pub const MIN_FREQUENCY: AttributeDef = AttributeDef::new(0x0005, DataType::Uint(2), Access::RO);
+/// `MaxFrequency` (uint16, 0 undefined).
+pub const MAX_FREQUENCY: AttributeDef = AttributeDef::new(0x0006, DataType::Uint(2), Access::RO);
 /// `Options` (bit 0: ExecuteIfOff).
 pub const OPTIONS: AttributeDef = AttributeDef::new(0x000F, DataType::Bitmap(1), Access::RW);
 /// `OnOffTransitionTime` (tenths of a second).
@@ -59,9 +66,20 @@ pub const CMD_MOVE_WITH_ON_OFF: CommandId = CommandId(0x05);
 pub const CMD_STEP_WITH_ON_OFF: CommandId = CommandId(0x06);
 /// Stop (with On/Off variant, identical, §3.10.2.3.4.2).
 pub const CMD_STOP_WITH_ON_OFF: CommandId = CommandId(0x07);
+/// Move to Closest Frequency (§3.10.2.3.5, with `CurrentFrequency`).
+pub const CMD_MOVE_TO_CLOSEST_FREQUENCY: CommandId = CommandId(0x08);
+/// Pulse Width Modulation cluster (§3.20): the Level engine over a duty
+/// cycle (`CurrentLevel` 0…100 %) and a frequency.
+pub const PWM_ID: ClusterId = ClusterId(0x001c);
 
 /// `Options` bit: execute the 'without On/Off' commands while off.
 pub const OPTION_EXECUTE_IF_OFF: u8 = 0x01;
+/// `Options` bit (Level Control for Lighting, §3.19.2.2.3): couple
+/// `CurrentLevel` to the colour temperature of the endpoint's Color
+/// Control server (§5.2.2.1.1).
+pub const OPTION_COUPLE_COLOR_TEMP_TO_LEVEL: u8 = 0x02;
+/// `CurrentLevel` non-value (lighting, PWM).
+pub const LEVEL_UNDEFINED: u8 = 0xff;
 
 /// Move / Step mode: up.
 pub const MODE_UP: u8 = 0x00;
@@ -97,6 +115,32 @@ pub const DEF: ClusterDef = ClusterDef {
         CMD_STEP_WITH_ON_OFF,
         CMD_STOP_WITH_ON_OFF,
     ],
+    generated: &[],
+};
+
+/// Cluster definition with the frequency command (§3.10.2.3.5).
+pub const FREQUENCY_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 3,
+    received: &[
+        CMD_MOVE_TO_LEVEL,
+        CMD_MOVE,
+        CMD_STEP,
+        CMD_STOP,
+        CMD_MOVE_TO_LEVEL_WITH_ON_OFF,
+        CMD_MOVE_WITH_ON_OFF,
+        CMD_STEP_WITH_ON_OFF,
+        CMD_STOP_WITH_ON_OFF,
+        CMD_MOVE_TO_CLOSEST_FREQUENCY,
+    ],
+    generated: &[],
+};
+
+/// Pulse Width Modulation cluster definition (Table 3-148).
+pub const PWM_DEF: ClusterDef = ClusterDef {
+    id: PWM_ID,
+    revision: 1,
+    received: FREQUENCY_DEF.received,
     generated: &[],
 };
 
@@ -153,6 +197,97 @@ pub fn server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, Zc
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
     ClusterInstance::new(DEF, Role::Client)
+}
+
+/// Builds a Level Control for Lighting server (§3.19): the level range
+/// is 1…0xfe (0 is never used, 0xff undefined).
+pub fn lighting_server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+    if min == 0 || max > 0xfe || min > max {
+        return Err(ZclStatus::InvalidValue);
+    }
+    server(min, max)
+}
+
+/// Adds the frequency attributes (`CurrentFrequency` reported,
+/// `MinFrequency` / `MaxFrequency` in 10 Hz, 0 = undefined) and the
+/// Move to Closest Frequency command to a server (§3.10.2.2.5–7).
+pub fn enable_frequency<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    min: u16,
+    max: u16,
+) -> Result<(), ZclStatus> {
+    if min != 0 && max != 0 && min > max {
+        return Err(ZclStatus::InvalidValue);
+    }
+    let two = |v: u16| Value::Uint {
+        width: 2,
+        value: u64::from(v),
+    };
+    c.add_reported_attribute(CURRENT_FREQUENCY, &two(0), DEFAULT_REPORTING)?;
+    c.add_attribute(MIN_FREQUENCY, &two(min))?;
+    c.add_attribute(MAX_FREQUENCY, &two(max))?;
+    if c.def.id == ID {
+        c.def = FREQUENCY_DEF;
+    }
+    Ok(())
+}
+
+/// Builds a Pulse Width Modulation server (§3.20): the duty cycle
+/// `min..=max` percent (at most 100) and the frequency range in 10 Hz.
+pub fn pwm_server<const A: usize>(
+    min: u8,
+    max: u8,
+    min_frequency: u16,
+    max_frequency: u16,
+) -> Result<ClusterInstance<A>, ZclStatus> {
+    if max > 100 || min > max {
+        return Err(ZclStatus::InvalidValue);
+    }
+    let mut c = server(min, max)?;
+    c.def = PWM_DEF;
+    enable_frequency(&mut c, min_frequency, max_frequency)?;
+    Ok(c)
+}
+
+/// `CurrentFrequency` (0 unknown / unsupported).
+pub fn current_frequency<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+    c.u16(CURRENT_FREQUENCY.id).unwrap_or(0)
+}
+
+/// Sets `CurrentFrequency` to the closest supported frequency (the
+/// range `MinFrequency`…`MaxFrequency` where defined); returns it.
+pub fn set_frequency<const A: usize>(c: &mut ClusterInstance<A>, frequency: u16) -> u16 {
+    let min = c.u16(MIN_FREQUENCY.id).unwrap_or(0);
+    let max = c.u16(MAX_FREQUENCY.id).unwrap_or(0);
+    let mut f = frequency;
+    if min != 0 {
+        f = f.max(min);
+    }
+    if max != 0 {
+        f = f.min(max);
+    }
+    c.set_u16(CURRENT_FREQUENCY.id, f);
+    f
+}
+
+/// The colour temperature coupled to `CurrentLevel` (§5.2.2.1.1): the
+/// maximum level maps to `couple_min_mireds` (the coolest coupled
+/// colour), the minimum level to `physical_max_mireds` (the warmest),
+/// linearly in between like an incandescent bulb dimming down.
+pub fn coupled_mireds<const A: usize>(
+    c: &ClusterInstance<A>,
+    couple_min_mireds: u16,
+    physical_max_mireds: u16,
+) -> u16 {
+    let (min, max, cur) = (min_level(c), max_level(c), current_level(c));
+    if max <= min || physical_max_mireds <= couple_min_mireds {
+        return couple_min_mireds;
+    }
+    let span = u32::from(physical_max_mireds - couple_min_mireds);
+    let pos = u32::from(cur.clamp(min, max) - min);
+    let range = u32::from(max - min);
+    let warm = span - span * pos / range;
+    u16::try_from(u32::from(couple_min_mireds) + warm).unwrap_or(physical_max_mireds)
 }
 
 /// Range checks of Table 3-56 for network writes.
@@ -219,6 +354,8 @@ pub enum Outcome {
     /// Not executed: the endpoint is off and ExecuteIfOff is clear
     /// (§3.10.2.2.8.1).
     Suppressed,
+    /// Move to Closest Frequency set `CurrentFrequency` (§3.10.2.3.5).
+    Frequency(u16),
     /// Malformed or unsupported command.
     Default(ZclStatus),
 }
@@ -305,6 +442,26 @@ pub fn handle<const A: usize>(
             }
         }
         CMD_STOP | CMD_STOP_WITH_ON_OFF => Parsed::Stop,
+        CMD_MOVE_TO_CLOSEST_FREQUENCY => {
+            if c.attributes.get(CURRENT_FREQUENCY.id, None).is_none() {
+                return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
+            }
+            let Ok(frequency) = r.u16_le() else {
+                return Outcome::Default(ZclStatus::MalformedCommand);
+            };
+            // Any frequency within the range is approximated by clamping;
+            // a range the device cannot approach at all is refused.
+            let min = c.u16(MIN_FREQUENCY.id).unwrap_or(0);
+            let max = c.u16(MAX_FREQUENCY.id).unwrap_or(0);
+            if frequency == 0
+                || (min != 0
+                    && max != 0
+                    && (frequency < min / 2 || frequency > max.saturating_mul(2)))
+            {
+                return Outcome::Default(ZclStatus::InvalidValue);
+            }
+            return Outcome::Frequency(set_frequency(c, frequency));
+        }
         _ => return Outcome::Default(ZclStatus::UnsupportedClusterCommand),
     };
     let mask = r.u8().unwrap_or(0);
@@ -515,4 +672,87 @@ pub fn apply_scene_fields<const A: usize>(
     let level = *fields.first()?;
     start(c, level, tenths, false, now);
     Some(level)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frequency_lighting_and_pwm() {
+        let t0 = Instant::from_millis(0);
+        assert!(lighting_server::<16>(0, 254).is_err());
+        assert!(lighting_server::<16>(1, 255).is_err());
+        let mut c: ClusterInstance<16> = lighting_server(1, 254).unwrap();
+        // Without the frequency attributes the command is unsupported.
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_MOVE_TO_CLOSEST_FREQUENCY,
+                &[0x10, 0x27],
+                None,
+                t0
+            ),
+            Outcome::Default(ZclStatus::UnsupportedClusterCommand)
+        );
+        enable_frequency(&mut c, 100, 1000).unwrap();
+        assert!(c.def.received.contains(&CMD_MOVE_TO_CLOSEST_FREQUENCY));
+        assert_eq!(current_frequency(&c), 0);
+        // 5 kHz (500 x 10 Hz) is within range; 20 kHz clamps to the
+        // maximum; 1 Hz is too far below to approximate.
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_MOVE_TO_CLOSEST_FREQUENCY,
+                &[0xf4, 0x01],
+                None,
+                t0
+            ),
+            Outcome::Frequency(500)
+        );
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_MOVE_TO_CLOSEST_FREQUENCY,
+                &[0xd0, 0x07],
+                None,
+                t0
+            ),
+            Outcome::Frequency(1000)
+        );
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_MOVE_TO_CLOSEST_FREQUENCY,
+                &[0x01, 0x00],
+                None,
+                t0
+            ),
+            Outcome::Default(ZclStatus::InvalidValue)
+        );
+        assert_eq!(
+            handle(&mut c, CMD_MOVE_TO_CLOSEST_FREQUENCY, &[0x01], None, t0),
+            Outcome::Default(ZclStatus::MalformedCommand)
+        );
+        assert_eq!(current_frequency(&c), 1000);
+        // Coupled colour temperature: full level is the coolest coupled
+        // mireds, the minimum level the warmest physical value.
+        c.set_u8(CURRENT_LEVEL.id, 254);
+        assert_eq!(coupled_mireds(&c, 153, 500), 153);
+        c.set_u8(CURRENT_LEVEL.id, 1);
+        assert_eq!(coupled_mireds(&c, 153, 500), 500);
+        c.set_u8(CURRENT_LEVEL.id, 128);
+        let mid = coupled_mireds(&c, 153, 500);
+        assert!((320..=330).contains(&mid), "{mid}");
+        // PWM: a duty cycle of at most 100 %, the frequency range built in.
+        assert!(pwm_server::<16>(0, 101, 0, 0).is_err());
+        let mut p: ClusterInstance<16> = pwm_server(0, 100, 1, 5000).unwrap();
+        assert_eq!(p.def.id, PWM_ID);
+        assert_eq!(max_level(&p), 100);
+        assert_eq!(
+            handle(&mut p, CMD_MOVE_TO_LEVEL, &[50, 0, 0], None, t0),
+            Outcome::Applied { turn_on: false }
+        );
+        assert_eq!(set_frequency(&mut p, 6000), 5000);
+    }
 }

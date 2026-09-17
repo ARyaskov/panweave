@@ -468,6 +468,26 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// Move to Closest Frequency set `CurrentFrequency` of the Level
+    /// Control or Pulse Width Modulation server on `endpoint` (ZCL8
+    /// §3.10.2.3.5), in 10 Hz units.
+    Frequency {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The cluster (0x0008 or 0x001c).
+        cluster: ClusterId,
+        /// The frequency now in force.
+        frequency: u16,
+    },
+    /// The Pulse Width Modulation duty cycle moved (ZCL8 §3.20).
+    DutyCycle {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Duty cycle in percent.
+        percent: u8,
+        /// The transition finished.
+        done: bool,
+    },
     /// A Barrier Control command (ZCL8 §7.5.2.2) or a recalled scene:
     /// move the barrier to `percent` open, or stop (`None`); the
     /// application reports back with `barrier_control::set_state`.
