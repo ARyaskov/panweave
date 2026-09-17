@@ -21,5 +21,13 @@ panweave-types = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 [lints]
 workspace = true
+
+[[bench]]
+name = "tlv"
+harness = false
+

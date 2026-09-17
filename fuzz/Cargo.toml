@@ -73,5 +73,17 @@ path = "fuzz_targets/aps_rx.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "zdp_security"
+path = "fuzz_targets/zdp_security.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "zcl_dispatch"
+path = "fuzz_targets/zcl_dispatch.rs"
+test = false
+doc = false
+
 [profile.release]
 debug = 1

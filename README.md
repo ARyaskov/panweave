@@ -64,12 +64,25 @@ See `docs/architecture.md`. Quick tour:
 | `panweave-testkit/`, `panweave-sim/`, `panweave-pcap/`, `panweave-cli/` | Testing, simulation and host tooling |
 | `conformance/`, `docs/` | Requirement inventory and documentation |
 
+Security: `panweave-runtime/tests/dlk.rs` negotiates dynamic link keys
+(Curve25519 SPEKE) through a router and with an install code, and
+`panweave-runtime/tests/network_manager.rs` / `utility_clusters.rs` cover
+the network manager (PAN ID change, scan attempts), Poll Control driving a
+sleepy device's poll rate and the routers' Trust Center keep-alive.
+
+ZCL: the endpoint dispatcher executes Identify, Groups, Scenes, On/Off,
+Level Control and Poll Control itself (`panweave-zcl/tests/clusters.rs`);
+applications observe state changes as events instead of re-implementing
+the commands.
+
 ## Building
 
 ```bash
 cargo check --workspace --all-targets
 cargo test --workspace
 cargo xtask gate      # fmt, clippy, tests, no_std builds, conformance
+cargo bench -p panweave-security --bench crypto   # see docs/performance.md
+cargo fuzz list       # fuzz targets (cargo install cargo-fuzz)
 ```
 
 ## License

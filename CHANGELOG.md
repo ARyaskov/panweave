@@ -84,6 +84,9 @@ Keep a Changelog; versions follow SemVer.
   gained `OnOff`, `OffWithEffect`, `Level`, `SceneRecalled`, `CheckIn`,
   `FactoryReset`; facade endpoint builders for the Dimmable Light, Dimmer
   Switch, the Trust Center utility endpoint and `with_poll_control`.
+* Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
+  targets for the ZDP security services and the ZCL dispatcher, a
+  dispatcher property test, `docs/performance.md`.
 * ZDO configuration attributes (`panweave_zdo::ConfigAttributes`, Table
   2-135 defaults) in `StackConfig::zdo`; discovery repeats
   `:Config_NWK_Scan_Attempts` times, `:Config_NWK_Time_btwn_Scans` apart,

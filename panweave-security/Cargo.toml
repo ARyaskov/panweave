@@ -34,8 +34,15 @@ serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 proptest = { workspace = true }
 panweave-security = { path = ".", features = ["crypto-software", "dlk"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "crypto"
+harness = false
+required-features = ["crypto-software"]
+
