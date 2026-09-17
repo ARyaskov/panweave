@@ -4,7 +4,9 @@
 //! This facade re-exports the layer crates and offers [`Node`], a
 //! sans-I/O device that combines the runtime [`Stack`] with the BDB 3.1
 //! commissioning machine, built through [`Coordinator`], [`Router`] and
-//! [`EndDevice`]:
+//! [`EndDevice`]. A [`Node`] holds every table of the stack inline (a
+//! few hundred kilobytes): give it a `static`, a `Box` or a thread with
+//! room for it rather than a small stack frame.
 //!
 //! ```
 //! use panweave::{Coordinator, Event};
@@ -13,6 +15,7 @@
 //! use panweave::testkit::TestRng;
 //! use panweave::types::ExtendedAddress;
 //!
+//! # std::thread::Builder::new().stack_size(8 << 20).spawn(|| {
 //! let mut node = Coordinator::new(ExtendedAddress(0x1122_3344_5566_7788))
 //!     .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::<32, 128>::new());
 //! node.form_network().unwrap();
@@ -20,6 +23,7 @@
 //! // `node.next_radio_action()` from the radio loop and consume
 //! // `node.next_event()`.
 //! assert!(matches!(node.next_event(), None | Some(Event::Stack(_))));
+//! # }).unwrap().join().unwrap();
 //! ```
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
@@ -295,7 +299,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        instance: EndpointInstance<8, 36>,
+        instance: EndpointInstance<12, 36>,
     ) -> Result<(), EndpointError> {
         self.stack.add_endpoint(descriptor, instance)
     }

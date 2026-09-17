@@ -8,6 +8,7 @@ use panweave_types::{ClusterId, CommandId};
 pub mod alarms;
 pub mod color_control;
 pub mod commissioning;
+pub mod configuration;
 pub mod diagnostics;
 pub mod door_lock;
 pub mod electrical_measurement;

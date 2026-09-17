@@ -45,7 +45,7 @@ fn basic_server() -> panweave_zcl::ClusterInstance<36> {
 }
 
 /// On/Off light: Identify, Groups and On/Off servers.
-fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
+fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,
@@ -64,7 +64,7 @@ fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
 }
 
 /// On/Off switch: Identify server + client, Groups client, On/Off client.
-fn switch_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
+fn switch_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
     let desc = SimpleDescriptor::new(
         Endpoint(2),
         ProfileId::HOME_AUTOMATION,

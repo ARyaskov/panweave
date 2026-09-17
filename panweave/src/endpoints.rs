@@ -11,8 +11,14 @@
 use heapless::Vec;
 use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
+use panweave_zcl::clusters::configuration::{
+    ballast, barrier_control, dehumidification, device_temperature, pump, shade,
+    switch_configuration, thermostat_ui,
+};
 use panweave_zcl::clusters::hvac::{fan_control, thermostat};
-use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
+use panweave_zcl::clusters::measurement::{
+    flow, illuminance, illuminance_level, occupancy, pressure, temperature, water_content,
+};
 use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
 };
@@ -25,7 +31,7 @@ use panweave_zcl::{ClusterDef, ClusterInstance, Role};
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 /// An endpoint definition: descriptor plus cluster instances.
-pub type Built = (SimpleDescriptor, EndpointInstance<8, 36>);
+pub type Built = (SimpleDescriptor, EndpointInstance<12, 36>);
 
 /// Clusters this crate can instantiate (server side).
 const IMPLEMENTED_SERVERS: &[ClusterId] = &[
@@ -54,6 +60,18 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     ias_wd::ID,
     electrical_measurement::ID,
     commissioning::ID,
+    device_temperature::ID,
+    switch_configuration::ID,
+    ballast::ID,
+    pump::ID,
+    dehumidification::ID,
+    thermostat_ui::ID,
+    shade::ID,
+    barrier_control::ID,
+    illuminance_level::ID,
+    pressure::ID,
+    flow::ID,
+    water_content::RELATIVE_HUMIDITY,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -81,6 +99,18 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     ias_wd::ID,
     electrical_measurement::ID,
     commissioning::ID,
+    device_temperature::ID,
+    switch_configuration::ID,
+    ballast::ID,
+    pump::ID,
+    dehumidification::ID,
+    thermostat_ui::ID,
+    shade::ID,
+    barrier_control::ID,
+    illuminance_level::ID,
+    pressure::ID,
+    flow::ID,
+    water_content::RELATIVE_HUMIDITY,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -171,6 +201,37 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
             electrical_measurement::server(electrical_measurement::Capability::AC).ok()
         }
         commissioning::ID => commissioning::server(&commissioning::StartupSet::default()).ok(),
+        // Internal temperature with the alarm thresholds (an Alarms
+        // server accompanies it on devices that list one).
+        device_temperature::ID => device_temperature::server(true).ok(),
+        switch_configuration::ID => {
+            switch_configuration::server(switch_configuration::switch_type::TOGGLE).ok()
+        }
+        // A single-lamp ballast dimming over its whole range.
+        ballast::ID => ballast::server(1, 254, 1).ok(),
+        pump::ID => pump::server(
+            pump::Limits {
+                max_pressure: 1000,
+                max_speed: 3000,
+                max_flow: 500,
+            },
+            0x3fff,
+        )
+        .ok(),
+        dehumidification::ID => dehumidification::server().ok(),
+        thermostat_ui::ID => thermostat_ui::server().ok(),
+        shade::ID => shade::server(1000, 1).ok(),
+        // A barrier that reports intermediate positions, 30 s of travel.
+        barrier_control::ID => barrier_control::server(true, 300, 300).ok(),
+        illuminance_level::ID => illuminance_level::server(0).ok(),
+        pressure::ID => pressure::server(-32767, 32767).ok(),
+        flow::ID => flow::server(0, 0xfffe).ok(),
+        water_content::RELATIVE_HUMIDITY => water_content::server(
+            water_content::RELATIVE_HUMIDITY,
+            0,
+            water_content::MAX_PERCENT,
+        )
+        .ok(),
         _ => None,
     }
 }
@@ -204,6 +265,20 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         ias_wd::ID => Some(ias_wd::client()),
         electrical_measurement::ID => Some(electrical_measurement::client()),
         commissioning::ID => Some(commissioning::client()),
+        device_temperature::ID => Some(device_temperature::client()),
+        switch_configuration::ID => Some(switch_configuration::client()),
+        ballast::ID => Some(ballast::client()),
+        pump::ID => Some(pump::client()),
+        dehumidification::ID => Some(dehumidification::client()),
+        thermostat_ui::ID => Some(thermostat_ui::client()),
+        shade::ID => Some(shade::client()),
+        barrier_control::ID => Some(barrier_control::client()),
+        illuminance_level::ID => Some(illuminance_level::client()),
+        pressure::ID => Some(pressure::client()),
+        flow::ID => Some(flow::client()),
+        water_content::RELATIVE_HUMIDITY => {
+            Some(water_content::client(water_content::RELATIVE_HUMIDITY))
+        }
         _ => None,
     }
 }
@@ -360,6 +435,20 @@ pub fn thermostat_device(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0301), &[], &[], false)
 }
 
+/// Dimmable Ballast (device 0x0109): Power Configuration, Device
+/// Temperature Configuration, Identify, Groups, Scenes, On/Off, Level
+/// Control and Ballast Configuration servers.
+pub fn dimmable_ballast(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0109), &[], &[], false)
+}
+
+/// On/Off Sensor (device 0x0850): the pump-controller sensor with
+/// Pump Configuration, Illuminance Level Sensing and Pressure
+/// Measurement servers beside the On/Off group.
+pub fn on_off_sensor(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0850), &[], &[], false)
+}
+
 /// Light Sensor (device 0x0106): Identify and Illuminance Measurement
 /// servers, Identify client.
 pub fn light_sensor(endpoint: Endpoint) -> Option<Built> {
@@ -408,7 +497,9 @@ mod tests {
         assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
         assert!(ep.cluster(color_control::ID, Role::Server).is_some());
         type Builder = fn(Endpoint) -> Option<Built>;
-        let sensors: [(Builder, u16, ClusterId); 8] = [
+        let sensors: [(Builder, u16, ClusterId); 10] = [
+            (dimmable_ballast, 0x0109, ballast::ID),
+            (on_off_sensor, 0x0850, pump::ID),
             (light_sensor, 0x0106, illuminance::ID),
             (occupancy_sensor, 0x0107, occupancy::ID),
             (temperature_sensor, 0x0302, temperature::ID),

@@ -15,6 +15,7 @@ use panweave_types::{
 };
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
+use crate::clusters::configuration::{barrier_control, device_temperature};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
@@ -246,6 +247,15 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// What to do.
         command: window_covering::Command,
+    },
+    /// A Barrier Control command on `endpoint` (§7.5.2.2): move to
+    /// `percent` open, or stop (`None`); the application reports back
+    /// with `barrier_control::set_state`.
+    Barrier {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Target percentage open, `None` for Stop.
+        percent: Option<u8>,
     },
     /// The Commissioning server on `endpoint` accepted a Restart Device
     /// (§13.2.2.3.1): after `delay` seconds plus RAND(`jitter` × 80) ms
@@ -992,6 +1002,37 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             color_control::ID => {
                                 self.handle_color(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            barrier_control::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get_mut(i)
+                                    .and_then(|e| e.cluster_mut(barrier_control::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match barrier_control::handle(c, cmd, payload) {
+                                    barrier_control::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                    outcome => {
+                                        let percent = match outcome {
+                                            barrier_control::Outcome::GoTo(p) => Some(p),
+                                            _ => None,
+                                        };
+                                        if let Some(sc) = self
+                                            .endpoints
+                                            .get_mut(i)
+                                            .and_then(|e| e.cluster_mut(scenes::ID, Role::Server))
+                                        {
+                                            scenes::invalidate(sc);
+                                        }
+                                        self.push_event(ZclEvent::Barrier { endpoint, percent });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                }
                                 continue;
                             }
                             window_covering::ID => {
@@ -1961,6 +2002,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             if let Some(c) = ep.cluster(door_lock::ID, Role::Server) {
                 scenes::write_field_set(&mut w, door_lock::ID, &door_lock::scene_fields(c));
             }
+            if let Some(c) = ep.cluster(barrier_control::ID, Role::Server) {
+                scenes::write_field_set(
+                    &mut w,
+                    barrier_control::ID,
+                    &barrier_control::scene_fields(c),
+                );
+            }
         }
         let n = w.position();
         Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
@@ -2020,6 +2068,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 && let Some(c) = ep.cluster_mut(door_lock::ID, Role::Server)
             {
                 door_lock::apply_scene_fields(c, f, tenths, now);
+            } else if cluster == barrier_control::ID
+                && ep.cluster(barrier_control::ID, Role::Server).is_some()
+                && let [percent, ..] = f
+                && *percent <= 100
+            {
+                // §7.5.2.4: the recalled BarrierPosition is a move.
+                let endpoint = ep.endpoint;
+                self.push_event(ZclEvent::Barrier {
+                    endpoint,
+                    percent: Some(*percent),
+                });
             }
         }
         // The recalled scene is what the device shows now.
@@ -2219,6 +2278,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 }
             }
             let local_time = self.local_time(i);
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(device_temperature::ID, Role::Server)
+                && c.tick.is_some_and(|t| now.has_reached(t))
+                && let Some(code) = device_temperature::tick(c, now)
+            {
+                // §3.4.2.2.2: the internal temperature dwelt beyond a
+                // threshold; the alarm goes through the Alarms server.
+                let _ = self.raise_alarm(endpoint, device_temperature::ID, code);
+            }
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;
             };

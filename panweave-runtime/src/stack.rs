@@ -31,7 +31,7 @@ pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
 pub type StackZdo = Zdo<4>;
 /// ZCL with 2 endpoints × 8 clusters × 16 attributes.
-pub type StackZcl = Zcl<2, 8, 36>;
+pub type StackZcl = Zcl<2, 12, 36>;
 
 /// Queue capacity for stack events.
 pub const EVENT_CAPACITY: usize = 16;
@@ -468,6 +468,15 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// A Barrier Control command (ZCL8 §7.5.2.2) or a recalled scene:
+    /// move the barrier to `percent` open, or stop (`None`); the
+    /// application reports back with `barrier_control::set_state`.
+    Barrier {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Target percentage open, `None` for Stop.
+        percent: Option<u8>,
+    },
     /// A thermostat's weekly schedule was set or cleared over the air
     /// (ZCL8 §6.3.2.3.2, §6.3.2.3.4).
     WeeklyScheduleChanged {
@@ -835,7 +844,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        mut instance: EndpointInstance<8, 36>,
+        mut instance: EndpointInstance<12, 36>,
     ) -> Result<(), EndpointError> {
         if instance
             .cluster(basic::ID, panweave_zcl::Role::Server)

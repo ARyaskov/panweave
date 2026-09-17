@@ -176,6 +176,19 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave-zcl::clusters::configuration`: Device Temperature
+  Configuration (§3.4, threshold dwell timers raising through the
+  Alarms server), On/Off Switch Configuration (§3.9), Ballast
+  Configuration (§5.3, level rules, dimming curve, lamp burn-hours
+  alarm), Pump Configuration and Control (§6.2, effective modes per
+  Figure 6-3, status bits, Table 6-9 alarms), Dehumidification Control
+  (§6.5, demand from setpoint and hysteresis), Thermostat User
+  Interface Configuration (§6.6), Shade Configuration (§7.2) and
+  Barrier Control (§7.5, Go To Percent / Stop executed by the
+  dispatcher as `ZclEvent::Barrier`, event counters, safety alarms,
+  scene field); the facade instantiates them and the measurement
+  clusters for every device type, adding Dimmable Ballast and On/Off
+  Sensor builders.
 * Thermostat weekly setpoint schedule (ZCL8 §6.3.2.2.3, §6.3.2.3.2–4):
   `thermostat::enable_weekly_schedule` adds `StartOfWeek`, the
   transition capacities and `TemperatureSetpointHold`; Set / Get /
@@ -552,10 +565,11 @@ Keep a Changelog; versions follow SemVer.
   sleepy child could previously be overtaken by later transmissions the
   child overheard and be dropped as a replay. A device's own broadcast
   copies for sleepy children take the same path.
-* The runtime's ZCL attribute capacity per cluster instance is 36
-  (`Zcl<2, 8, 36>`, `EndpointInstance<8, 36>`) so a full-capability
-  Color Control server and the complete Diagnostics server fit; scene
-  extension field sets hold 32 octets.
+* The runtime's ZCL attribute capacity per cluster instance is 36 and
+  an endpoint holds 12 cluster instances (`Zcl<2, 12, 36>`,
+  `EndpointInstance<12, 36>`) so a full-capability Color Control server,
+  the complete Diagnostics server and the Dimmable Ballast / On/Off
+  Sensor cluster sets fit; scene extension field sets hold 32 octets.
 
 * On/Off commands are no longer delivered to the application as
   `StackEvent::ZclCommand`: the stack applies them and reports

@@ -54,7 +54,7 @@ fn on_off_state(sim: &mut Simulator, i: usize) -> bool {
     )
 }
 
-fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
+fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,
@@ -70,7 +70,7 @@ fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
     (desc, ep)
 }
 
-fn controller_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
+fn controller_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,

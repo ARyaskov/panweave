@@ -90,6 +90,8 @@ pub enum ClusterState {
     Thermostat(crate::clusters::hvac::thermostat::Schedule),
     /// Power Configuration mains server: the voltage dwell timer (§3.3).
     Mains(crate::clusters::power_configuration::MainsDwell),
+    /// A threshold dwell timer (Device Temperature Configuration §3.4).
+    Dwell(crate::clusters::configuration::Dwell),
 }
 
 /// A cluster instance.
@@ -223,6 +225,9 @@ impl<const A: usize> ClusterInstance<A> {
             }
             ClusterState::Mains(_) => {
                 ClusterState::Mains(crate::clusters::power_configuration::MainsDwell::default())
+            }
+            ClusterState::Dwell(_) => {
+                ClusterState::Dwell(crate::clusters::configuration::Dwell::default())
             }
             ClusterState::None => ClusterState::None,
         };

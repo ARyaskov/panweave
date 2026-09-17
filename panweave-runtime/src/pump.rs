@@ -2244,6 +2244,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZclEvent::WeeklyScheduleChanged { endpoint } => {
                     StackEvent::WeeklyScheduleChanged { endpoint }
                 }
+                ZclEvent::Barrier { endpoint, percent } => {
+                    StackEvent::Barrier { endpoint, percent }
+                }
                 ZclEvent::StartupSetsChanged { endpoint } => {
                     StackEvent::StartupSetsChanged { endpoint }
                 }
