@@ -80,9 +80,9 @@ id = "PW-BDB-POL-008"
 section = "§6.11"
 summary = "Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::install_code"
-tests = []
+status = "implemented"
+module = "panweave-types::key::InstallCode, panweave-security::key_hierarchy"
+tests = ["install_code_crc_known_answer", "install_code_known_answer_from_bdb"]
 
 [[requirement]]
 id = "PW-BDB-POL-009"

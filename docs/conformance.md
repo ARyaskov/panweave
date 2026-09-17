@@ -8,14 +8,14 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Document | Total | Implemented | Partial | Not implemented | N/A | HW validation | Clarification |
 |---|---|---|---|---|---|---|---|
-| BDB3.1 | 27 | 0 | 0 | 27 | 0 | 0 | 0 |
+| BDB3.1 | 27 | 1 | 0 | 26 | 0 | 0 | 0 |
 | DTL2 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 0 | 0 | 9 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 0 | 18 | 0 | 0 | 0 |
 | ZCL8 | 36 | 0 | 0 | 36 | 0 | 0 | 0 |
 | R23.2 | 129 | 54 | 12 | 62 | 1 | 0 | 0 |
-| **All** | 233 | 54 | 12 | 166 | 1 | 0 | 0 |
+| **All** | 233 | 55 | 12 | 165 | 1 | 0 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -29,7 +29,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-BDB-POL-005 | §6.6 | mandatory | not-implemented | `panweave-runtime::end_device::poll` | MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions | — |  |
 | PW-BDB-POL-006 | §6.7 | mandatory | not-implemented | `panweave-storage` | Persistent data set retained across power cycles | — |  |
 | PW-BDB-POL-007 | §6.10 | mandatory | not-implemented | `panweave-aps` | APS acknowledgement and APS security usage rules for ZCL and ZDO traffic | — |  |
-| PW-BDB-POL-008 | §6.11 | mandatory | not-implemented | `panweave-security::install_code` | Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets | — |  |
+| PW-BDB-POL-008 | §6.11 | mandatory | implemented | `panweave-types::key::InstallCode, panweave-security::key_hierarchy` | Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets | `install_code_crc_known_answer`, `install_code_known_answer_from_bdb` |  |
 | PW-BDB-POL-009 | §6.12 | optional | not-implemented | `panweave-security::setup_code` | Short device setup codes | — |  |
 | PW-BDB-INIT-001 | §7.1 | mandatory | not-implemented | `panweave-bdb::init` | Initialization procedure: restore persistent data, if on a network attempt rejoin per §10.1 (routers resume, end devices rejoin), otherwise wait for commissioning | — |  |
 | PW-BDB-INIT-002 | §7.2 | mandatory | not-implemented | `panweave-bdb::tclk` | On-network TCLK update procedure: after joining a centralized network request a unique TCLK (Request Key or DLK), verify it with Verify Key / Confirm Key, retry up to bdbTCLinkKeyExchangeAttemptsMax, leave on failure if required | — |  |
