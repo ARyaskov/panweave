@@ -488,6 +488,10 @@ pub(crate) struct FormationState {
     /// PAN IDs observed (to avoid conflicts), bounded.
     seen_pan_ids: Vec<PanId, 16>,
     distributed: bool,
+    /// A PAN ID chosen by the caller (out-of-band commissioning).
+    pan_id: Option<PanId>,
+    /// A network address chosen by the caller (distributed networks).
+    short: Option<ShortAddress>,
 }
 
 /// The NWK layer.

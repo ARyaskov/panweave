@@ -118,6 +118,20 @@ Keep a Changelog; versions follow SemVer.
 * `panweave-direct::tunnel`: the Tunnel Service NPDU Message TLV
   (§7.7.3) with the trusted-link pre-/post-processing of §7.7.4 and the
   provisioning-session drop rule.
+* `panweave::direct` (feature `direct`): `Node` implements the ZDD side
+  of the Commissioning Service — formation with the ZVD's parameters,
+  joining by association, rejoin or out-of-band adoption, permit
+  joining, leave, Manage Joiners provisional link keys, Identify and
+  Finding & Binding — reporting completions as `Event::Direct`.
+* `Stack` provisioning helpers: `form_network_params`
+  (`FormationParams`: key, extended PAN ID, PAN ID, channels, network
+  address, update ID), `adopt_network` (`AdoptParams`: join a network
+  out of band and resume on it), `leave_with` (RemoveChildren),
+  `install_link_key` / `remove_link_key`, and the network-state queries
+  `extended_pan_id`, `channel`, `update_id`, `network_key_sequence`,
+  `trust_center_address`, `permit_joining_active`, `is_idle`.
+  `Nwk::network_formation_with` takes a caller-chosen PAN ID and
+  network address.
 * Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
   targets for the ZDP security services and the ZCL dispatcher, a
   dispatcher property test, `docs/performance.md`.

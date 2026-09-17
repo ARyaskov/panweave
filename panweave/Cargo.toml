@@ -18,6 +18,8 @@ defmt = ["panweave-types/defmt", "panweave-runtime/defmt", "panweave-bdb/defmt"]
 crypto-software = ["panweave-security/crypto-software"]
 # Curve25519 dynamic link keys (R23 §4.4.9).
 dlk = ["panweave-runtime/dlk", "panweave-security/dlk"]
+# Zigbee Direct 1.1 device (ZDD) binding of the commissioning service.
+direct = ["dep:panweave-direct"]
 
 [dependencies]
 panweave-types = { workspace = true }
@@ -33,11 +35,18 @@ panweave-device-library = { workspace = true }
 panweave-runtime = { workspace = true }
 panweave-storage = { workspace = true }
 panweave-testkit = { workspace = true }
+panweave-direct = { workspace = true, optional = true }
 heapless = { workspace = true }
 
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-sim = { workspace = true }
+panweave-direct = { workspace = true }
+panweave = { path = ".", features = ["direct"] }
+
+[[test]]
+name = "direct"
+required-features = ["direct"]
 
 [lints]
 workspace = true

@@ -63,9 +63,9 @@ section = "§7.7.2"
 summary = "Commissioning service characteristics: form network, permit joining, join network (MAC association / rejoin / out-of-band), leave, commissioning status, manage joiners, identify, finding and binding; TLV items"
 level = "mandatory"
 status = "partially-implemented"
-module = "panweave-direct::commissioning"
-tests = ["join_network_tlv_usage_rules", "status_round_trip", "zdd_side_authorization_and_flow"]
-notes = "Table 27 / Table 44 TLV codecs, the Form/Join/Permit/Leave/Commissioning Status/Manage Joiners/Identify/Finding & Binding payloads with the joining-method TLV usage rules of Tables 39-41, the authorization matrix of Table 26 and Status Code notifications are in panweave-direct::commissioning behind the Zdd trait; the ZDD is not yet bound to the runtime Stack (formation, joining, leave, permit-join broadcast and F&B on behalf of the service) and the Manage Joiners provisional keys are not yet consumed by the Trust Center (TODO(PW-ZD-RUNTIME))."
+module = "panweave-direct::commissioning,panweave::direct"
+tests = ["join_network_tlv_usage_rules", "status_round_trip", "zdd_side_authorization_and_flow", "zdd_form_open_join_adopt_and_leave"]
+notes = "Table 27 / Table 44 TLV codecs, the Form/Join/Permit/Leave/Commissioning Status/Manage Joiners/Identify/Finding & Binding payloads with the joining-method TLV usage rules of Tables 39-41, the authorization matrix of Table 26 and Status Code notifications are in panweave-direct::commissioning behind the Zdd trait; the facade Node implements Zdd (panweave::direct, feature direct): formation with the ZVD's parameters, joining by association / rejoin / out-of-band adoption, permit joining, leave, Manage Joiners provisional link keys, Identify and Finding & Binding, with completion reported through Event::Direct. Not yet: the TCLK update after an out-of-band join with a provisional key (§7.7.2.7.4), the Admin key derivation hand-off to the session layer, and forming a distributed network from a node configured for centralized security (the security model follows the node's role) (TODO(PW-ZD-RUNTIME))."
 [[requirement]]
 id = "PW-ZD-ZDD-003"
 section = "§7.7.3, §7.7.4"

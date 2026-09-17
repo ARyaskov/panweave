@@ -417,6 +417,27 @@ impl<
         duration: u8,
         distributed: bool,
     ) -> Result<(), NwkError> {
+        self.network_formation_with(channels, duration, distributed, None, None)
+    }
+
+    /// [`Nwk::network_formation`] with a caller-chosen PAN ID and (for
+    /// distributed networks) network address, as out-of-band
+    /// commissioning provides them (ZD 1.1 §7.7.2.5.1); `None` selects
+    /// them as §3.6.1.1 does.
+    pub fn network_formation_with(
+        &mut self,
+        channels: ChannelMask,
+        duration: u8,
+        distributed: bool,
+        pan_id: Option<PanId>,
+        short: Option<ShortAddress>,
+    ) -> Result<(), NwkError> {
+        if pan_id.is_some_and(|p| !p.is_valid_for_formation()) {
+            return Err(NwkError::InvalidParameter);
+        }
+        if short.is_some_and(|s| !s.is_unicast()) {
+            return Err(NwkError::InvalidParameter);
+        }
         if self.nib.joined || self.scan.is_some() {
             return Err(NwkError::InvalidRequest);
         }
@@ -435,6 +456,8 @@ impl<
             networks_per_channel: [0; 27],
             seen_pan_ids: Vec::new(),
             distributed,
+            pan_id,
+            short,
         });
         let single = channels.len() == 1;
         let purpose = if single {
@@ -479,9 +502,12 @@ impl<
             });
             return;
         };
-        // Random PAN ID not in use.
-        let mut pan_id = None;
+        // The caller's PAN ID, else a random one not in use.
+        let mut pan_id = f.pan_id;
         for _ in 0..16 {
+            if pan_id.is_some() {
+                break;
+            }
             let p = PanId(self.rng.next_u16());
             if p.is_valid_for_formation() && !f.seen_pan_ids.contains(&p) {
                 pan_id = Some(p);
@@ -495,7 +521,9 @@ impl<
             return;
         };
         let short = if f.distributed {
-            allocate_stochastic(&mut self.rng, |_| false).unwrap_or(ShortAddress(0x0001))
+            f.short
+                .or_else(|| allocate_stochastic(&mut self.rng, |_| false))
+                .unwrap_or(ShortAddress(0x0001))
         } else {
             ShortAddress::COORDINATOR
         };
@@ -594,6 +622,11 @@ impl<
     // ------------------------------------------------------------------
     // Permit joining (§3.6.1.2)
     // ------------------------------------------------------------------
+
+    /// Whether joining is currently permitted on this device.
+    pub fn permit_joining_active(&self) -> bool {
+        self.permit_until.is_some_and(|t| t > self.now)
+    }
 
     /// NLME-PERMIT-JOINING.request. `0` disables, `1..=254` seconds,
     /// `255` unlimited.

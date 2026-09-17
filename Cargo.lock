@@ -635,10 +635,12 @@ name = "panweave"
 version = "0.1.0"
 dependencies = [
  "heapless",
+ "panweave",
  "panweave-aps",
  "panweave-bdb",
  "panweave-codec",
  "panweave-device-library",
+ "panweave-direct",
  "panweave-mac",
  "panweave-nwk",
  "panweave-runtime",

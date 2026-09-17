@@ -48,6 +48,8 @@ pub use panweave_types as types;
 pub use panweave_zcl as zcl;
 pub use panweave_zdo as zdo;
 
+#[cfg(feature = "direct")]
+pub mod direct;
 pub mod endpoints;
 
 use heapless::Deque;
@@ -73,6 +75,15 @@ pub enum Event {
     Stack(StackEvent),
     /// A commissioning procedure finished.
     Commissioning(Outcome),
+    /// A Zigbee Direct commissioning operation completed: forward to
+    /// `panweave_direct::commissioning::Commissioning::report`.
+    #[cfg(feature = "direct")]
+    Direct {
+        /// The operation.
+        domain: panweave_direct::commissioning::Domain,
+        /// Its status code (0 = SUCCESS).
+        status: u8,
+    },
 }
 
 /// A device: the stack plus its commissioning machine.
@@ -81,6 +92,9 @@ pub struct Node<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub stack: Stack<C, R, S>,
     /// The BDB 3.1 commissioning machine.
     pub bdb: Bdb,
+    /// Zigbee Direct device state.
+    #[cfg(feature = "direct")]
+    pub direct: direct::DirectState,
     events: Deque<Event, 16>,
     /// Events dropped because the queue was full.
     pub dropped_events: u32,
@@ -169,6 +183,8 @@ impl Builder {
         Node {
             stack: Stack::new(self.stack, self.mac, rng, storage),
             bdb: Bdb::new(self.bdb, false),
+            #[cfg(feature = "direct")]
+            direct: direct::DirectState::default(),
             events: Deque::new(),
             dropped_events: 0,
         }
@@ -246,7 +262,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             if let Some(b) = Stack::<C, R, S>::bdb_event(&e)
                 && let Some(o) = self.bdb.on_event(&mut self.stack, &b)
             {
+                #[cfg(feature = "direct")]
+                if let Some(d) = self.direct_bdb_outcome(o) {
+                    self.push(d);
+                }
                 self.push(Event::Commissioning(o));
+            }
+            #[cfg(feature = "direct")]
+            if let Some(d) = self.direct_outcome(&e) {
+                self.push(d);
             }
             match &e {
                 StackEvent::NetworkFormed { .. } | StackEvent::Joined { .. } => {
@@ -395,6 +419,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     pub fn poll(&mut self, now: Instant) {
         self.stack.poll(now);
         if let Some(o) = self.bdb.poll(&mut self.stack, now) {
+            #[cfg(feature = "direct")]
+            if let Some(d) = self.direct_bdb_outcome(o) {
+                self.push(d);
+            }
             self.push(Event::Commissioning(o));
         }
         self.collect();

@@ -35,10 +35,12 @@ mod dlk;
 pub mod green_power;
 mod keep_alive;
 mod persist;
+mod provision;
 mod pump;
 mod stack;
 
 pub use persist::Restored;
+pub use provision::{AdoptParams, FormationParams};
 pub use stack::{
     EndpointError, JoinMode, Stack, StackAps, StackConfig, StackEvent, StackNwk, StackZcl,
     StackZdo, ZclFrame, ZdpData,
