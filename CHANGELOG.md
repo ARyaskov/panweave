@@ -157,6 +157,11 @@ Keep a Changelog; versions follow SemVer.
   Notifications with the Delay field, Zone Enroll Request / Response,
   test mode — with `Zcl::set_zone_status`, `Zcl::request_zone_enrollment`
   and the `ZoneEnrolled` / `ZoneTestMode` events; client-side codecs.
+* `panweave-zcl::clusters::color_control`: the Color Control server run
+  by the dispatcher — hue / saturation, enhanced hue, XY, colour
+  temperature and the colour loop with timed transitions, continuous
+  moves and steps, Options handling, scene extension fields and
+  `ZclEvent::Color` — plus the `color_dimmable_light` facade endpoint.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.
@@ -187,6 +192,10 @@ Keep a Changelog; versions follow SemVer.
   end-to-end facade test.
 
 ### Changed
+
+* The runtime's ZCL attribute capacity per cluster instance is 24
+  (`Zcl<2, 8, 24>`, `EndpointInstance<8, 24>`) so a full-capability
+  Color Control server fits; scene extension field sets hold 32 octets.
 
 * On/Off commands are no longer delivered to the application as
   `StackEvent::ZclCommand`: the stack applies them and reports

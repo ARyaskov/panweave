@@ -60,6 +60,9 @@ pub type WriteGuard<const A: usize> = fn(&AttributeTable<A>, AttributeId, &Value
 /// Cluster-specific runtime state of the clusters executed by the
 /// endpoint dispatcher.
 #[derive(Clone, Debug, Default)]
+// The Color Control engine is the largest state; every instance carries
+// the enum, which is bounded and heap-free by design.
+#[allow(clippy::large_enum_variant)]
 pub enum ClusterState {
     /// No state.
     #[default]
@@ -74,6 +77,8 @@ pub enum ClusterState {
     Alarms(crate::clusters::alarms::Table),
     /// IAS Zone server state (§8.2).
     IasZone(crate::clusters::ias_zone::State),
+    /// Color Control transition engine (§5.2).
+    Color(crate::clusters::color_control::Engine),
 }
 
 /// A cluster instance.
@@ -166,6 +171,9 @@ impl<const A: usize> ClusterInstance<A> {
                 test_until: None,
                 ..z
             }),
+            ClusterState::Color(_) => {
+                ClusterState::Color(crate::clusters::color_control::Engine::default())
+            }
             ClusterState::None => ClusterState::None,
         };
     }

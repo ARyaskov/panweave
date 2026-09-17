@@ -253,10 +253,10 @@ id = "PW-ZCL-LIGHT-001"
 section = "§5.2"
 summary = "Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::color_control"
-tests = []
-
+tests = ["hue_directions_and_timed_transition", "xy_temperature_and_color_loop", "color_control_through_the_dispatcher_and_scenes"]
+notes = "Colour information attributes per ColorCapabilities, the Options / OptionsMask / OptionsOverride and ExecuteIfOff rules, Move to / Move / Step for hue (8-bit and enhanced, with the shortest / longest / up / down directions on the hue circle), saturation, XY and colour temperature (physical and per-command bounds, clipping), Move to Hue and Saturation, Color Loop Set with the update flags and stored hue, Stop Move Step, RemainingTime, the scene extension field set and StartUpColorTemperatureMireds, executed by the dispatcher on a 100 ms tick. Not done: the colour-mode conversions of §5.2.2.3.2 (manufacturer dependent; a command in another mode starts from that mode's attributes), the Defined Primaries / Color Points attribute sets, DriftCompensation / CompensationText and the Level Control coupling of §5.2.2.1.1 (TODO(PW-ZCL-COLOR-COUPLING))."
 [[requirement]]
 id = "PW-ZCL-HVAC-001"
 section = "§6.3, §6.4"

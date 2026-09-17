@@ -11,6 +11,7 @@
 use heapless::Vec;
 use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
+use panweave_zcl::clusters::color_control;
 use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
@@ -18,7 +19,7 @@ use panweave_zcl::{ClusterDef, ClusterInstance, Role};
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 /// An endpoint definition: descriptor plus cluster instances.
-pub type Built = (SimpleDescriptor, EndpointInstance<8, 16>);
+pub type Built = (SimpleDescriptor, EndpointInstance<8, 24>);
 
 /// Clusters this crate can instantiate (server side).
 const IMPLEMENTED_SERVERS: &[ClusterId] = &[
@@ -33,6 +34,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     illuminance::ID,
     temperature::ID,
     occupancy::ID,
+    color_control::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -46,6 +48,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     illuminance::ID,
     temperature::ID,
     occupancy::ID,
+    color_control::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -66,7 +69,7 @@ pub fn unsupported_clusters(device: &DeviceType) -> Vec<ClusterId, 16> {
 }
 
 /// A server instance of `id` with its defaults, when implemented.
-pub fn server(id: ClusterId) -> Option<ClusterInstance<16>> {
+pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
     match id {
         identify::ID => identify::server().ok(),
         groups::ID => groups::server().ok(),
@@ -86,12 +89,23 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<16>> {
         illuminance::ID => illuminance::server(1, 0xfffe).ok(),
         temperature::ID => temperature::server(-27315, 32767).ok(),
         occupancy::ID => occupancy::server(occupancy::sensor_bits::PIR).ok(),
+        // A full-colour lamp: hue / saturation, enhanced hue, colour
+        // loop, XY and colour temperature over 2000 K – 6500 K.
+        color_control::ID => color_control::server(
+            color_control::capability::HUE_SATURATION
+                | color_control::capability::ENHANCED_HUE
+                | color_control::capability::COLOR_LOOP
+                | color_control::capability::XY
+                | color_control::capability::COLOR_TEMPERATURE,
+            (153, 500),
+        )
+        .ok(),
         _ => None,
     }
 }
 
 /// A client instance of `id`, when implemented.
-pub fn client(id: ClusterId) -> Option<ClusterInstance<16>> {
+pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
     match id {
         identify::ID => Some(identify::client()),
         groups::ID => Some(groups::client()),
@@ -105,6 +119,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<16>> {
         illuminance::ID => Some(illuminance::client()),
         temperature::ID => Some(temperature::client()),
         occupancy::ID => Some(occupancy::client()),
+        color_control::ID => Some(color_control::client()),
         _ => None,
     }
 }
@@ -226,6 +241,12 @@ pub fn on_off_switch(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0000), &[], &[], false)
 }
 
+/// Color Dimmable Light (device 0x0102, DTL §23): the Dimmable Light plus
+/// the Color Control server.
+pub fn color_dimmable_light(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0102), &[], &[], false)
+}
+
 /// Light Sensor (device 0x0106): Identify and Illuminance Measurement
 /// servers, Identify client.
 pub fn light_sensor(endpoint: Endpoint) -> Option<Built> {
@@ -245,7 +266,7 @@ pub fn temperature_sensor(endpoint: Endpoint) -> Option<Built> {
 }
 
 /// Definition of a cluster instance for custom endpoints.
-pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<16> {
+pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<24> {
     ClusterInstance::new(def, role)
 }
 
@@ -269,7 +290,10 @@ mod tests {
         let light = DeviceType::lookup(DeviceId(0x0100)).unwrap();
         assert!(unsupported_clusters(light).is_empty());
         let color = DeviceType::lookup(DeviceId(0x0102)).unwrap();
-        assert_eq!(unsupported_clusters(color).as_slice(), &[ClusterId(0x0300)]);
+        assert!(unsupported_clusters(color).is_empty());
+        let (d, ep) = color_dimmable_light(Endpoint(4)).unwrap();
+        assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
+        assert!(ep.cluster(color_control::ID, Role::Server).is_some());
         type Builder = fn(Endpoint) -> Option<Built>;
         let sensors: [(Builder, u16, ClusterId); 3] = [
             (light_sensor, 0x0106, illuminance::ID),

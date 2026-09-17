@@ -31,7 +31,7 @@ const NETWORK_KEY: Key128 = Key128::from_bytes([0x33; 16]);
 const COORD_IEEE: ExtendedAddress = ExtendedAddress(0x00BB_0000_0000_0001);
 const ED_IEEE: ExtendedAddress = ExtendedAddress(0x00BB_0000_0000_0002);
 
-fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 16>) {
+fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 24>) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,

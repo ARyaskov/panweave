@@ -17,7 +17,7 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
-    alarms, basic, ias_zone, identify, level, on_off, poll_control, scenes, time,
+    alarms, basic, color_control, ias_zone, identify, level, on_off, poll_control, scenes, time,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -236,6 +236,22 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// Test duration, `None` for normal operation.
         seconds: Option<u8>,
+    },
+    /// The Color Control engine on `endpoint` moved: `mode` is the
+    /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
+    /// saturation, X and Y, or colour temperature mireds and 0);
+    /// `done` when every transition finished (§5.2.2.3).
+    Color {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// `EnhancedColorMode`.
+        mode: u8,
+        /// First value of the mode.
+        a: u16,
+        /// Second value of the mode.
+        b: u16,
+        /// Transitions complete.
+        done: bool,
     },
 }
 
@@ -762,6 +778,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_ias_zone(i, &origin, cmd, payload);
                                 continue;
                             }
+                            color_control::ID => {
+                                self.handle_color(i, &origin, cmd, payload);
+                                continue;
+                            }
                             _ => {}
                         }
                     } else if ind.cluster == poll_control::ID {
@@ -948,6 +968,74 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             .cluster_mut(endpoint, ias_zone::ID, Role::Server)
             .ok_or(ZclError::NotFound)?;
         Ok(ias_zone::request_enrollment(c, now))
+    }
+
+    /// Color Control server commands (§5.2.2.3) run by the layer's
+    /// transition engine.
+    fn handle_color(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let on_off_state = ep.cluster(on_off::ID, Role::Server).map(on_off::is_on);
+        let Some(c) = ep.cluster_mut(color_control::ID, Role::Server) else {
+            return;
+        };
+        match color_control::handle(c, cmd, payload, on_off_state, now) {
+            color_control::Outcome::Applied => {
+                if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
+                    scenes::invalidate(sc);
+                }
+                self.service_color(ep_index);
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            color_control::Outcome::Suppressed => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            color_control::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// Runs the Color Control engine of one endpoint once.
+    fn service_color(&mut self, ep_index: usize) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        let Some(c) = ep.cluster_mut(color_control::ID, Role::Server) else {
+            return;
+        };
+        let Some(t) = color_control::tick(c, now) else {
+            return;
+        };
+        if t.changed || t.done {
+            let mode = c.u8(color_control::ENHANCED_COLOR_MODE.id).unwrap_or(0);
+            let (a, b) = match mode {
+                color_control::color_mode::XY => (
+                    c.u16(color_control::CURRENT_X.id).unwrap_or(0),
+                    c.u16(color_control::CURRENT_Y.id).unwrap_or(0),
+                ),
+                color_control::color_mode::COLOR_TEMPERATURE => (
+                    c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id)
+                        .unwrap_or(0),
+                    0,
+                ),
+                _ => (
+                    color_control::enhanced_hue(c),
+                    u16::from(c.u8(color_control::CURRENT_SATURATION.id).unwrap_or(0)),
+                ),
+            };
+            self.push_event(ZclEvent::Color {
+                endpoint,
+                mode,
+                a,
+                b,
+                done: t.done,
+            });
+        }
     }
 
     /// Identify server commands are executed by the layer (§3.5.2.3):
@@ -1280,6 +1368,9 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             if let Some(c) = ep.cluster(level::ID, Role::Server) {
                 scenes::write_field_set(&mut w, level::ID, &level::scene_fields(c));
             }
+            if let Some(c) = ep.cluster(color_control::ID, Role::Server) {
+                scenes::write_field_set(&mut w, color_control::ID, &color_control::scene_fields(c));
+            }
         }
         let n = w.position();
         Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
@@ -1320,6 +1411,11 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             {
                 level::apply_scene_fields(c, f, tenths, now);
                 self.service_level(ep_index);
+            } else if cluster == color_control::ID
+                && let Some(c) = ep.cluster_mut(color_control::ID, Role::Server)
+            {
+                color_control::apply_scene_fields(c, f, tenths, now);
+                self.service_color(ep_index);
             }
         }
         // The recalled scene is what the device shows now.
@@ -1564,6 +1660,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 self.after_on_off(i, !on, on, true);
             }
             self.service_level(i);
+            self.service_color(i);
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;
             };

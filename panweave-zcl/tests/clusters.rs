@@ -19,7 +19,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     AttributeId, ClusterId, CommandId, Endpoint, GroupAddress, ProfileId, ShortAddress,
 };
-use panweave_zcl::clusters::{basic, groups, identify, level, on_off, poll_control, scenes};
+use panweave_zcl::clusters::{
+    basic, color_control, groups, identify, level, on_off, poll_control, scenes,
+};
 use panweave_zcl::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use panweave_zcl::global::{
     AttributeValue, DefaultResponse, Records, WriteAttributeStatus, command,
@@ -32,7 +34,7 @@ const CLIENT: ShortAddress = ShortAddress(0x1234);
 const EP: Endpoint = Endpoint(1);
 const T0: Instant = Instant::from_millis(1000);
 
-type Node = Zcl<2, 8, 16>;
+type Node = Zcl<2, 8, 24>;
 
 fn lamp() -> Node {
     let mut zcl = Node::new();
@@ -759,4 +761,129 @@ fn reset_to_factory_defaults_restores_attributes_and_reporting() {
     );
     assert_eq!(events(&mut zcl), vec![ZclEvent::FactoryReset]);
     let _ = AttributeId(0);
+}
+
+#[test]
+fn color_control_through_the_dispatcher_and_scenes() {
+    let mut zcl = lamp();
+    let mut g = GroupTable::<4>::new();
+    g.add(GroupAddress(7), EP).unwrap();
+    // Add a colour-temperature lamp to the endpoint.
+    zcl.endpoint_mut(EP)
+        .unwrap()
+        .add_instance(
+            color_control::server(
+                color_control::capability::HUE_SATURATION
+                    | color_control::capability::XY
+                    | color_control::capability::COLOR_TEMPERATURE,
+                (153, 500),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let _ = command(&mut zcl, &mut g, on_off::ID, on_off::CMD_ON, &[], true);
+    // Move to Color Temperature 300 mireds over 1 s: a Default Response,
+    // the Color event stream, then the value.
+    let (h, p) = command(
+        &mut zcl,
+        &mut g,
+        color_control::ID,
+        color_control::CMD_MOVE_TO_COLOR_TEMPERATURE,
+        &[0x2c, 0x01, 10, 0, 0, 0],
+        true,
+    )
+    .unwrap();
+    assert_eq!(h.command, command::DEFAULT_RESPONSE);
+    assert_eq!(p[1], ZclStatus::Success.raw());
+    zcl.poll_timers(T0 + Duration::from_millis(500));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    let mid = c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id).unwrap();
+    assert!((260..=290).contains(&mid), "{mid}");
+    assert_eq!(
+        c.u8(color_control::COLOR_MODE.id),
+        Some(color_control::color_mode::COLOR_TEMPERATURE)
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(1100));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    assert_eq!(c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id), Some(300));
+    let ev = events(&mut zcl);
+    assert!(ev.iter().any(|e| matches!(
+        e,
+        ZclEvent::Color {
+            endpoint: EP,
+            mode: color_control::color_mode::COLOR_TEMPERATURE,
+            a: 300,
+            done: true,
+            ..
+        }
+    )));
+    // Store the scene: the colour field set (13 octets) is captured.
+    let (_, p) = command(
+        &mut zcl,
+        &mut g,
+        scenes::ID,
+        scenes::CMD_STORE_SCENE,
+        &[7, 0, 3],
+        true,
+    )
+    .unwrap();
+    assert_eq!(p, vec![0, 7, 0, 3]);
+    let (_, p) = command(
+        &mut zcl,
+        &mut g,
+        scenes::ID,
+        scenes::CMD_VIEW_SCENE,
+        &[7, 0, 3],
+        true,
+    )
+    .unwrap();
+    let fields: Vec<(ClusterId, Vec<u8>)> = scenes::FieldSets(&p[7..])
+        .map(|(c, f)| (c, f.to_vec()))
+        .collect();
+    let colour = fields
+        .iter()
+        .find(|(c, _)| *c == color_control::ID)
+        .expect("colour field set");
+    assert_eq!(colour.1.len(), 13);
+    assert_eq!(&colour.1[11..13], &300u16.to_le_bytes());
+    // Change the temperature, then recall the scene: it fades back.
+    let _ = command(
+        &mut zcl,
+        &mut g,
+        color_control::ID,
+        color_control::CMD_MOVE_TO_COLOR_TEMPERATURE,
+        &[0xf4, 0x01, 0, 0, 0, 0],
+        true,
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(1200));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    assert_eq!(c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id), Some(500));
+    let _ = command(
+        &mut zcl,
+        &mut g,
+        scenes::ID,
+        scenes::CMD_RECALL_SCENE,
+        &[7, 0, 3, 0, 0],
+        true,
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(1300));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    assert_eq!(c.u16(color_control::COLOR_TEMPERATURE_MIREDS.id), Some(300));
+    // Off: colour commands are suppressed unless overridden.
+    let _ = command(&mut zcl, &mut g, on_off::ID, on_off::CMD_OFF, &[], true);
+    let _ = command(
+        &mut zcl,
+        &mut g,
+        color_control::ID,
+        color_control::CMD_MOVE_TO_HUE,
+        &[100, 0, 0, 0, 0, 0],
+        true,
+    );
+    zcl.poll_timers(T0 + Duration::from_millis(1400));
+    let c = zcl.cluster(EP, color_control::ID, Role::Server).unwrap();
+    assert_eq!(c.u8(color_control::CURRENT_HUE.id), Some(0));
+    assert_eq!(
+        c.u8(color_control::COLOR_MODE.id),
+        Some(color_control::color_mode::COLOR_TEMPERATURE)
+    );
 }

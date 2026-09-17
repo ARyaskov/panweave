@@ -31,7 +31,7 @@ pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
 pub type StackZdo = Zdo<4>;
 /// ZCL with 2 endpoints × 8 clusters × 16 attributes.
-pub type StackZcl = Zcl<2, 8, 16>;
+pub type StackZcl = Zcl<2, 8, 24>;
 
 /// Queue capacity for stack events.
 pub const EVENT_CAPACITY: usize = 16;
@@ -353,6 +353,21 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// The Color Control engine moved (ZCL8 §5.2): `mode` is the
+    /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
+    /// saturation, X and Y, or mireds and 0).
+    Color {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// `EnhancedColorMode`.
+        mode: u8,
+        /// First value of the mode.
+        a: u16,
+        /// Second value of the mode.
+        b: u16,
+        /// Transitions complete.
+        done: bool,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,
@@ -552,7 +567,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        mut instance: EndpointInstance<8, 16>,
+        mut instance: EndpointInstance<8, 24>,
     ) -> Result<(), EndpointError> {
         if instance
             .cluster(basic::ID, panweave_zcl::Role::Server)

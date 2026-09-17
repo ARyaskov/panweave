@@ -71,7 +71,7 @@ pub const MAX_GROUP_ID: u16 = 0xFFF7;
 pub const MAX_SCENES: usize = 16;
 /// Room for the extension field sets of one entry (On/Off and Level
 /// Control sets are 4 octets each).
-pub const MAX_EXTENSION_BYTES: usize = 12;
+pub const MAX_EXTENSION_BYTES: usize = 32;
 
 /// Cluster definition.
 pub const DEF: ClusterDef = ClusterDef {

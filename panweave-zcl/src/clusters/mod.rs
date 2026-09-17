@@ -6,6 +6,7 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
 
 pub mod alarms;
+pub mod color_control;
 pub mod groups;
 pub mod ias_zone;
 pub mod keep_alive;
