@@ -13,9 +13,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 8 | 9 | 0 | 0 | 1 |
-| ZCL8 | 36 | 20 | 4 | 12 | 0 | 0 | 0 |
+| ZCL8 | 36 | 21 | 4 | 11 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 149 | 48 | 36 | 3 | 0 | 1 |
+| **All** | 237 | 150 | 48 | 35 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -144,7 +144,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-ZCL-LIGHT-001 | §5.2 | optional | not-implemented | `panweave-zcl::clusters::color_control` | Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions | — |  |
 | PW-ZCL-HVAC-001 | §6.3, §6.4 | optional | not-implemented | `panweave-zcl::clusters::hvac` | Thermostat and Fan Control clusters | — |  |
 | PW-ZCL-CLOS-001 | §7.3, §7.4 | optional | not-implemented | `panweave-zcl::clusters::closures` | Door Lock and Window Covering clusters | — |  |
-| PW-ZCL-IAS-001 | §8.2 | optional | not-implemented | `panweave-zcl::clusters::ias_zone` | IAS Zone cluster: enrolment (auto/trip-to-pair), zone status change notification, enroll request/response | — |  |
+| PW-ZCL-IAS-001 | §8.2 | optional | implemented | `panweave-zcl::clusters::ias_zone` | IAS Zone cluster: enrolment (auto/trip-to-pair), zone status change notification, enroll request/response | `auto_enroll_request_flow_and_notifications`, `trip_to_pair_requests_on_status_change`, `ias_zone_auto_enroll_request_and_status_notification` | Zone information / settings attributes, the three enrolment procedures (Trip-to-Pair via Zcl::request_zone_enrollment or a status change while unenrolled, Auto-Enroll-Response, Auto-Enroll-Request on the IAS_CIE_Address write), Zone Status Change Notification with the Delay field, Zone Enroll Request / Response, Initiate Normal Operation / Test Mode with the Test bit and sensitivity level, all executed by the dispatcher (ZclEvent::ZoneEnrolled / ZoneTestMode). Sender authentication uses the network address of the node that wrote IAS_CIE_Address (the dispatcher has no IEEE resolution); the NOT_AUTHORIZED rejection of ZDO bind requests from other nodes (§8.2.2.1.3) is not implemented. |
 | PW-ZCL-IAS-002 | §8.3, §8.4 | optional | not-implemented | `panweave-zcl::clusters::ias` | IAS ACE and IAS WD clusters | — |  |
 | PW-ZCL-OTA-001 | §11 | optional | not-implemented | `panweave-zcl::clusters::ota` | OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification | — |  |
 | PW-ZCL-COMM-001 | §13.2 | optional | not-implemented | `panweave-zcl::clusters::commissioning` | Commissioning cluster (startup attribute set) | — |  |

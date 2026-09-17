@@ -24,7 +24,7 @@ use panweave_types::{
     ClusterId, DeviceId, Endpoint, ExtendedAddress, LogicalDeviceType, ProfileId, ShortAddress,
 };
 use panweave_zcl::Role;
-use panweave_zcl::clusters::{alarms, identify, power_configuration as power, time};
+use panweave_zcl::clusters::{alarms, ias_zone, identify, power_configuration as power, time};
 use panweave_zcl::frame::Direction;
 use panweave_zcl::global::{AttributeValue, command};
 use panweave_zcl::layer::EndpointInstance;
@@ -53,17 +53,35 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
             ep.add_instance(alarms::server().unwrap()).unwrap();
             // Not a master clock: the network may set it.
             ep.add_instance(time::server(0, false).unwrap()).unwrap();
+            ep.add_instance(
+                ias_zone::server(
+                    ias_zone::zone_type::CONTACT_SWITCH,
+                    0x1234,
+                    ias_zone::EnrollMode::AutoRequest,
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             (
-                &[ClusterId(0), identify::ID, power::ID, alarms::ID, time::ID],
+                &[
+                    ClusterId(0),
+                    identify::ID,
+                    power::ID,
+                    alarms::ID,
+                    time::ID,
+                    ias_zone::ID,
+                ],
                 &[identify::ID],
             )
         }
         _ => {
             ep.add_instance(alarms::client()).unwrap();
             ep.add_instance(time::client()).unwrap();
+            ep.add_instance(ias_zone::client()).unwrap();
             (
                 &[ClusterId(0), identify::ID],
-                &[identify::ID, alarms::ID, time::ID],
+                &[identify::ID, alarms::ID, time::ID, ias_zone::ID],
             )
         }
     };
@@ -289,4 +307,142 @@ fn battery_alarm_reaches_the_bound_client_with_a_time_stamp() {
         })
     }));
     let _ = ShortAddress::COORDINATOR;
+}
+
+fn zone_command(events: &[StackEvent], cmd: panweave_types::CommandId) -> Option<Vec<u8>> {
+    events.iter().find_map(|e| match e {
+        StackEvent::ZclCommand(f)
+            if f.origin.cluster == ias_zone::ID && f.origin.header.command == cmd =>
+        {
+            Some(f.payload.to_vec())
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn ias_zone_auto_enroll_request_and_status_notification() {
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "cie",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 41),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "zone",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 42),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c).form_network_with_key(NETWORK_KEY).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::Joined { .. }))
+    }));
+    sim.run_for(Duration::from_secs(3));
+    sim.take_events(c);
+    // A status change before the CIE is configured is not reported.
+    assert!(
+        sim.stack(r)
+            .zcl
+            .set_zone_status(EP, ias_zone::zone_status::ALARM1)
+            .unwrap()
+    );
+    sim.run_for(Duration::from_secs(3));
+    assert!(zone_command(sim.events(c), ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION).is_none());
+    // The CIE writes its address: the zone reports the pending status
+    // and asks for enrolment (Auto-Enroll-Request).
+    let mut buf = [0u8; 16];
+    let mut w = Writer::new(&mut buf);
+    AttributeValue {
+        id: ias_zone::IAS_CIE_ADDRESS.id,
+        value: Value::Eui64(COORD_IEEE.0),
+    }
+    .encode(&mut w)
+    .unwrap();
+    let n = w.position();
+    let dst = Destination::Short {
+        address: sim.stack(r).short_address(),
+        endpoint: EP,
+    };
+    sim.stack(c)
+        .zcl
+        .send_global(
+            dst,
+            ProfileId::HOME_AUTOMATION,
+            ias_zone::ID,
+            EP,
+            command::WRITE_ATTRIBUTES,
+            Direction::ToServer,
+            None,
+            &buf[..n],
+        )
+        .unwrap();
+    sim.stack(c).flush();
+    assert!(
+        sim.run_until(Duration::from_secs(10), |x| {
+            zone_command(x.events(c), ias_zone::CMD_ZONE_ENROLL_REQUEST).is_some()
+        }),
+        "{:?}",
+        sim.events(c)
+    );
+    let req = ias_zone::EnrollRequest::parse(
+        &zone_command(sim.events(c), ias_zone::CMD_ZONE_ENROLL_REQUEST).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(req.zone_type, ias_zone::zone_type::CONTACT_SWITCH);
+    assert_eq!(req.manufacturer_code, 0x1234);
+    let note = ias_zone::StatusChange::parse(
+        &zone_command(sim.events(c), ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(note.zone_status, ias_zone::zone_status::ALARM1);
+    assert_eq!(note.zone_id, ias_zone::ZONE_ID_NONE);
+    assert!(note.delay >= 12, "delay {} quarter seconds", note.delay);
+    sim.take_events(c);
+    // The CIE enrols the zone as zone 3.
+    sim.stack(c)
+        .zcl
+        .send_command(
+            dst,
+            ProfileId::HOME_AUTOMATION,
+            ias_zone::ID,
+            EP,
+            ias_zone::CMD_ZONE_ENROLL_RESPONSE,
+            Direction::ToServer,
+            None,
+            &ias_zone::enroll_response(ias_zone::enroll_code::SUCCESS, 3),
+        )
+        .unwrap();
+    sim.stack(c).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(r).iter().any(|e| {
+            matches!(
+                e,
+                StackEvent::ZoneEnrolled {
+                    endpoint: EP,
+                    zone_id: 3
+                }
+            )
+        })
+    }));
+    // A restore is notified promptly with the zone identifier.
+    assert!(sim.stack(r).zcl.set_zone_status(EP, 0).unwrap());
+    sim.stack(r).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        zone_command(x.events(c), ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION).is_some()
+    }));
+    let note = ias_zone::StatusChange::parse(
+        &zone_command(sim.events(c), ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION).unwrap(),
+    )
+    .unwrap();
+    assert_eq!((note.zone_status, note.zone_id), (0, 3));
+    assert!(note.delay <= 4, "delay {}", note.delay);
 }

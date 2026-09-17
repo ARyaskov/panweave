@@ -72,6 +72,8 @@ pub enum ClusterState {
     Time(crate::clusters::time::Clock),
     /// Alarms server table (§3.11).
     Alarms(crate::clusters::alarms::Table),
+    /// IAS Zone server state (§8.2).
+    IasZone(crate::clusters::ias_zone::State),
 }
 
 /// A cluster instance.
@@ -156,6 +158,14 @@ impl<const A: usize> ClusterInstance<A> {
             ClusterState::Alarms(_) => {
                 ClusterState::Alarms(crate::clusters::alarms::Table::default())
             }
+            ClusterState::IasZone(z) => ClusterState::IasZone(crate::clusters::ias_zone::State {
+                cie: None,
+                cie_address: 0,
+                enroll_request_due: false,
+                notify_due: None,
+                test_until: None,
+                ..z
+            }),
             ClusterState::None => ClusterState::None,
         };
     }

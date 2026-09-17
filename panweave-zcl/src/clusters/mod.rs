@@ -7,6 +7,7 @@ use panweave_types::{ClusterId, CommandId};
 
 pub mod alarms;
 pub mod groups;
+pub mod ias_zone;
 pub mod keep_alive;
 pub mod level;
 pub mod measurement;

@@ -338,6 +338,21 @@ pub enum StackEvent {
         /// UTC seconds since 2000-01-01.
         utc: u32,
     },
+    /// An IAS Zone server was enrolled by its CIE (ZCL8 §8.2.2.2.1).
+    ZoneEnrolled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Zone identifier.
+        zone_id: u8,
+    },
+    /// An IAS Zone server entered test mode (`Some(seconds)`) or resumed
+    /// normal operation (`None`) (ZCL8 §8.2.2.2.2).
+    ZoneTestMode {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Test duration.
+        seconds: Option<u8>,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

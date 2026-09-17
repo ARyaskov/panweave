@@ -152,6 +152,11 @@ Keep a Changelog; versions follow SemVer.
   `ZclEvent::AlarmReset`) and Power Configuration (mains and battery
   attributes, threshold evaluation into `BatteryAlarmState` and alarm
   codes).
+* `panweave-zcl::clusters::ias_zone`: the IAS Zone server executed by
+  the dispatcher — the three enrolment procedures, Zone Status Change
+  Notifications with the Delay field, Zone Enroll Request / Response,
+  test mode — with `Zcl::set_zone_status`, `Zcl::request_zone_enrollment`
+  and the `ZoneEnrolled` / `ZoneTestMode` events; client-side codecs.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

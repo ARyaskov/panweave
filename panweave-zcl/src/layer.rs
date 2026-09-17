@@ -16,7 +16,9 @@ use panweave_types::{
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
-use crate::clusters::{alarms, basic, identify, level, on_off, poll_control, scenes, time};
+use crate::clusters::{
+    alarms, basic, ias_zone, identify, level, on_off, poll_control, scenes, time,
+};
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
 
@@ -218,6 +220,22 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// UTC seconds since 2000-01-01.
         utc: u32,
+    },
+    /// The IAS Zone server on `endpoint` was enrolled by its CIE with
+    /// `zone_id` (§8.2.2.2.1).
+    ZoneEnrolled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Zone identifier.
+        zone_id: u8,
+    },
+    /// The IAS Zone server on `endpoint` entered test mode for
+    /// `Some(seconds)` or resumed normal operation (`None`) (§8.2.2.2.2).
+    ZoneTestMode {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Test duration, `None` for normal operation.
+        seconds: Option<u8>,
     },
 }
 
@@ -658,6 +676,21 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                         .and_then(|e| e.cluster_mut(ind.cluster, role))
                         .map(|c| c.handle_global(&frame.header, frame.payload, &mut w, now));
                     let n = w.position();
+                    if role == Role::Server
+                        && ind.cluster == ias_zone::ID
+                        && matches!(
+                            frame.header.command,
+                            command::WRITE_ATTRIBUTES
+                                | command::WRITE_ATTRIBUTES_UNDIVIDED
+                                | command::WRITE_ATTRIBUTES_NO_RESPONSE
+                        )
+                        && let Some(c) = self
+                            .endpoints
+                            .get_mut(i)
+                            .and_then(|e| e.cluster_mut(ias_zone::ID, Role::Server))
+                    {
+                        ias_zone::after_write(c, ind.src, ind.src_endpoint, now);
+                    }
                     match outcome {
                         Some(GlobalOutcome::Response(cmd)) => {
                             let header = frame.header.response(cmd, FrameType::Global);
@@ -723,6 +756,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             alarms::ID => {
                                 self.handle_alarms(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            ias_zone::ID => {
+                                self.handle_ias_zone(i, &origin, cmd, payload);
                                 continue;
                             }
                             _ => {}
@@ -849,6 +886,68 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     pub fn time(&self, endpoint: Endpoint) -> Option<u32> {
         let c = self.cluster(endpoint, time::ID, Role::Server)?;
         time::now(c, self.now)
+    }
+
+    /// IAS Zone server commands (§8.2.2.2): enrolment and test mode,
+    /// accepted from the CIE only.
+    fn handle_ias_zone(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let now = self.now;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(ias_zone::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        match ias_zone::handle(c, origin.src, cmd, payload, now) {
+            ias_zone::Outcome::Enrolled(zone_id) => {
+                self.push_event(ZclEvent::ZoneEnrolled { endpoint, zone_id });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            ias_zone::Outcome::Refused(_) => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            ias_zone::Outcome::TestMode(seconds) => {
+                self.push_event(ZclEvent::ZoneTestMode { endpoint, seconds });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            ias_zone::Outcome::NotAuthorized => {
+                let _ = self.default_response(origin, ZclStatus::NotAuthorized);
+            }
+            ias_zone::Outcome::Unsupported => {
+                let _ = self.default_response(origin, ZclStatus::UnsupportedClusterCommand);
+            }
+            ias_zone::Outcome::Malformed => {
+                let _ = self.default_response(origin, ZclStatus::MalformedCommand);
+            }
+        }
+    }
+
+    /// Sets the zone status of the IAS Zone server on `endpoint`
+    /// (§8.2.2.1.1.3); a change is notified to the CIE.
+    pub fn set_zone_status(&mut self, endpoint: Endpoint, status: u16) -> Result<bool, ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, ias_zone::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        Ok(ias_zone::set_status(c, status, now))
+    }
+
+    /// Trip-to-Pair trigger of the IAS Zone server on `endpoint`
+    /// (§8.2.2.1.3): requests enrolment from the configured CIE.
+    pub fn request_zone_enrollment(&mut self, endpoint: Endpoint) -> Result<bool, ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, ias_zone::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        Ok(ias_zone::request_enrollment(c, now))
     }
 
     /// Identify server commands are executed by the layer (§3.5.2.3):
@@ -1417,6 +1516,43 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     && written
                 {
                     self.push_event(ZclEvent::TimeSet { endpoint, utc });
+                }
+            }
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            let mut zone_sends: Vec<(ias_zone::Send, (ShortAddress, Endpoint)), 4> = Vec::new();
+            if let Some(c) = ep.cluster_mut(ias_zone::ID, Role::Server)
+                && c.tick.is_some_and(|t| now.has_reached(t))
+            {
+                while let Some(item) = ias_zone::tick(c, now) {
+                    if zone_sends.push(item).is_err() {
+                        break;
+                    }
+                }
+            }
+            for (send, (dst, dst_ep)) in zone_sends {
+                let (cmd, payload): (CommandId, &[u8]) = match &send {
+                    ias_zone::Send::StatusChange(p) => {
+                        (ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION, p)
+                    }
+                    ias_zone::Send::EnrollRequest(p) => (ias_zone::CMD_ZONE_ENROLL_REQUEST, p),
+                };
+                let seq = self.next_seq();
+                let header = Header::cluster_specific(seq, cmd, Direction::ToClient)
+                    .disable_default_response(true);
+                if let Ok(frame) = Self::build(&header, payload) {
+                    self.push_action(ZclAction::Send {
+                        destination: Destination::Short {
+                            address: dst,
+                            endpoint: dst_ep,
+                        },
+                        profile,
+                        cluster: ias_zone::ID,
+                        src_endpoint: endpoint,
+                        frame,
+                        options: TxOptions::ACKED,
+                    });
                 }
             }
             let Some(ep) = self.endpoints.get_mut(i) else {
