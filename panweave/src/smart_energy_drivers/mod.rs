@@ -12,6 +12,7 @@
 
 pub mod drlc;
 pub mod messaging;
+pub mod metering;
 pub mod price;
 
 use panweave_aps::layer::{Destination, TxOptions};

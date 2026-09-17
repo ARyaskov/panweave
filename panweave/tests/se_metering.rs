@@ -1,0 +1,440 @@
+//! The Metering drivers over the simulator: an ESI reads a meter's
+//! profile, puts it in fast poll mode, samples it, takes and fetches a
+//! snapshot, changes the supply and hosts a mirror for it — under APS
+//! link-key security.
+
+#![cfg(feature = "smart-energy")]
+#![allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
+use panweave::aps::layer::Destination;
+use panweave::mac::service::MacServiceConfig;
+use panweave::runtime::{JoinMode, StackConfig, StackEvent};
+use panweave::smart_energy::cluster as c;
+use panweave::smart_energy::clusters::metering::extended::{
+    ANY_CAUSE, ChangeSupply, GetSampledData, GetSnapshot, RequestFastPollMode, StartSampling,
+    sample_type, snapshot_cause, snapshot_confirmation, snapshot_type, supply_control,
+    supply_status,
+};
+use panweave::smart_energy::clusters::metering::{GetProfile, IntervalPeriod, ProfileStatus};
+use panweave::smart_energy::devices;
+use panweave::smart_energy_drivers::metering::{
+    MeteringClient, MeteringEvent, MeteringServer, MeteringServerEvent,
+};
+use panweave::smart_energy_endpoints as se;
+use panweave::storage::MemoryStorage;
+use panweave::testkit::TestRng;
+use panweave::types::time::{Duration, Instant};
+use panweave::types::{Endpoint, ExtendedAddress, Key128, LogicalDeviceType, ShortAddress};
+use panweave_sim::{App, SimStack, Simulator};
+
+const NETWORK_KEY: Key128 = Key128::from_bytes([0x5A; 16]);
+const ESI_IEEE: ExtendedAddress = ExtendedAddress(0x00AA_0000_0000_0001);
+const METER_IEEE: ExtendedAddress = ExtendedAddress(0x00AA_0000_0000_0002);
+const EP: Endpoint = Endpoint(10);
+const UTC: u32 = 600_000_000;
+const MIRROR_ENDPOINTS: &[u8] = &[20, 21];
+
+fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
+    let mut cfg = StackConfig::new(role, ieee);
+    cfg.trust_center_policy.allow_joins = true;
+    se::apply_profile(&mut cfg);
+    let mut n = SimStack::new(
+        cfg,
+        MacServiceConfig::default(),
+        TestRng::seed(seed),
+        MemoryStorage::new(),
+    );
+    se::apply_profile_to_stack(&mut n);
+    let (desc, ep) = if role == LogicalDeviceType::Coordinator {
+        se::device(EP, devices::ENERGY_SERVICE_INTERFACE, &[], &[c::METERING]).unwrap()
+    } else {
+        se::metering_device(EP).unwrap()
+    };
+    n.add_endpoint(desc, ep).unwrap();
+    n
+}
+
+#[derive(Default)]
+struct Esi {
+    driver: Option<MeteringClient>,
+    events: Vec<MeteringEvent>,
+}
+
+impl App for Esi {
+    fn on_event(&mut self, stack: &mut SimStack, event: &StackEvent) {
+        if let Some(d) = self.driver.as_mut()
+            && let Some(e) = d.on_event(stack, event)
+        {
+            self.events.push(e);
+        }
+    }
+}
+
+#[derive(Default)]
+struct Meter {
+    driver: Option<MeteringServer>,
+    events: Vec<MeteringServerEvent>,
+    reading: u32,
+}
+
+impl App for Meter {
+    fn on_event(&mut self, stack: &mut SimStack, event: &StackEvent) {
+        if let Some(d) = self.driver.as_mut()
+            && let Some(e) = d.on_event(stack, event)
+        {
+            self.events.push(e);
+        }
+    }
+
+    fn on_poll(&mut self, stack: &mut SimStack, now: Instant) {
+        if let Some(d) = self.driver.as_mut() {
+            // The meter reads 1 unit per second.
+            self.reading = u32::try_from(now.as_millis() / 1000).unwrap();
+            d.sample(stack, sample_type::CONSUMPTION_DELIVERED, self.reading);
+            if let Some(e) = d.poll(stack, now) {
+                self.events.push(e);
+            }
+        }
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        // Sample every second.
+        Some(Instant::from_millis(0))
+    }
+}
+
+#[test]
+fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
+    let mut sim = Simulator::new();
+    let e = sim.add_stack(
+        "esi",
+        node(LogicalDeviceType::Coordinator, ESI_IEEE, 91),
+        Box::new(Esi::default()),
+    );
+    let m = sim.add_stack(
+        "meter",
+        node(LogicalDeviceType::Router, METER_IEEE, 92),
+        Box::new(Meter::default()),
+    );
+    {
+        let mut client = MeteringClient::new(EP, MIRROR_ENDPOINTS);
+        client.clock.set(UTC, Instant::ZERO);
+        sim.stack_and_app::<Esi>(e).unwrap().1.driver = Some(client);
+        let mut server = MeteringServer::new(EP);
+        server.clock.set(UTC, Instant::ZERO);
+        assert!(server.add_profile_channel(0, IntervalPeriod::Minutes30, 12));
+        server.record_interval(0, 100, UTC - 3600);
+        server.record_interval(0, 110, UTC - 1800);
+        server.record_interval(0, 120, UTC);
+        server.snapshot_causes = snapshot_cause::GENERAL | snapshot_cause::MANUALLY_TRIGGERED;
+        server.snapshot_payload_type = snapshot_type::TOU_DELIVERED_NO_BILLING;
+        server
+            .snapshot_payload
+            .extend_from_slice(&[0x5A; 40])
+            .unwrap();
+        server.supply.capable = true;
+        server.supply.restore_allowed = true;
+        sim.stack_and_app::<Meter>(m).unwrap().1.driver = Some(server);
+    }
+    sim.stack(e).form_network_with_key(NETWORK_KEY).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(e)
+            .iter()
+            .any(|ev| matches!(ev, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(e).permit_join_network(180).unwrap();
+    sim.stack(m).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(m)
+            .iter()
+            .any(|ev| matches!(ev, StackEvent::LinkKeyUpdated))
+    }));
+    sim.run_for(Duration::from_secs(3));
+    let meter_short = sim.stack(m).short_address();
+    let meter = Destination::Short {
+        address: meter_short,
+        endpoint: EP,
+    };
+    let esi = Destination::Short {
+        address: ShortAddress::COORDINATOR,
+        endpoint: EP,
+    };
+    // Get Profile: the three intervals, newest first.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().get_profile(
+            stack,
+            meter,
+            &GetProfile {
+                channel: 0,
+                end_time: 0,
+                number_of_periods: 8
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        !x.app::<Esi>(e).unwrap().events.is_empty()
+    }));
+    match &sim.app::<Esi>(e).unwrap().events[0] {
+        MeteringEvent::Profile {
+            meter: from,
+            end_time,
+            status,
+            period,
+            intervals,
+        } => {
+            assert_eq!(*from, meter_short);
+            assert_eq!(*end_time, UTC);
+            assert_eq!(*status, ProfileStatus::Success);
+            assert_eq!(*period, Some(IntervalPeriod::Minutes30));
+            assert_eq!(intervals.as_slice(), &[120, 110, 100]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        sim.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(
+                ev,
+                MeteringServerEvent::ProfileRequested {
+                    status: ProfileStatus::Success,
+                    ..
+                }
+            ))
+    );
+    // Fast poll mode for 2 minutes at 2 s (the meter's minimum is 5 s).
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().request_fast_poll(
+            stack,
+            meter,
+            &RequestFastPollMode {
+                update_period: 2,
+                duration_minutes: 2
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 2
+    }));
+    match sim.app::<Esi>(e).unwrap().events[1] {
+        MeteringEvent::FastPoll(r) => {
+            assert_eq!(r.applied_update_period, 5);
+            assert!(r.end_time > UTC && r.end_time <= UTC + 200);
+        }
+        ref other => panic!("{other:?}"),
+    }
+    // Sampling every 2 s, four samples; after a while the data comes back.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().start_sampling(
+            stack,
+            meter,
+            &StartSampling {
+                issuer_event_id: 0x30,
+                start_time: 0,
+                sample_type: sample_type::CONSUMPTION_DELIVERED,
+                interval: 2,
+                max_samples: 4
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 3
+    }));
+    let sample_id = match sim.app::<Esi>(e).unwrap().events[2] {
+        MeteringEvent::SamplingStarted(r) => r.sample_id,
+        ref other => panic!("{other:?}"),
+    };
+    assert_eq!(sample_id, 1);
+    sim.run_for(Duration::from_secs(12));
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().get_sampled_data(
+            stack,
+            meter,
+            &GetSampledData {
+                sample_id,
+                earliest_time: 0,
+                sample_type: sample_type::CONSUMPTION_DELIVERED,
+                count: 10
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 4
+    }));
+    match &sim.app::<Esi>(e).unwrap().events[3] {
+        MeteringEvent::SampledData(r) => {
+            assert_eq!(r.sample_id, sample_id);
+            assert_eq!(r.interval, 2);
+            assert_eq!(r.samples.len(), 4);
+            assert!(r.samples.windows(2).all(|w| w[1] >= w[0]));
+        }
+        other => panic!("{other:?}"),
+    }
+    // Take a snapshot, then fetch it: two fragments reassembled.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(
+            app.driver
+                .as_ref()
+                .unwrap()
+                .take_snapshot(stack, meter, snapshot_cause::GENERAL)
+        );
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 5
+    }));
+    let snapshot_id = match sim.app::<Esi>(e).unwrap().events[4] {
+        MeteringEvent::SnapshotTaken(r) => {
+            assert_eq!(r.confirmation, snapshot_confirmation::ACCEPTED);
+            r.snapshot_id
+        }
+        ref other => panic!("{other:?}"),
+    };
+    assert!(
+        sim.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(
+                ev,
+                MeteringServerEvent::SnapshotTaken { snapshot_id: id, .. } if *id == snapshot_id
+            ))
+    );
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().get_snapshot(
+            stack,
+            meter,
+            &GetSnapshot {
+                earliest_start: 0,
+                latest_end: u32::MAX,
+                offset: 0,
+                cause: ANY_CAUSE
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 6
+    }));
+    match &sim.app::<Esi>(e).unwrap().events[5] {
+        MeteringEvent::Snapshot(s) => {
+            assert_eq!(s.id, snapshot_id);
+            assert_eq!(s.payload_type, snapshot_type::TOU_DELIVERED_NO_BILLING);
+            assert_eq!(s.payload.as_slice(), &[0x5A; 40]);
+            assert_ne!(s.cause & snapshot_cause::MANUALLY_TRIGGERED, 0);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Change Supply now with an acknowledgement.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(app.driver.as_ref().unwrap().change_supply(
+            stack,
+            meter,
+            &ChangeSupply {
+                provider_id: 7,
+                issuer_event_id: 0x40,
+                request_time: 0,
+                implementation_time: 0,
+                proposed_status: supply_status::OFF_ARMED,
+                control: supply_control::ACKNOWLEDGE_REQUIRED
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 7
+    }));
+    match sim.app::<Esi>(e).unwrap().events[6] {
+        MeteringEvent::SupplyStatus(r) => {
+            assert_eq!(r.issuer_event_id, 0x40);
+            assert_eq!(r.status, supply_status::OFF_ARMED);
+        }
+        ref other => panic!("{other:?}"),
+    }
+    assert!(
+        sim.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(
+                ev,
+                MeteringServerEvent::SupplyChanged {
+                    status: supply_status::OFF_ARMED
+                }
+            ))
+    );
+    // A local reconnection from the armed state.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        assert!(
+            app.driver
+                .as_ref()
+                .unwrap()
+                .local_change_supply(stack, meter, supply_status::ON)
+        );
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Meter>(m).unwrap().events.iter().any(|ev| {
+            matches!(
+                ev,
+                MeteringServerEvent::SupplyChanged {
+                    status: supply_status::ON
+                }
+            )
+        })
+    }));
+    // The meter asks the ESI for a mirror and gets the first endpoint.
+    {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        assert!(app.driver.as_ref().unwrap().request_mirror(stack, esi));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(ev, MeteringEvent::MirrorRequested { endpoint: 20, .. }))
+    }));
+    assert_eq!(
+        sim.app::<Esi>(e)
+            .unwrap()
+            .driver
+            .as_ref()
+            .unwrap()
+            .mirrors
+            .mirrors()
+            .len(),
+        1
+    );
+    {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        assert!(app.driver.as_ref().unwrap().remove_mirror(stack, esi));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(ev, MeteringEvent::MirrorRemoved { .. }))
+    }));
+    assert!(
+        sim.app::<Esi>(e)
+            .unwrap()
+            .driver
+            .as_ref()
+            .unwrap()
+            .mirrors
+            .mirrors()
+            .is_empty()
+    );
+}

@@ -188,7 +188,11 @@ Keep a Changelog; versions follow SemVer.
   `price::{PriceClient, PriceServer}` (Annex D.4 core) store and
   acknowledge published prices and answer Get Current Price / Get
   Scheduled Prices from the new server-side
-  `clusters::price::PriceSchedule`;
+  `clusters::price::PriceSchedule`; `metering::{MeteringServer,
+  MeteringClient}` (Annex D.3) answer Get Profile from the new
+  `clusters::metering::ProfileLog`, fast poll, sampling, snapshot,
+  supply-control and mirror requests, and issue / report them on the
+  client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
 * Green Power proxies act as SelectedSender (GP 1.1.2 §A.3.9.1 steps 8,

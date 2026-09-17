@@ -5,6 +5,7 @@
 //! commands. Mirroring, snapshots, sampling, supply control and the
 //! notification scheme are not implemented.
 
+use heapless::Vec;
 use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId};
 use panweave_zcl::attribute::{Access, AttributeDef};
@@ -519,9 +520,192 @@ impl<'a> GetProfileResponse<'a> {
     }
 }
 
+/// Largest number of intervals a Get Profile Response carries (the
+/// unfragmented budget of Table D-46: 4 + 3 + 3 × 24).
+pub const MAX_PERIODS_DELIVERED: usize = 24;
+
+/// Server-side interval log of one channel (D.3.2.3.1.1, D.3.3.3.1.1):
+/// the last `N` completed intervals of `channel`, newest first, each the
+/// consumption change over one `period`.
+#[derive(Clone, Debug)]
+pub struct ProfileLog<const N: usize> {
+    /// Interval channel (Table D-64).
+    pub channel: u8,
+    /// `ProfileIntervalPeriod`.
+    pub period: IntervalPeriod,
+    /// `MaxNumberOfPeriodsDelivered` (at most [`MAX_PERIODS_DELIVERED`]).
+    pub max_periods: u8,
+    /// End time of the newest interval (0: none yet).
+    end_time: u32,
+    /// Intervals, newest first (`INTERVAL_INVALID` for a gap).
+    intervals: Vec<u32, N>,
+}
+
+impl<const N: usize> ProfileLog<N> {
+    /// An empty log for `channel` with `period` intervals.
+    pub const fn new(channel: u8, period: IntervalPeriod, max_periods: u8) -> Self {
+        ProfileLog {
+            channel,
+            period,
+            max_periods,
+            end_time: 0,
+            intervals: Vec::new(),
+        }
+    }
+
+    /// Records the interval that ended at `end_time` (gaps since the
+    /// previous one are filled with `INTERVAL_INVALID`); the oldest
+    /// intervals fall out when the log is full.
+    pub fn record(&mut self, value: u32, end_time: u32) {
+        let period = self.period.seconds();
+        if self.end_time != 0 && end_time > self.end_time {
+            let mut gap = (end_time - self.end_time) / period;
+            while gap > 1 {
+                self.push_front(INTERVAL_INVALID);
+                gap -= 1;
+            }
+        }
+        self.push_front(value & INTERVAL_INVALID);
+        self.end_time = end_time;
+    }
+
+    fn push_front(&mut self, v: u32) {
+        if self.intervals.is_full() {
+            self.intervals.pop();
+        }
+        let _ = self.intervals.insert(0, v);
+    }
+
+    /// The intervals held, newest first.
+    pub fn intervals(&self) -> &[u32] {
+        &self.intervals
+    }
+
+    /// End time of the newest interval.
+    pub const fn end_time(&self) -> u32 {
+        self.end_time
+    }
+
+    /// Answers a Get Profile for this channel: the response's end time,
+    /// status and intervals (newest first). A request for another
+    /// channel is refused with UNDEFINED_INTERVAL_CHANNEL (channels
+    /// beyond Table D-64) or INTERVAL_CHANNEL_NOT_SUPPORTED; an end time
+    /// older than the oldest interval is INVALID_END_TIME; more periods
+    /// than `max_periods` are capped and flagged.
+    pub fn get(&self, req: &GetProfile) -> (u32, ProfileStatus, Vec<u32, MAX_PERIODS_DELIVERED>) {
+        let mut out = Vec::new();
+        if req.channel != self.channel {
+            let status = if req.channel > 3 {
+                ProfileStatus::UndefinedChannel
+            } else {
+                ProfileStatus::ChannelNotSupported
+            };
+            return (req.end_time, status, out);
+        }
+        if self.intervals.is_empty() {
+            return (req.end_time, ProfileStatus::NoIntervals, out);
+        }
+        let period = self.period.seconds();
+        // The block ends at the newest interval ending at or before the
+        // requested end time.
+        let skip = if req.end_time == 0 || req.end_time >= self.end_time {
+            0
+        } else {
+            let behind = (self.end_time - req.end_time).div_ceil(period);
+            usize::try_from(behind).unwrap_or(usize::MAX)
+        };
+        if skip >= self.intervals.len() {
+            return (req.end_time, ProfileStatus::InvalidEndTime, out);
+        }
+        let end = self
+            .end_time
+            .saturating_sub(u32::try_from(skip).unwrap_or(0).saturating_mul(period));
+        let max = usize::from(self.max_periods).min(MAX_PERIODS_DELIVERED);
+        let wanted = usize::from(req.number_of_periods);
+        let count = wanted.min(max).min(self.intervals.len() - skip);
+        for v in self.intervals.iter().skip(skip).take(count) {
+            let _ = out.push(*v);
+        }
+        let status = if wanted > max {
+            ProfileStatus::TooManyPeriods
+        } else if out.is_empty() {
+            ProfileStatus::NoIntervals
+        } else {
+            ProfileStatus::Success
+        };
+        (end, status, out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_log_answers_get_profile() {
+        let mut log: ProfileLog<8> = ProfileLog::new(0, IntervalPeriod::Minutes30, 4);
+        let (_, status, _) = log.get(&GetProfile {
+            channel: 0,
+            end_time: 0,
+            number_of_periods: 2,
+        });
+        assert_eq!(status, ProfileStatus::NoIntervals);
+        // Five intervals ending at 1800, 3600, (gap at 5400), 7200, 9000.
+        log.record(10, 1800);
+        log.record(11, 3600);
+        log.record(13, 7200);
+        log.record(14, 9000);
+        assert_eq!(log.intervals(), &[14, 13, INTERVAL_INVALID, 11, 10]);
+        // The most recent block, capped at the maximum and flagged.
+        let (end, status, iv) = log.get(&GetProfile {
+            channel: 0,
+            end_time: 0,
+            number_of_periods: 6,
+        });
+        assert_eq!(end, 9000);
+        assert_eq!(status, ProfileStatus::TooManyPeriods);
+        assert_eq!(iv.as_slice(), &[14, 13, INTERVAL_INVALID, 11]);
+        // An earlier block by end time.
+        let (end, status, iv) = log.get(&GetProfile {
+            channel: 0,
+            end_time: 3700,
+            number_of_periods: 2,
+        });
+        assert_eq!((end, status), (3600, ProfileStatus::Success));
+        assert_eq!(iv.as_slice(), &[11, 10]);
+        let (_, status, iv) = log.get(&GetProfile {
+            channel: 0,
+            end_time: 1000,
+            number_of_periods: 2,
+        });
+        assert_eq!(status, ProfileStatus::InvalidEndTime);
+        assert!(iv.is_empty());
+        // Other channels.
+        assert_eq!(
+            log.get(&GetProfile {
+                channel: 1,
+                end_time: 0,
+                number_of_periods: 1
+            })
+            .1,
+            ProfileStatus::ChannelNotSupported
+        );
+        assert_eq!(
+            log.get(&GetProfile {
+                channel: 9,
+                end_time: 0,
+                number_of_periods: 1
+            })
+            .1,
+            ProfileStatus::UndefinedChannel
+        );
+        // A full log drops the oldest.
+        for i in 0..8 {
+            log.record(20 + i, 10_800 + i * 1800);
+        }
+        assert_eq!(log.intervals().len(), 8);
+        assert_eq!(log.intervals()[0], 27);
+    }
 
     #[test]
     fn formatting_and_profile() {
@@ -568,7 +752,7 @@ mod tests {
         assert_eq!(r.end_time, 3600);
         assert_eq!(r.status, ProfileStatus::Success);
         assert_eq!(r.len(), 3);
-        let v: heapless::Vec<u32, 4> = r.iter().collect();
+        let v: Vec<u32, 4> = r.iter().collect();
         assert_eq!(v.as_slice(), &[0x0001_0203, INTERVAL_INVALID, 7]);
         // A count that disagrees with the payload is rejected.
         buf[6] = 2;
