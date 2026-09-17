@@ -181,8 +181,10 @@ Keep a Changelog; versions follow SemVer.
   auto-join scan schedule driving `Stack::join`, CBKE through
   `CbkeDriver`, ESI discovery with a Smart Energy Match_Desc_req,
   Bind_req (with IEEE_addr_req) for every client cluster at every ESI,
-  periodic rediscovery, rejoin and recovery on `TrustCenterLost`, and
-  the leave reset; `SeCommissioningEvent` reports the milestones.
+  periodic rediscovery, rejoin and recovery on `TrustCenterLost`, Key
+  Establishment with a replacement Trust Center after a detected
+  swap-out (one retry, then leave), and the leave reset;
+  `SeCommissioningEvent` reports the milestones.
 * `panweave::smart_energy_drivers` (feature `smart-energy`): Smart
   Energy cluster models bound to a `Stack` the way `CbkeDriver` is —
   `messaging::{MessagingClient, MessagingServer}` (SE 1.4a Annex D.5)

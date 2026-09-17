@@ -12,7 +12,7 @@ use panweave_runtime::{JoinMode, Stack, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_smart_energy::PROFILE_ID;
 use panweave_smart_energy::commissioning::{Action, Event, LeaveSource, Lifecycle, Phase};
-use panweave_smart_energy::key_establishment::{Ecmqv, IssuerPolicy, Timing};
+use panweave_smart_energy::key_establishment::{Ecmqv, IssuerPolicy, Status, Timing};
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
@@ -44,8 +44,12 @@ pub enum SeCommissioningEvent {
     Joined,
     /// The link key with the Trust Center was established.
     KeyEstablished,
-    /// Key Establishment failed (the machine retries or pauses).
-    KeyEstablishmentFailed,
+    /// Key Establishment failed (the machine retries or pauses); the
+    /// Terminate status when the peer sent one.
+    KeyEstablishmentFailed {
+        /// The Terminate status (`None` on a timeout).
+        status: Option<Status>,
+    },
     /// An ESI answered the service discovery.
     EsiFound {
         /// The ESI.
@@ -61,6 +65,12 @@ pub enum SeCommissioningEvent {
     },
     /// The Trust Center was lost; recovery started.
     Recovering,
+    /// A replacement Trust Center took over during the recovery
+    /// (§5.4.2.2.3.5): Key Establishment with it follows.
+    TrustCenterSwapped {
+        /// The replacement.
+        new: ExtendedAddress,
+    },
     /// The device left the network and reset its commissioning.
     Left,
 }
@@ -117,6 +127,10 @@ pub struct SeCommissioning<E: Ecmqv, I: IssuerPolicy = ExtendedAddress> {
     state: State,
     discovery_seq: Option<TransactionSequence>,
     bindings: u8,
+    /// A swap-out was detected during the current rejoin: CBKE with
+    /// the replacement precedes the rediscovery (step 13), with one
+    /// retry (step 14).
+    swap: Option<(ExtendedAddress, u8)>,
 }
 
 impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
@@ -146,6 +160,7 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
             state: State::Idle,
             discovery_seq: None,
             bindings: 0,
+            swap: None,
         }
     }
 
@@ -249,6 +264,7 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
                 let _ = stack.leave(false);
                 self.esis.clear();
                 self.bindings = 0;
+                self.swap = None;
                 self.state = State::Idle;
                 Some(SeCommissioningEvent::Left)
             }
@@ -364,8 +380,21 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
             return self.on_cbke(stack, outcome);
         }
         match event {
+            StackEvent::TrustCenterSwapped { new, .. } => {
+                if self.lifecycle.phase() == Phase::RejoinRecovery {
+                    self.swap = Some((*new, 0));
+                    return Some(SeCommissioningEvent::TrustCenterSwapped { new: *new });
+                }
+                None
+            }
             StackEvent::Joined { rejoin, .. } => {
                 if *rejoin && self.lifecycle.phase() == Phase::RejoinRecovery {
+                    if self.swap.is_some() {
+                        // Step 13: establish a key with the replacement
+                        // before going back to service discovery.
+                        self.state = State::KeyEstablishmentAt(now);
+                        return None;
+                    }
                     let a = self
                         .lifecycle
                         .on_event(Event::RejoinSucceeded, now, random(stack));
@@ -459,6 +488,35 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
         outcome: CbkeOutcome,
     ) -> Option<SeCommissioningEvent> {
         let now = stack.now();
+        if let Some((new, attempts)) = self.swap {
+            // Steps 13–14 of the swap-out: on success the device is back
+            // in business (rediscovery); one retry, then the candidate
+            // is left and the device starts over.
+            return match outcome {
+                CbkeOutcome::Established { .. } => {
+                    self.swap = None;
+                    let a = self
+                        .lifecycle
+                        .on_event(Event::RejoinSucceeded, now, random(stack));
+                    self.apply(stack, a);
+                    Some(SeCommissioningEvent::KeyEstablished)
+                }
+                CbkeOutcome::Failed { status, .. } if attempts < 1 => {
+                    self.swap = Some((new, attempts + 1));
+                    self.state = State::KeyEstablishmentAt(now);
+                    Some(SeCommissioningEvent::KeyEstablishmentFailed { status })
+                }
+                CbkeOutcome::Failed { .. } => {
+                    self.swap = None;
+                    let a = self.lifecycle.on_event(
+                        Event::Leave(LeaveSource::User),
+                        now,
+                        random(stack),
+                    );
+                    self.apply(stack, a)
+                }
+            };
+        }
         match outcome {
             CbkeOutcome::Established { .. } => {
                 let a = self
@@ -467,12 +525,12 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
                 self.apply(stack, a);
                 Some(SeCommissioningEvent::KeyEstablished)
             }
-            CbkeOutcome::Failed { .. } => {
+            CbkeOutcome::Failed { status, .. } => {
                 let a = self
                     .lifecycle
                     .on_event(Event::KeyEstablishmentFailed, now, random(stack));
                 self.apply(stack, a);
-                Some(SeCommissioningEvent::KeyEstablishmentFailed)
+                Some(SeCommissioningEvent::KeyEstablishmentFailed { status })
             }
         }
     }
