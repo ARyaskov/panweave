@@ -176,6 +176,14 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Fragmentation discovery and caching (R23.2 §2.2.8.4.5.1):
+  `panweave-runtime::fragment_cache` — an ASDU that must be fragmented
+  to a unicast peer whose parameters are unknown is held while the
+  peer's Node Descriptor (with the R23 Fragmentation Parameters TLV) is
+  fetched; `apsFragmentationCacheTable` keeps the answers
+  (`Stack::fragmentation_entry`, `cache_fragmentation`), a peer that
+  cannot take the message is reported as `StackEvent::FragmentationRefused`,
+  and `Aps::single_frame_capacity` tells what fits one frame.
 * Frequency agility (R23.2 Annex E): `panweave-runtime::agility` — a
   router or coordinator whose unicast failure rate passes
   `StackConfig::interference` runs an energy scan and, when its channel

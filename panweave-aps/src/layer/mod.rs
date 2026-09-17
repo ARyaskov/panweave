@@ -22,7 +22,7 @@ use panweave_types::{
 
 use crate::aib::{Aib, constants};
 use crate::command::{ApsCommandId, RequestKeyType, UpdateDeviceStatus};
-use crate::frame::Header;
+use crate::frame::{Addressing, Header};
 use crate::security::ApsSecurity;
 use crate::tables::{BindingTable, DuplicateRejectionTable, GroupTable};
 
@@ -729,6 +729,23 @@ impl<
             return Some(dst_ieee);
         }
         None
+    }
+
+    /// Largest ASDU an acknowledged unicast data frame carries without
+    /// fragmentation (`secured` with APS link-key security). Longer
+    /// ASDUs are fragmented, which needs the peer's parameters
+    /// (§2.2.8.4.5.1).
+    pub fn single_frame_capacity(&self, secured: bool) -> usize {
+        let header = Header::data(
+            Addressing::Endpoint(Endpoint(1)),
+            ClusterId(0),
+            ProfileId(0),
+            Endpoint(1),
+            0,
+        )
+        .with_ack_request(true)
+        .secured(secured);
+        self.frame_payload_max(&header, secured.then_some(true))
     }
 
     /// Maximum ASDU that fits in one frame with the given header and

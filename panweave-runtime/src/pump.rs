@@ -273,6 +273,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     let keep_alive_desc = cluster == cluster::response_of(cluster::NODE_DESC_REQ)
                         && self.on_keep_alive_node_desc(src, seq);
+                    let fragmentation_desc = cluster
+                        == cluster::response_of(cluster::NODE_DESC_REQ)
+                        && self.on_fragmentation_node_desc(src, seq, data);
                     if cluster == cluster::response_of(cluster::NODE_DESC_REQ)
                         && self.tclk_update.is_some()
                         && src_ieee.is_none_or(|s| s == self.aps.aib.trust_center_address)
@@ -284,6 +287,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     let ota = self.on_ota_discovery_response(src, seq, cluster, data);
                     if !keep_alive_match
                         && !keep_alive_desc
+                        && !fragmentation_desc
                         && !ota
                         && let Ok(data) = Vec::from_slice(data)
                     {
@@ -959,6 +963,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             // §4.6.3.6.1: the device left through its parent; drop the
             // network-layer bookkeeping and inform the application. The
             // key-pair entry stays (a Trust Center policy decision).
+            if let Some(s) = AddrView(&self.nwk).short_of(device) {
+                self.fragmentation.forget(s);
+            }
             let _ = self.nwk.neighbors.remove_extended(device);
             self.nwk.address_map.remove_extended(device);
             self.push_event(StackEvent::DeviceLeft {
@@ -1462,6 +1469,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             let _ = self
                 .aps
                 .update_device(tc_short, ieee, s, UpdateDeviceStatus::DeviceLeft, &[]);
+        }
+        if let Some(s) = short {
+            self.fragmentation.forget(s);
         }
         self.push_event(StackEvent::DeviceLeft { ieee, rejoin });
     }
@@ -2087,6 +2097,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         asdu: &[u8],
         options: TxOptions,
     ) {
+        if self.send_with_fragmentation_check(
+            destination,
+            profile,
+            cluster,
+            src_endpoint,
+            asdu,
+            options,
+        ) {
+            return;
+        }
         let req = DataRequest {
             destination,
             profile,

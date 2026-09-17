@@ -555,10 +555,10 @@ id = "PW-R23-APS-005"
 section = "§2.2.8.4.5"
 summary = "Fragmentation and reassembly: block numbers, window size, ack bitfield, interframe delay, reassembly timeout, per-transaction state"
 level = "conditional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-aps::layer"
-tests = ["fragmented_asdu_is_reassembled", "fragment_loss_is_recovered_by_retransmission"]
-notes = "Window size 1 only (the sole interoperable value); the receiver accepts blocks in order and acknowledges every block; window sizes greater than 1 and the fragmentation cache / Node Descriptor discovery of peer support (§2.2.8.4.5.1) are not implemented."
+tests = ["fragmented_asdu_is_reassembled", "fragment_loss_is_recovered_by_retransmission", "fragmented_messages_wait_for_the_peer_parameters"]
+notes = "Fragmented transmission and reassembly with the Table 2-28 parameters every R23 node advertises (apscWindowSize 1, apscMaxASDU at least 128): block numbers, per-block acknowledgements with the extended header and ack bitfield, retries and the receive-side persistence; a legacy peer transmitting with a larger window converges through the lowest-unacknowledged-block retransmission of §2.2.8.4.5.3. Fragmentation discovery and caching per §2.2.8.4.5.1: an ASDU needing fragmentation to a unicast peer not in apsFragmentationCacheTable is held while the peer's Node Descriptor is fetched (MaximumIncomingTransferSize and the Fragmentation Parameters TLV), the result cached (16 entries, dropped when the device leaves) and the message sent or refused (StackEvent::FragmentationRefused) accordingly; the application may seed the cache. Transmit windows larger than 1 are not offered (the specification mandates 1)."
 [[requirement]]
 id = "PW-R23-APS-006"
 section = "§2.2.8.4.3"

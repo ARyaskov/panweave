@@ -471,6 +471,19 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// An ASDU needing fragmentation was not sent: `dst` does not
+    /// reassemble fragments, accepts less than `len` octets, or its
+    /// Node Descriptor could not be obtained (§2.2.8.4.5.1: the confirm
+    /// reports the discovery failure; `len` 0 when the hold queue was
+    /// full).
+    FragmentationRefused {
+        /// The destination.
+        dst: ShortAddress,
+        /// The cluster of the message.
+        cluster: ClusterId,
+        /// Length of the ASDU.
+        len: usize,
+    },
     /// A device reported interference on its channel to this network
     /// manager (Mgmt_NWK_Unsolicited_Enhanced_Update_notify, R23.2 Annex
     /// E); the application decides whether to move the network with
@@ -728,6 +741,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) ota_discovery: Option<crate::ota::OtaDiscovery>,
     /// Interference reporting state (Annex E).
     pub(crate) interference: crate::agility::Interference,
+    /// `apsFragmentationCacheTable` and the messages held for discovery
+    /// (§2.2.8.4.5.1).
+    pub(crate) fragmentation: crate::fragment_cache::FragmentationCache,
     /// A channel change this network manager broadcast, applied after
     /// `nwkNetworkBroadcastDeliveryTime`.
     pub(crate) pending_channel_change: Option<crate::agility::PendingChannelChange>,
@@ -878,6 +894,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             tclk_update: None,
             ota_discovery: None,
             interference: crate::agility::Interference::default(),
+            fragmentation: crate::fragment_cache::FragmentationCache::default(),
             pending_channel_change: None,
             channel_change_lockout: None,
             pending_restart: None,
@@ -1292,6 +1309,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.poll_parent_annce(now);
         self.poll_ota_discovery(now);
         self.poll_agility(now);
+        self.poll_fragmentation(now);
         self.poll_pending_restart(now);
         self.poll_parent_loss_rejoin(now);
         #[cfg(feature = "green-power")]
@@ -1367,6 +1385,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.tclk_update,
             self.ota_discovery.and_then(|d| d.deadline()),
             self.agility_deadline(),
+            self.fragmentation.deadline(),
             self.pending_restart.map(|(at, _, _)| at),
             self.parent_annce.map(|(at, _)| at),
             self.rejoin_due,

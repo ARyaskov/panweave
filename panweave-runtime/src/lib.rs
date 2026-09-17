@@ -32,6 +32,7 @@ pub mod agility;
 mod bdb;
 mod context;
 mod dlk;
+pub mod fragment_cache;
 #[cfg(feature = "green-power")]
 pub mod green_power;
 mod keep_alive;
