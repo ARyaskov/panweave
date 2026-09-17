@@ -355,10 +355,36 @@ pub const CMD_CLEAR_ALL_PIN_CODES: CommandId = CommandId(0x08);
 pub const CMD_SET_USER_STATUS: CommandId = CommandId(0x09);
 /// Get User Status.
 pub const CMD_GET_USER_STATUS: CommandId = CommandId(0x0a);
+/// Set Week Day Schedule (§7.3.2.15.13).
+pub const CMD_SET_WEEK_DAY_SCHEDULE: CommandId = CommandId(0x0b);
+/// Get Week Day Schedule.
+pub const CMD_GET_WEEK_DAY_SCHEDULE: CommandId = CommandId(0x0c);
+/// Clear Week Day Schedule.
+pub const CMD_CLEAR_WEEK_DAY_SCHEDULE: CommandId = CommandId(0x0d);
+/// Set Year Day Schedule (§7.3.2.15.16).
+pub const CMD_SET_YEAR_DAY_SCHEDULE: CommandId = CommandId(0x0e);
+/// Get Year Day Schedule.
+pub const CMD_GET_YEAR_DAY_SCHEDULE: CommandId = CommandId(0x0f);
+/// Clear Year Day Schedule.
+pub const CMD_CLEAR_YEAR_DAY_SCHEDULE: CommandId = CommandId(0x10);
+/// Set Holiday Schedule (§7.3.2.15.19).
+pub const CMD_SET_HOLIDAY_SCHEDULE: CommandId = CommandId(0x11);
+/// Get Holiday Schedule.
+pub const CMD_GET_HOLIDAY_SCHEDULE: CommandId = CommandId(0x12);
+/// Clear Holiday Schedule.
+pub const CMD_CLEAR_HOLIDAY_SCHEDULE: CommandId = CommandId(0x13);
 /// Set User Type.
 pub const CMD_SET_USER_TYPE: CommandId = CommandId(0x14);
 /// Get User Type.
 pub const CMD_GET_USER_TYPE: CommandId = CommandId(0x15);
+/// Set RFID Code (§7.3.2.15.24).
+pub const CMD_SET_RFID_CODE: CommandId = CommandId(0x16);
+/// Get RFID Code.
+pub const CMD_GET_RFID_CODE: CommandId = CommandId(0x17);
+/// Clear RFID Code.
+pub const CMD_CLEAR_RFID_CODE: CommandId = CommandId(0x18);
+/// Clear All RFID Codes.
+pub const CMD_CLEAR_ALL_RFID_CODES: CommandId = CommandId(0x19);
 
 /// Lock Door Response.
 pub const CMD_LOCK_DOOR_RESPONSE: CommandId = CommandId(0x00);
@@ -368,6 +394,8 @@ pub const CMD_UNLOCK_DOOR_RESPONSE: CommandId = CommandId(0x01);
 pub const CMD_TOGGLE_RESPONSE: CommandId = CommandId(0x02);
 /// Unlock with Timeout Response.
 pub const CMD_UNLOCK_WITH_TIMEOUT_RESPONSE: CommandId = CommandId(0x03);
+/// Get Log Record Response (§7.3.2.16.5).
+pub const CMD_GET_LOG_RECORD_RESPONSE: CommandId = CommandId(0x04);
 /// Set PIN Code Response.
 pub const CMD_SET_PIN_CODE_RESPONSE: CommandId = CommandId(0x05);
 /// Get PIN Code Response.
@@ -380,10 +408,54 @@ pub const CMD_CLEAR_ALL_PIN_CODES_RESPONSE: CommandId = CommandId(0x08);
 pub const CMD_SET_USER_STATUS_RESPONSE: CommandId = CommandId(0x09);
 /// Get User Status Response.
 pub const CMD_GET_USER_STATUS_RESPONSE: CommandId = CommandId(0x0a);
+/// Set Week Day Schedule Response.
+pub const CMD_SET_WEEK_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x0b);
+/// Get Week Day Schedule Response.
+pub const CMD_GET_WEEK_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x0c);
+/// Clear Week Day Schedule Response.
+pub const CMD_CLEAR_WEEK_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x0d);
+/// Set Year Day Schedule Response.
+pub const CMD_SET_YEAR_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x0e);
+/// Get Year Day Schedule Response.
+pub const CMD_GET_YEAR_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x0f);
+/// Clear Year Day Schedule Response.
+pub const CMD_CLEAR_YEAR_DAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x10);
+/// Set Holiday Schedule Response.
+pub const CMD_SET_HOLIDAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x11);
+/// Get Holiday Schedule Response.
+pub const CMD_GET_HOLIDAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x12);
+/// Clear Holiday Schedule Response.
+pub const CMD_CLEAR_HOLIDAY_SCHEDULE_RESPONSE: CommandId = CommandId(0x13);
 /// Set User Type Response.
 pub const CMD_SET_USER_TYPE_RESPONSE: CommandId = CommandId(0x14);
 /// Get User Type Response.
 pub const CMD_GET_USER_TYPE_RESPONSE: CommandId = CommandId(0x15);
+/// Set RFID Code Response.
+pub const CMD_SET_RFID_CODE_RESPONSE: CommandId = CommandId(0x16);
+/// Get RFID Code Response.
+pub const CMD_GET_RFID_CODE_RESPONSE: CommandId = CommandId(0x17);
+/// Clear RFID Code Response.
+pub const CMD_CLEAR_RFID_CODE_RESPONSE: CommandId = CommandId(0x18);
+/// Clear All RFID Codes Response.
+pub const CMD_CLEAR_ALL_RFID_CODES_RESPONSE: CommandId = CommandId(0x19);
+
+/// Log record event types (§7.3.2.16.5).
+pub mod log_event {
+    /// Operation.
+    pub const OPERATION: u8 = 0x00;
+    /// Programming.
+    pub const PROGRAMMING: u8 = 0x01;
+    /// Alarm.
+    pub const ALARM: u8 = 0x02;
+}
+
+/// `SecurityLevel` values (§7.3.2.13.5).
+pub mod security_level {
+    /// Network security only.
+    pub const NETWORK: u8 = 0;
+    /// APS security required on the cluster's transactions.
+    pub const APS: u8 = 1;
+}
 /// Operation Event Notification.
 pub const CMD_OPERATION_EVENT_NOTIFICATION: CommandId = CommandId(0x20);
 /// Programming Event Notification.
@@ -410,28 +482,56 @@ pub const DEF: ClusterDef = ClusterDef {
         CMD_UNLOCK_DOOR,
         CMD_TOGGLE,
         CMD_UNLOCK_WITH_TIMEOUT,
+        CMD_GET_LOG_RECORD,
         CMD_SET_PIN_CODE,
         CMD_GET_PIN_CODE,
         CMD_CLEAR_PIN_CODE,
         CMD_CLEAR_ALL_PIN_CODES,
         CMD_SET_USER_STATUS,
         CMD_GET_USER_STATUS,
+        CMD_SET_WEEK_DAY_SCHEDULE,
+        CMD_GET_WEEK_DAY_SCHEDULE,
+        CMD_CLEAR_WEEK_DAY_SCHEDULE,
+        CMD_SET_YEAR_DAY_SCHEDULE,
+        CMD_GET_YEAR_DAY_SCHEDULE,
+        CMD_CLEAR_YEAR_DAY_SCHEDULE,
+        CMD_SET_HOLIDAY_SCHEDULE,
+        CMD_GET_HOLIDAY_SCHEDULE,
+        CMD_CLEAR_HOLIDAY_SCHEDULE,
         CMD_SET_USER_TYPE,
         CMD_GET_USER_TYPE,
+        CMD_SET_RFID_CODE,
+        CMD_GET_RFID_CODE,
+        CMD_CLEAR_RFID_CODE,
+        CMD_CLEAR_ALL_RFID_CODES,
     ],
     generated: &[
         CMD_LOCK_DOOR_RESPONSE,
         CMD_UNLOCK_DOOR_RESPONSE,
         CMD_TOGGLE_RESPONSE,
         CMD_UNLOCK_WITH_TIMEOUT_RESPONSE,
+        CMD_GET_LOG_RECORD_RESPONSE,
         CMD_SET_PIN_CODE_RESPONSE,
         CMD_GET_PIN_CODE_RESPONSE,
         CMD_CLEAR_PIN_CODE_RESPONSE,
         CMD_CLEAR_ALL_PIN_CODES_RESPONSE,
         CMD_SET_USER_STATUS_RESPONSE,
         CMD_GET_USER_STATUS_RESPONSE,
+        CMD_SET_WEEK_DAY_SCHEDULE_RESPONSE,
+        CMD_GET_WEEK_DAY_SCHEDULE_RESPONSE,
+        CMD_CLEAR_WEEK_DAY_SCHEDULE_RESPONSE,
+        CMD_SET_YEAR_DAY_SCHEDULE_RESPONSE,
+        CMD_GET_YEAR_DAY_SCHEDULE_RESPONSE,
+        CMD_CLEAR_YEAR_DAY_SCHEDULE_RESPONSE,
+        CMD_SET_HOLIDAY_SCHEDULE_RESPONSE,
+        CMD_GET_HOLIDAY_SCHEDULE_RESPONSE,
+        CMD_CLEAR_HOLIDAY_SCHEDULE_RESPONSE,
         CMD_SET_USER_TYPE_RESPONSE,
         CMD_GET_USER_TYPE_RESPONSE,
+        CMD_SET_RFID_CODE_RESPONSE,
+        CMD_GET_RFID_CODE_RESPONSE,
+        CMD_CLEAR_RFID_CODE_RESPONSE,
+        CMD_CLEAR_ALL_RFID_CODES_RESPONSE,
         CMD_OPERATION_EVENT_NOTIFICATION,
         CMD_PROGRAMMING_EVENT_NOTIFICATION,
     ],
@@ -450,6 +550,20 @@ pub const MAX_PIN_USERS: usize = 8;
 pub const MAX_PIN_LENGTH: usize = 8;
 /// `MinPINCodeLength` default.
 pub const DEFAULT_MIN_PIN_LENGTH: u8 = 4;
+/// Longest RFID code (also the `MaxRFIDCodeLength` default, Table 7-19).
+pub const MAX_RFID_LENGTH: usize = 20;
+/// `MinRFIDCodeLength` default.
+pub const DEFAULT_MIN_RFID_LENGTH: u8 = 8;
+/// Week day schedules per user (`NumberOfWeekDaySchedulesSupportedPerUser`).
+pub const MAX_WEEK_DAY_SCHEDULES: usize = 2;
+/// Year day schedules per user (`NumberOfYearDaySchedulesSupportedPerUser`).
+pub const MAX_YEAR_DAY_SCHEDULES: usize = 2;
+/// Holiday schedules (`NumberOfHolidaySchedulesSupported`).
+pub const MAX_HOLIDAY_SCHEDULES: usize = 4;
+/// Log records kept (`NumberOfLogRecordsSupported`).
+pub const MAX_LOG_RECORDS: usize = 8;
+/// How often the holiday schedules are checked against the clock.
+const HOLIDAY_POLL: Duration = Duration::from_secs(60);
 /// Local time when the lock has no clock (§7.3.2.16.27.5).
 pub const NO_TIME: u32 = 0xffff_ffff;
 /// User identifier when none applies.
@@ -458,6 +572,127 @@ pub const NO_USER: u16 = 0xffff;
 /// A PIN code: ASCII digits or characters (§7.3.2.4), never printed.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Pin(Vec<u8, MAX_PIN_LENGTH>);
+
+/// An RFID code (§7.3.2.15.24), never printed.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Rfid(Vec<u8, MAX_RFID_LENGTH>);
+
+impl Rfid {
+    /// Wraps `code`, refusing more than [`MAX_RFID_LENGTH`] octets.
+    pub fn new(code: &[u8]) -> Option<Rfid> {
+        Vec::from_slice(code).ok().map(Rfid)
+    }
+
+    /// Length in octets.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the code is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The code bytes (for the application's own use).
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Constant-time comparison with `code`.
+    pub fn matches(&self, code: &[u8]) -> bool {
+        !self.0.is_empty()
+            && self.0.len() == code.len()
+            && bool::from(self.0.as_slice().ct_eq(code))
+    }
+}
+
+impl fmt::Debug for Rfid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rfid(<{} octets redacted>)", self.0.len())
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for Rfid {
+    fn format(&self, f: defmt::Formatter<'_>) {
+        defmt::write!(f, "Rfid(<{} octets redacted>)", self.0.len());
+    }
+}
+
+/// A week day schedule of a user (§7.3.2.15.13): the days (Sun = bit 0
+/// … Sat = bit 6) and the daily window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct WeekDaySchedule {
+    /// Days mask.
+    pub days: u8,
+    /// Start hour (0–23).
+    pub start_hour: u8,
+    /// Start minute (0–59).
+    pub start_minute: u8,
+    /// End hour (0–23).
+    pub end_hour: u8,
+    /// End minute (0–59).
+    pub end_minute: u8,
+}
+
+impl WeekDaySchedule {
+    /// Whether the window covers the ZCL local time `local_time`
+    /// (seconds since 2000-01-01, a Saturday).
+    pub fn covers(&self, local_time: u32) -> bool {
+        let day = u8::try_from((local_time / 86_400 + 6) % 7).unwrap_or(0);
+        if self.days & (1 << day) == 0 {
+            return false;
+        }
+        let minute = (local_time % 86_400) / 60;
+        let start = u32::from(self.start_hour) * 60 + u32::from(self.start_minute);
+        let end = u32::from(self.end_hour) * 60 + u32::from(self.end_minute);
+        (start..=end).contains(&minute)
+    }
+}
+
+/// A year day schedule of a user (§7.3.2.15.16): a local time window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct YearDaySchedule {
+    /// Local start time.
+    pub start: u32,
+    /// Local end time (after the start).
+    pub end: u32,
+}
+
+/// A holiday schedule (§7.3.2.15.19): a local time window and the
+/// operating mode in force during it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct HolidaySchedule {
+    /// Local start time.
+    pub start: u32,
+    /// Local end time (after the start).
+    pub end: u32,
+    /// `OperatingMode` during the holiday.
+    pub mode: u8,
+}
+
+/// A log record (§7.3.2.16.5).
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LogRecord {
+    /// Log entry identifier (1 …).
+    pub id: u16,
+    /// Local time of the event.
+    pub time: u32,
+    /// Event type (`log_event`).
+    pub event_type: u8,
+    /// Source (`source`).
+    pub source: u8,
+    /// Event or alarm code.
+    pub code: u8,
+    /// User, or [`NO_USER`].
+    pub user: u16,
+    /// The code used, when any.
+    pub pin: Pin,
+}
 
 impl Pin {
     /// Wraps `code`, refusing more than [`MAX_PIN_LENGTH`] octets.
@@ -509,11 +744,45 @@ pub struct User {
     pub kind: u8,
     /// The PIN code.
     pub pin: Pin,
+    /// The RFID code.
+    pub rfid: Rfid,
+    /// Week day schedules by schedule identifier.
+    pub week_day: [Option<WeekDaySchedule>; MAX_WEEK_DAY_SCHEDULES],
+    /// Year day schedules by schedule identifier.
+    pub year_day: [Option<YearDaySchedule>; MAX_YEAR_DAY_SCHEDULES],
 }
 
 impl User {
     const fn occupied(&self) -> bool {
         self.status != user_status::AVAILABLE
+    }
+
+    /// Whether the user's schedules admit `local_time` (§7.3.2.15.13,
+    /// §7.3.2.15.16): unrestricted and master users always; week day
+    /// and year day users within one of their schedules, which needs a
+    /// clock; non-access users never.
+    pub fn schedule_allows(&self, local_time: u32) -> bool {
+        match self.kind {
+            user_type::UNRESTRICTED | user_type::MASTER => true,
+            user_type::WEEK_DAY_SCHEDULE => {
+                local_time != NO_TIME
+                    && self.week_day.iter().flatten().any(|s| s.covers(local_time))
+            }
+            user_type::YEAR_DAY_SCHEDULE => {
+                local_time != NO_TIME
+                    && self
+                        .year_day
+                        .iter()
+                        .flatten()
+                        .any(|s| (s.start..=s.end).contains(&local_time))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `code` is the user's PIN or RFID code.
+    fn matches(&self, code: &[u8]) -> bool {
+        self.pin.matches(code) || self.rfid.matches(code)
     }
 }
 
@@ -531,6 +800,16 @@ pub struct State {
     pub relock_at: Option<Instant>,
     /// A scene-recalled operation is due at this instant.
     pub pending: Option<(Action, Instant)>,
+    /// Holiday schedules by identifier.
+    pub holidays: [Option<HolidaySchedule>; MAX_HOLIDAY_SCHEDULES],
+    /// The `OperatingMode` to restore when the current holiday ends.
+    pub holiday_restore: Option<u8>,
+    /// Next check of the holiday schedules against the clock.
+    pub holiday_poll: Option<Instant>,
+    /// The event log, oldest first (§7.3.2.16.5).
+    pub log: Vec<LogRecord, MAX_LOG_RECORDS>,
+    /// Identifier of the next log record.
+    pub next_log_id: u16,
 }
 
 /// What the application does with its bolt.
@@ -659,11 +938,48 @@ pub fn server<const A: usize>(
         STATE_REPORTING,
     )?;
     c.add_attribute(
+        NUMBER_OF_LOG_RECORDS_SUPPORTED,
+        &Value::Uint {
+            width: 2,
+            value: u64::try_from(MAX_LOG_RECORDS).unwrap_or(u64::MAX),
+        },
+    )?;
+    c.add_attribute(
+        NUMBER_OF_TOTAL_USERS_SUPPORTED,
+        &Value::Uint {
+            width: 2,
+            value: u64::from(pin_users),
+        },
+    )?;
+    c.add_attribute(
         NUMBER_OF_PIN_USERS_SUPPORTED,
         &Value::Uint {
             width: 2,
             value: u64::from(pin_users),
         },
+    )?;
+    c.add_attribute(
+        NUMBER_OF_RFID_USERS_SUPPORTED,
+        &Value::Uint {
+            width: 2,
+            value: u64::from(pin_users),
+        },
+    )?;
+    let one = |v: usize| Value::Uint {
+        width: 1,
+        value: u64::try_from(v).unwrap_or(u64::MAX),
+    };
+    c.add_attribute(
+        NUMBER_OF_WEEK_DAY_SCHEDULES_SUPPORTED_PER_USER,
+        &one(MAX_WEEK_DAY_SCHEDULES),
+    )?;
+    c.add_attribute(
+        NUMBER_OF_YEAR_DAY_SCHEDULES_SUPPORTED_PER_USER,
+        &one(MAX_YEAR_DAY_SCHEDULES),
+    )?;
+    c.add_attribute(
+        NUMBER_OF_HOLIDAY_SCHEDULES_SUPPORTED,
+        &one(MAX_HOLIDAY_SCHEDULES),
     )?;
     c.add_attribute(
         MAX_PIN_CODE_LENGTH,
@@ -679,6 +995,13 @@ pub fn server<const A: usize>(
             value: u64::from(DEFAULT_MIN_PIN_LENGTH),
         },
     )?;
+    c.add_attribute(MAX_RFID_CODE_LENGTH, &one(MAX_RFID_LENGTH))?;
+    c.add_attribute(
+        MIN_RFID_CODE_LENGTH,
+        &one(usize::from(DEFAULT_MIN_RFID_LENGTH)),
+    )?;
+    c.add_attribute(ENABLE_LOGGING, &Value::Bool(Some(false)))?;
+    c.add_attribute(SECURITY_LEVEL, &Value::Enum8(security_level::NETWORK))?;
     c.add_attribute(AUTO_RELOCK_TIME, &Value::Uint { width: 4, value: 0 })?;
     c.add_attribute(OPERATING_MODE, &Value::Enum8(operating_mode::NORMAL))?;
     c.add_attribute(SUPPORTED_OPERATING_MODES, &bits16(0x000f))?;
@@ -761,9 +1084,14 @@ fn refresh_tick<const A: usize>(c: &mut ClusterInstance<A>) {
         return;
     };
     let mut next: Option<Instant> = None;
-    for t in [s.relock_at, s.lockout_until, s.pending.map(|(_, t)| t)]
-        .into_iter()
-        .flatten()
+    for t in [
+        s.relock_at,
+        s.lockout_until,
+        s.pending.map(|(_, t)| t),
+        s.holiday_poll,
+    ]
+    .into_iter()
+    .flatten()
     {
         next = Some(next.map_or(t, |n| if t.as_millis() < n.as_millis() { t } else { n }));
     }
@@ -895,6 +1223,9 @@ enum Refusal {
     Plain,
     /// Wrong or missing code: FAILURE with an invalid-PIN event.
     InvalidPin,
+    /// A valid code outside the user's schedule: FAILURE with an
+    /// invalid-schedule event.
+    InvalidSchedule,
 }
 
 /// Validates the PIN of an RF operation (§7.3.2.13.4): returns the
@@ -903,6 +1234,7 @@ fn check_pin<const A: usize>(
     c: &mut ClusterInstance<A>,
     pin: &[u8],
     now: Instant,
+    local_time: u32,
 ) -> Result<u16, Refusal> {
     let required = c.bool(REQUIRE_PIN_FOR_RF_OPERATION.id);
     let limit = c.u8(WRONG_CODE_ENTRY_LIMIT.id).unwrap_or(0);
@@ -925,13 +1257,14 @@ fn check_pin<const A: usize>(
         .users
         .iter()
         .enumerate()
-        .find(|(_, u)| u.occupied() && u.pin.matches(pin))
-        .map(|(i, u)| (i, u.status, u.kind));
+        .find(|(_, u)| u.occupied() && u.matches(pin))
+        .map(|(i, u)| (i, u.status, u.schedule_allows(local_time)));
     match found {
-        Some((i, user_status::OCCUPIED_ENABLED, kind)) if kind != user_type::NON_ACCESS => {
+        Some((i, user_status::OCCUPIED_ENABLED, true)) => {
             s.wrong_entries = 0;
             Ok(u16::try_from(i).unwrap_or(NO_USER))
         }
+        Some((_, user_status::OCCUPIED_ENABLED, false)) => Err(Refusal::InvalidSchedule),
         Some(_) => Err(Refusal::Plain),
         None => {
             s.wrong_entries = s.wrong_entries.saturating_add(1);
@@ -990,7 +1323,7 @@ pub fn handle<const A: usize>(
             if !operating_mode::rf_enabled(mode) || !c.bool(ACTUATOR_ENABLED.id) {
                 return Outcome::reply(response, &[ZclStatus::Failure.raw()]);
             }
-            match check_pin(c, pin, now) {
+            match check_pin(c, pin, now, local_time) {
                 Ok(user) => {
                     let code = match action {
                         Action::Lock => operation_event::LOCK,
@@ -1029,8 +1362,382 @@ pub fn handle<const A: usize>(
                     }
                     o
                 }
+                Err(Refusal::InvalidSchedule) => {
+                    let code = match action {
+                        Action::Lock => operation_event::LOCK_FAILURE_INVALID_SCHEDULE,
+                        Action::Unlock => operation_event::UNLOCK_FAILURE_INVALID_SCHEDULE,
+                    };
+                    let mut o = Outcome::reply(response, &[ZclStatus::Failure.raw()]);
+                    o.notify = operation_event(c, source::RF, code, NO_USER, pin, local_time);
+                    o
+                }
                 Err(Refusal::Plain) => Outcome::reply(response, &[ZclStatus::Failure.raw()]),
             }
+        }
+        CMD_GET_LOG_RECORD => {
+            let Ok(index) = r.u16_le() else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let Some(s) = state_ref(c) else {
+                return Outcome::default_response(ZclStatus::NotFound);
+            };
+            // An unknown identifier reads as 0: the most recent record.
+            let record = s
+                .log
+                .iter()
+                .find(|l| l.id == index)
+                .or_else(|| s.log.last())
+                .cloned();
+            let Some(l) = record else {
+                return Outcome::default_response(ZclStatus::NotFound);
+            };
+            let mut buf = [0u8; 32];
+            let mut w = Writer::new(&mut buf);
+            let _ = w.u16_le(l.id);
+            let _ = w.u32_le(l.time);
+            let _ = w.u8(l.event_type);
+            let _ = w.u8(l.source);
+            let _ = w.u8(l.code);
+            let _ = w.u16_le(l.user);
+            let _ = write_pin(c, &mut w, l.pin.as_bytes());
+            let n = w.position();
+            Outcome::reply(CMD_GET_LOG_RECORD_RESPONSE, buf.get(..n).unwrap_or(&[]))
+        }
+        CMD_SET_WEEK_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id), Ok(days), Ok(sh), Ok(sm), Ok(eh), Ok(em)) =
+                (r.u8(), r.u16_le(), r.u8(), r.u8(), r.u8(), r.u8(), r.u8())
+            else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let valid = usize::from(sid) < MAX_WEEK_DAY_SCHEDULES
+                && days & 0x7f != 0
+                && days & 0x80 == 0
+                && sh <= 23
+                && eh <= 23
+                && sm <= 59
+                && em <= 59
+                && (eh > sh || (eh == sh && em > sm));
+            let Some(i) = user_index(c, id).filter(|_| valid) else {
+                return Outcome::reply(CMD_SET_WEEK_DAY_SCHEDULE_RESPONSE, &[1]);
+            };
+            let Some(u) = state(c).and_then(|s| s.users.get_mut(i)) else {
+                return Outcome::reply(CMD_SET_WEEK_DAY_SCHEDULE_RESPONSE, &[1]);
+            };
+            if let Some(slot) = u.week_day.get_mut(usize::from(sid)) {
+                *slot = Some(WeekDaySchedule {
+                    days,
+                    start_hour: sh,
+                    start_minute: sm,
+                    end_hour: eh,
+                    end_minute: em,
+                });
+            }
+            Outcome::reply(CMD_SET_WEEK_DAY_SCHEDULE_RESPONSE, &[0])
+        }
+        CMD_GET_WEEK_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id)) = (r.u8(), r.u16_le()) else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let [lo, hi] = id.to_le_bytes();
+            let in_range = usize::from(sid) < MAX_WEEK_DAY_SCHEDULES && user_index(c, id).is_some();
+            let entry = user_index(c, id)
+                .and_then(|i| users(c).get(i))
+                .and_then(|u| u.week_day.get(usize::from(sid)).copied().flatten());
+            match (in_range, entry) {
+                (false, _) => Outcome::reply(
+                    CMD_GET_WEEK_DAY_SCHEDULE_RESPONSE,
+                    &[sid, lo, hi, ZclStatus::InvalidField.raw()],
+                ),
+                (true, None) => Outcome::reply(
+                    CMD_GET_WEEK_DAY_SCHEDULE_RESPONSE,
+                    &[sid, lo, hi, ZclStatus::NotFound.raw()],
+                ),
+                (true, Some(s)) => Outcome::reply(
+                    CMD_GET_WEEK_DAY_SCHEDULE_RESPONSE,
+                    &[
+                        sid,
+                        lo,
+                        hi,
+                        ZclStatus::Success.raw(),
+                        // Bit 7: the schedule is enabled.
+                        s.days | 0x80,
+                        s.start_hour,
+                        s.start_minute,
+                        s.end_hour,
+                        s.end_minute,
+                    ],
+                ),
+            }
+        }
+        CMD_CLEAR_WEEK_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id)) = (r.u8(), r.u16_le()) else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let ok = usize::from(sid) < MAX_WEEK_DAY_SCHEDULES
+                && user_index(c, id)
+                    .and_then(|i| state(c).and_then(|s| s.users.get_mut(i)))
+                    .and_then(|u| u.week_day.get_mut(usize::from(sid)))
+                    .map(|slot| *slot = None)
+                    .is_some();
+            Outcome::reply(CMD_CLEAR_WEEK_DAY_SCHEDULE_RESPONSE, &[u8::from(!ok)])
+        }
+        CMD_SET_YEAR_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id), Ok(start), Ok(end)) =
+                (r.u8(), r.u16_le(), r.u32_le(), r.u32_le())
+            else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let valid = usize::from(sid) < MAX_YEAR_DAY_SCHEDULES && end > start;
+            let Some(i) = user_index(c, id).filter(|_| valid) else {
+                return Outcome::reply(CMD_SET_YEAR_DAY_SCHEDULE_RESPONSE, &[1]);
+            };
+            let Some(u) = state(c).and_then(|s| s.users.get_mut(i)) else {
+                return Outcome::reply(CMD_SET_YEAR_DAY_SCHEDULE_RESPONSE, &[1]);
+            };
+            if let Some(slot) = u.year_day.get_mut(usize::from(sid)) {
+                *slot = Some(YearDaySchedule { start, end });
+            }
+            Outcome::reply(CMD_SET_YEAR_DAY_SCHEDULE_RESPONSE, &[0])
+        }
+        CMD_GET_YEAR_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id)) = (r.u8(), r.u16_le()) else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let [lo, hi] = id.to_le_bytes();
+            let in_range = usize::from(sid) < MAX_YEAR_DAY_SCHEDULES && user_index(c, id).is_some();
+            let entry = user_index(c, id)
+                .and_then(|i| users(c).get(i))
+                .and_then(|u| u.year_day.get(usize::from(sid)).copied().flatten());
+            let mut buf = [0u8; 12];
+            let mut w = Writer::new(&mut buf);
+            let _ = w.u8(sid);
+            let _ = w.u16_le(id);
+            match (in_range, entry) {
+                (false, _) => {
+                    let _ = w.u8(ZclStatus::InvalidField.raw());
+                }
+                (true, None) => {
+                    let _ = w.u8(ZclStatus::NotFound.raw());
+                }
+                (true, Some(s)) => {
+                    let _ = w.u8(ZclStatus::Success.raw());
+                    let _ = w.u32_le(s.start);
+                    let _ = w.u32_le(s.end);
+                }
+            }
+            let _ = (lo, hi);
+            let n = w.position();
+            Outcome::reply(
+                CMD_GET_YEAR_DAY_SCHEDULE_RESPONSE,
+                buf.get(..n).unwrap_or(&[]),
+            )
+        }
+        CMD_CLEAR_YEAR_DAY_SCHEDULE => {
+            let (Ok(sid), Ok(id)) = (r.u8(), r.u16_le()) else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let ok = usize::from(sid) < MAX_YEAR_DAY_SCHEDULES
+                && user_index(c, id)
+                    .and_then(|i| state(c).and_then(|s| s.users.get_mut(i)))
+                    .and_then(|u| u.year_day.get_mut(usize::from(sid)))
+                    .map(|slot| *slot = None)
+                    .is_some();
+            Outcome::reply(CMD_CLEAR_YEAR_DAY_SCHEDULE_RESPONSE, &[u8::from(!ok)])
+        }
+        CMD_SET_HOLIDAY_SCHEDULE => {
+            let (Ok(hid), Ok(start), Ok(end), Ok(mode)) = (r.u8(), r.u32_le(), r.u32_le(), r.u8())
+            else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let supported = c.u16(SUPPORTED_OPERATING_MODES.id).unwrap_or(1);
+            let valid = usize::from(hid) < MAX_HOLIDAY_SCHEDULES
+                && end > start
+                && mode <= operating_mode::PASSAGE
+                && supported & (1 << mode) != 0;
+            let Some(slot) = state(c)
+                .filter(|_| valid)
+                .and_then(|s| s.holidays.get_mut(usize::from(hid)))
+            else {
+                return Outcome::reply(CMD_SET_HOLIDAY_SCHEDULE_RESPONSE, &[1]);
+            };
+            *slot = Some(HolidaySchedule { start, end, mode });
+            if let Some(s) = state(c) {
+                s.holiday_poll = Some(now);
+            }
+            Outcome::reply(CMD_SET_HOLIDAY_SCHEDULE_RESPONSE, &[0])
+        }
+        CMD_GET_HOLIDAY_SCHEDULE => {
+            let Ok(hid) = r.u8() else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let entry = state_ref(c).and_then(|s| s.holidays.get(usize::from(hid)).copied());
+            let mut buf = [0u8; 12];
+            let mut w = Writer::new(&mut buf);
+            let _ = w.u8(hid);
+            match entry {
+                None => {
+                    let _ = w.u8(ZclStatus::InvalidField.raw());
+                }
+                Some(None) => {
+                    let _ = w.u8(ZclStatus::NotFound.raw());
+                }
+                Some(Some(h)) => {
+                    let _ = w.u8(ZclStatus::Success.raw());
+                    let _ = w.u32_le(h.start);
+                    let _ = w.u32_le(h.end);
+                    let _ = w.u8(h.mode);
+                }
+            }
+            let n = w.position();
+            Outcome::reply(
+                CMD_GET_HOLIDAY_SCHEDULE_RESPONSE,
+                buf.get(..n).unwrap_or(&[]),
+            )
+        }
+        CMD_CLEAR_HOLIDAY_SCHEDULE => {
+            let Ok(hid) = r.u8() else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let ok = state(c)
+                .and_then(|s| s.holidays.get_mut(usize::from(hid)))
+                .map(|slot| *slot = None)
+                .is_some();
+            if let Some(s) = state(c) {
+                s.holiday_poll = Some(now);
+            }
+            Outcome::reply(CMD_CLEAR_HOLIDAY_SCHEDULE_RESPONSE, &[u8::from(!ok)])
+        }
+        CMD_SET_RFID_CODE => {
+            let (Ok(id), Ok(status), Ok(kind), Ok(code)) =
+                (r.u16_le(), r.u8(), r.u8(), read_pin(&mut r))
+            else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let min = usize::from(
+                c.u8(MIN_RFID_CODE_LENGTH.id)
+                    .unwrap_or(DEFAULT_MIN_RFID_LENGTH),
+            );
+            let max = usize::from(c.u8(MAX_RFID_CODE_LENGTH.id).unwrap_or(20)).min(MAX_RFID_LENGTH);
+            let valid_status = matches!(
+                status,
+                user_status::OCCUPIED_ENABLED | user_status::OCCUPIED_DISABLED
+            );
+            let Some(i) = user_index(c, id) else {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::GENERAL_FAILURE],
+                );
+            };
+            if !valid_status || kind > user_type::NON_ACCESS || !(min..=max).contains(&code.len()) {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::GENERAL_FAILURE],
+                );
+            }
+            let Some(s) = state(c) else {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::GENERAL_FAILURE],
+                );
+            };
+            if s.users
+                .iter()
+                .enumerate()
+                .any(|(j, u)| j != i && u.occupied() && u.rfid.matches(code))
+            {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::DUPLICATE_CODE],
+                );
+            }
+            let Some(rfid) = Rfid::new(code) else {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::GENERAL_FAILURE],
+                );
+            };
+            let Some(u) = s.users.get_mut(i) else {
+                return Outcome::reply(
+                    CMD_SET_RFID_CODE_RESPONSE,
+                    &[set_pin_status::GENERAL_FAILURE],
+                );
+            };
+            u.status = status;
+            u.kind = kind;
+            u.rfid = rfid;
+            let user = u.clone();
+            let mut o = Outcome::reply(CMD_SET_RFID_CODE_RESPONSE, &[set_pin_status::SUCCESS]);
+            o.notify = programming_event(
+                c,
+                source::RF,
+                programming_event::RFID_ADDED,
+                &user,
+                id,
+                local_time,
+            );
+            o
+        }
+        CMD_GET_RFID_CODE => {
+            let Ok(id) = r.u16_le() else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let Some(i) = user_index(c, id) else {
+                return Outcome::default_response(ZclStatus::InvalidField);
+            };
+            let user = users(c).get(i).cloned().unwrap_or_default();
+            let mut buf = [0u8; 32];
+            let mut w = Writer::new(&mut buf);
+            let _ = w.u16_le(id);
+            if user.occupied() && !user.rfid.is_empty() {
+                let _ = w.u8(user.status);
+                let _ = w.u8(user.kind);
+                let _ = write_pin(c, &mut w, user.rfid.as_bytes());
+            } else {
+                let _ = w.u8(user_status::AVAILABLE);
+                let _ = w.u8(user_type::NOT_SUPPORTED);
+                let _ = w.u8(0);
+            }
+            let n = w.position();
+            Outcome::reply(CMD_GET_RFID_CODE_RESPONSE, buf.get(..n).unwrap_or(&[]))
+        }
+        CMD_CLEAR_RFID_CODE => {
+            let Ok(id) = r.u16_le() else {
+                return Outcome::default_response(ZclStatus::MalformedCommand);
+            };
+            let Some(u) = user_index(c, id).and_then(|i| state(c).and_then(|s| s.users.get_mut(i)))
+            else {
+                return Outcome::reply(CMD_CLEAR_RFID_CODE_RESPONSE, &[1]);
+            };
+            let had = !u.rfid.is_empty();
+            u.rfid = Rfid::default();
+            // §7.3.2.15.26: without a PIN the user returns to defaults.
+            if u.pin.is_empty() {
+                *u = User::default();
+            }
+            let user = u.clone();
+            let mut o = Outcome::reply(CMD_CLEAR_RFID_CODE_RESPONSE, &[0]);
+            if had {
+                o.notify = programming_event(
+                    c,
+                    source::RF,
+                    programming_event::RFID_DELETED,
+                    &user,
+                    id,
+                    local_time,
+                );
+            }
+            o
+        }
+        CMD_CLEAR_ALL_RFID_CODES => {
+            if let Some(s) = state(c) {
+                for u in s.users.iter_mut() {
+                    u.rfid = Rfid::default();
+                    if u.pin.is_empty() {
+                        *u = User::default();
+                    }
+                }
+            }
+            Outcome::reply(CMD_CLEAR_ALL_RFID_CODES_RESPONSE, &[0])
         }
         CMD_SET_PIN_CODE => {
             let (Ok(id), Ok(status), Ok(kind), Ok(pin)) =
@@ -1082,10 +1789,14 @@ pub fn handle<const A: usize>(
                 );
             };
             let existed = s.users.get(i).is_some_and(User::occupied);
+            // A user keeps its RFID code and schedules across a PIN
+            // change (§7.3.2.5: the schedule and type are set around it).
+            let previous = s.users.get(i).cloned().unwrap_or_default();
             let user = User {
                 status,
                 kind,
                 pin: code,
+                ..previous
             };
             if let Some(slot) = s.users.get_mut(i) {
                 *slot = user.clone();
@@ -1132,9 +1843,19 @@ pub fn handle<const A: usize>(
             let Some(s) = state(c) else {
                 return Outcome::reply(CMD_CLEAR_PIN_CODE_RESPONSE, &[1]);
             };
-            let removed = s.users.get_mut(i).map(core::mem::take).unwrap_or_default();
+            // §7.3.2.15.9: a user keeping an RFID code stays; otherwise
+            // status, type and schedules return to their defaults.
+            let removed = match s.users.get_mut(i) {
+                Some(u) if !u.rfid.is_empty() => {
+                    let before = u.clone();
+                    u.pin = Pin::default();
+                    before
+                }
+                Some(u) => core::mem::take(u),
+                None => User::default(),
+            };
             let mut o = Outcome::reply(CMD_CLEAR_PIN_CODE_RESPONSE, &[0]);
-            if removed.occupied() {
+            if removed.occupied() && !removed.pin.is_empty() {
                 o.notify = programming_event(
                     c,
                     source::RF,
@@ -1149,7 +1870,10 @@ pub fn handle<const A: usize>(
         CMD_CLEAR_ALL_PIN_CODES => {
             if let Some(s) = state(c) {
                 for u in s.users.iter_mut() {
-                    *u = User::default();
+                    u.pin = Pin::default();
+                    if u.rfid.is_empty() {
+                        *u = User::default();
+                    }
                 }
             }
             Outcome::reply(CMD_CLEAR_ALL_PIN_CODES_RESPONSE, &[0])
@@ -1212,8 +1936,120 @@ pub fn handle<const A: usize>(
         }
         _ => Outcome::default_response(ZclStatus::UnsupportedClusterCommand),
     };
+    log_outcome(c, &out, local_time);
     refresh_tick(c);
     out
+}
+
+/// Appends a record to the event log when `EnableLogging` is set
+/// (§7.3.2.16.5); the oldest record makes room.
+pub fn log_event<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    event_type: u8,
+    source: u8,
+    code: u8,
+    user: u16,
+    pin: &[u8],
+    local_time: u32,
+) {
+    if !c.bool(ENABLE_LOGGING.id) {
+        return;
+    }
+    let Some(s) = state(c) else {
+        return;
+    };
+    if s.log.is_full() {
+        s.log.remove(0);
+    }
+    s.next_log_id = s.next_log_id.wrapping_add(1).max(1);
+    let record = LogRecord {
+        id: s.next_log_id,
+        time: local_time,
+        event_type,
+        source,
+        code,
+        user,
+        pin: Pin::new(pin).unwrap_or_default(),
+    };
+    let _ = s.log.push(record);
+}
+
+/// The event log, oldest first.
+pub fn log_records<const A: usize>(c: &ClusterInstance<A>) -> &[LogRecord] {
+    state_ref(c).map_or(&[], |s| s.log.as_slice())
+}
+
+/// Logs the events an outcome carries (its notification's source and
+/// code, then its alarm).
+fn log_outcome<const A: usize>(c: &mut ClusterInstance<A>, out: &Outcome, local_time: u32) {
+    if let Some(n) = &out.notify {
+        let event_type = if n.command == CMD_PROGRAMMING_EVENT_NOTIFICATION {
+            log_event::PROGRAMMING
+        } else {
+            log_event::OPERATION
+        };
+        if let (Some(src), Some(code)) = (n.payload.first(), n.payload.get(1)) {
+            let user = match (n.payload.get(2), n.payload.get(3)) {
+                (Some(lo), Some(hi)) => u16::from_le_bytes([*lo, *hi]),
+                _ => NO_USER,
+            };
+            log_event(c, event_type, *src, *code, user, &[], local_time);
+        }
+    }
+    if let Some(alarm) = out.alarm {
+        log_event(
+            c,
+            log_event::ALARM,
+            source::INDETERMINATE,
+            alarm,
+            NO_USER,
+            &[],
+            local_time,
+        );
+    }
+}
+
+/// The holiday schedule covering `local_time`, if any.
+fn active_holiday(s: &State, local_time: u32) -> Option<HolidaySchedule> {
+    if local_time == NO_TIME {
+        return None;
+    }
+    s.holidays
+        .iter()
+        .flatten()
+        .find(|h| (h.start..h.end).contains(&local_time))
+        .copied()
+}
+
+/// Applies or lifts the holiday operating mode (§7.3.2.15.19) against
+/// the clock; returns whether `OperatingMode` changed.
+fn service_holidays<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    now: Instant,
+    local_time: u32,
+) -> bool {
+    let current = c.u8(OPERATING_MODE.id).unwrap_or(operating_mode::NORMAL);
+    let Some(s) = state(c) else {
+        return false;
+    };
+    let any = s.holidays.iter().any(Option::is_some);
+    s.holiday_poll = any.then(|| now.saturating_add(HOLIDAY_POLL));
+    let target = match (active_holiday(s, local_time), s.holiday_restore) {
+        (Some(h), None) => {
+            s.holiday_restore = Some(current);
+            Some(h.mode)
+        }
+        (Some(h), Some(_)) => Some(h.mode),
+        (None, Some(previous)) => {
+            s.holiday_restore = None;
+            Some(previous)
+        }
+        (None, None) => None,
+    };
+    match target {
+        Some(mode) if mode != current => c.set(OPERATING_MODE.id, &Value::Enum8(mode)),
+        _ => false,
+    }
 }
 
 /// Services the timers at `now` (the automatic relock, a
@@ -1226,6 +2062,9 @@ pub fn tick<const A: usize>(
     local_time: u32,
 ) -> Option<(Action, Option<Frame>)> {
     let mut result = None;
+    if state_ref(c).is_some_and(|s| s.holiday_poll.is_some_and(|t| now.has_reached(t))) {
+        service_holidays(c, now, local_time);
+    }
     if let Some(s) = state(c) {
         if s.lockout_until.is_some_and(|t| now.has_reached(t)) {
             s.lockout_until = None;
@@ -1714,11 +2553,349 @@ mod tests {
         set_pin(&mut c, 3, user_status::OCCUPIED_ENABLED, 0, b"9999");
         handle(&mut c, CMD_CLEAR_ALL_PIN_CODES, &[], T0, NO_TIME);
         assert!(users(&c).iter().all(|u| !u.occupied()));
-        // Unsupported commands are refused as such.
+        // An unknown command is refused as such; an empty log is NOT_FOUND.
         assert_eq!(
-            handle(&mut c, CMD_GET_LOG_RECORD, &[0, 0], T0, NO_TIME).status,
+            handle(&mut c, CommandId(0x30), &[], T0, NO_TIME).status,
             ZclStatus::UnsupportedClusterCommand
         );
+        assert_eq!(
+            handle(&mut c, CMD_GET_LOG_RECORD, &[0, 0], T0, NO_TIME).status,
+            ZclStatus::NotFound
+        );
+    }
+
+    fn set_rfid(c: &mut ClusterInstance<36>, id: u16, status: u8, kind: u8, code: &[u8]) -> u8 {
+        let mut buf = [0u8; 32];
+        let n = encode_set_pin_code(id, status, kind, code, &mut buf).unwrap();
+        let o = handle(c, CMD_SET_RFID_CODE, &buf[..n], T0, NO_TIME);
+        let f = o.response.unwrap();
+        assert_eq!(f.command, CMD_SET_RFID_CODE_RESPONSE);
+        f.payload[0]
+    }
+
+    #[test]
+    fn rfid_codes_share_the_user_table() {
+        let mut c: ClusterInstance<36> = server(lock_type::DEAD_BOLT, 4, true).unwrap();
+        assert_eq!(c.u16(NUMBER_OF_RFID_USERS_SUPPORTED.id), Some(4));
+        // Too short, then accepted; a duplicate on another user is refused.
+        assert_eq!(
+            set_rfid(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"1234567"),
+            set_pin_status::GENERAL_FAILURE
+        );
+        assert_eq!(
+            set_rfid(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"CARD-0001"),
+            set_pin_status::SUCCESS
+        );
+        assert_eq!(
+            set_rfid(&mut c, 2, user_status::OCCUPIED_ENABLED, 0, b"CARD-0001"),
+            set_pin_status::DUPLICATE_CODE
+        );
+        assert_eq!(
+            set_rfid(&mut c, 9, user_status::OCCUPIED_ENABLED, 0, b"CARD-0009"),
+            set_pin_status::GENERAL_FAILURE
+        );
+        // The RFID code unlocks like a PIN would.
+        let o = operate(&mut c, CMD_UNLOCK_DOOR, b"CARD-0001", T0);
+        assert_eq!(o.action, Some((Action::Unlock, 1)));
+        // Get RFID Code masks the code unless SendPINOverTheAir.
+        let o = handle(&mut c, CMD_GET_RFID_CODE, &[1, 0], T0, NO_TIME);
+        let f = o.response.unwrap();
+        assert_eq!(f.command, CMD_GET_RFID_CODE_RESPONSE);
+        assert_eq!(&f.payload[..4], &[1, 0, user_status::OCCUPIED_ENABLED, 0]);
+        assert_eq!(f.payload[4], 9);
+        assert!(f.payload[5..].iter().all(|b| *b == 0xff));
+        let o = handle(&mut c, CMD_GET_RFID_CODE, &[3, 0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[3, 0, user_status::AVAILABLE, user_type::NOT_SUPPORTED, 0]
+        );
+        assert_eq!(
+            handle(&mut c, CMD_GET_RFID_CODE, &[9, 0], T0, NO_TIME).status,
+            ZclStatus::InvalidField
+        );
+        // A user with both codes keeps its status when one is cleared;
+        // clearing the last code frees the slot.
+        set_pin(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"4321");
+        let o = handle(&mut c, CMD_CLEAR_PIN_CODE, &[1, 0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        assert!(users(&c)[1].occupied());
+        assert!(users(&c)[1].pin.is_empty());
+        assert!(!users(&c)[1].rfid.is_empty());
+        let o = handle(&mut c, CMD_CLEAR_RFID_CODE, &[1, 0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        assert!(!users(&c)[1].occupied());
+        set_rfid(&mut c, 2, user_status::OCCUPIED_ENABLED, 0, b"CARD-0002");
+        set_rfid(&mut c, 3, user_status::OCCUPIED_DISABLED, 0, b"CARD-0003");
+        handle(&mut c, CMD_CLEAR_ALL_RFID_CODES, &[], T0, NO_TIME);
+        assert!(users(&c).iter().all(|u| !u.occupied()));
+    }
+
+    #[test]
+    fn schedules_gate_the_users_and_holidays_switch_the_mode() {
+        let mut c: ClusterInstance<36> = server(lock_type::DEAD_BOLT, 4, true).unwrap();
+        set_pin(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"1111");
+        // Week day schedule 0 for user 1: Monday to Friday, 08:00–17:30.
+        let weekdays = 0b0011_1110;
+        let o = handle(
+            &mut c,
+            CMD_SET_WEEK_DAY_SCHEDULE,
+            &[0, 1, 0, weekdays, 8, 0, 17, 30],
+            T0,
+            NO_TIME,
+        );
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        // An inverted window, a schedule identifier beyond the count and
+        // an unknown user all fail.
+        for bad in [
+            [0u8, 1, 0, weekdays, 17, 0, 8, 0],
+            [5, 1, 0, weekdays, 8, 0, 17, 30],
+            [0, 9, 0, weekdays, 8, 0, 17, 30],
+        ] {
+            let o = handle(&mut c, CMD_SET_WEEK_DAY_SCHEDULE, &bad, T0, NO_TIME);
+            assert_eq!(o.response.unwrap().payload.as_slice(), &[1]);
+        }
+        let o = handle(&mut c, CMD_GET_WEEK_DAY_SCHEDULE, &[0, 1, 0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[
+                0,
+                1,
+                0,
+                ZclStatus::Success.raw(),
+                weekdays | 0x80,
+                8,
+                0,
+                17,
+                30
+            ]
+        );
+        let o = handle(&mut c, CMD_GET_WEEK_DAY_SCHEDULE, &[1, 1, 0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[1, 1, 0, ZclStatus::NotFound.raw()]
+        );
+        let o = handle(&mut c, CMD_GET_WEEK_DAY_SCHEDULE, &[0, 9, 0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[0, 9, 0, ZclStatus::InvalidField.raw()]
+        );
+        // The user becomes a week day schedule user: 2000-01-03 (Monday)
+        // 09:00 opens, 20:00 and Sunday do not, and no clock refuses.
+        handle(
+            &mut c,
+            CMD_SET_USER_TYPE,
+            &[1, 0, user_type::WEEK_DAY_SCHEDULE],
+            T0,
+            NO_TIME,
+        );
+        let monday_0900 = 2 * 86_400 + 9 * 3_600;
+        let mut buf = [0u8; 16];
+        let n = encode_operation(b"1111", &mut buf).unwrap();
+        let o = handle(&mut c, CMD_UNLOCK_DOOR, &buf[..n], T0, monday_0900);
+        assert_eq!(o.action, Some((Action::Unlock, 1)));
+        let o = handle(
+            &mut c,
+            CMD_UNLOCK_DOOR,
+            &buf[..n],
+            T0,
+            monday_0900 + 11 * 3_600,
+        );
+        assert_eq!(o.action, None);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[ZclStatus::Failure.raw()]
+        );
+        let o = handle(&mut c, CMD_UNLOCK_DOOR, &buf[..n], T0, NO_TIME);
+        assert_eq!(o.action, None);
+        // Clearing the schedule leaves a schedule user without access.
+        let o = handle(&mut c, CMD_CLEAR_WEEK_DAY_SCHEDULE, &[0, 1, 0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        let o = handle(&mut c, CMD_UNLOCK_DOOR, &buf[..n], T0, monday_0900);
+        assert_eq!(o.action, None);
+        // Year day schedules: a window in local time.
+        let o = handle(
+            &mut c,
+            CMD_SET_YEAR_DAY_SCHEDULE,
+            &[0, 1, 0, 0x10, 0x27, 0, 0, 0x20, 0x4e, 0, 0],
+            T0,
+            NO_TIME,
+        );
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        let o = handle(
+            &mut c,
+            CMD_SET_YEAR_DAY_SCHEDULE,
+            &[1, 1, 0, 0x20, 0x4e, 0, 0, 0x10, 0x27, 0, 0],
+            T0,
+            NO_TIME,
+        );
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[1]);
+        let o = handle(&mut c, CMD_GET_YEAR_DAY_SCHEDULE, &[0, 1, 0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[
+                0,
+                1,
+                0,
+                ZclStatus::Success.raw(),
+                0x10,
+                0x27,
+                0,
+                0,
+                0x20,
+                0x4e,
+                0,
+                0
+            ]
+        );
+        handle(
+            &mut c,
+            CMD_SET_USER_TYPE,
+            &[1, 0, user_type::YEAR_DAY_SCHEDULE],
+            T0,
+            NO_TIME,
+        );
+        let o = handle(&mut c, CMD_UNLOCK_DOOR, &buf[..n], T0, 15_000);
+        assert_eq!(o.action, Some((Action::Unlock, 1)));
+        let o = handle(&mut c, CMD_UNLOCK_DOOR, &buf[..n], T0, 25_000);
+        assert_eq!(o.action, None);
+        let o = handle(&mut c, CMD_CLEAR_YEAR_DAY_SCHEDULE, &[0, 1, 0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        // Holidays: Vacation mode from 100 000 to 200 000 local time.
+        let o = handle(
+            &mut c,
+            CMD_SET_HOLIDAY_SCHEDULE,
+            &[
+                0,
+                0xa0,
+                0x86,
+                1,
+                0,
+                0x40,
+                0x0d,
+                3,
+                0,
+                operating_mode::VACATION,
+            ],
+            T0,
+            NO_TIME,
+        );
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+        let o = handle(
+            &mut c,
+            CMD_SET_HOLIDAY_SCHEDULE,
+            &[7, 1, 0, 0, 0, 2, 0, 0, 0, 0],
+            T0,
+            NO_TIME,
+        );
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[1]);
+        let o = handle(&mut c, CMD_GET_HOLIDAY_SCHEDULE, &[0], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[
+                0,
+                ZclStatus::Success.raw(),
+                0xa0,
+                0x86,
+                1,
+                0,
+                0x40,
+                0x0d,
+                3,
+                0,
+                operating_mode::VACATION
+            ]
+        );
+        let o = handle(&mut c, CMD_GET_HOLIDAY_SCHEDULE, &[1], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[1, ZclStatus::NotFound.raw()]
+        );
+        let o = handle(&mut c, CMD_GET_HOLIDAY_SCHEDULE, &[7], T0, NO_TIME);
+        assert_eq!(
+            o.response.unwrap().payload.as_slice(),
+            &[7, ZclStatus::InvalidField.raw()]
+        );
+        // The tick switches the operating mode in and out of the holiday.
+        assert!(c.tick.is_some());
+        let _ = tick(&mut c, T0 + Duration::from_secs(1), 150_000);
+        assert_eq!(c.u8(OPERATING_MODE.id), Some(operating_mode::VACATION));
+        let _ = tick(&mut c, T0 + Duration::from_secs(70), 250_000);
+        assert_eq!(c.u8(OPERATING_MODE.id), Some(operating_mode::NORMAL));
+        let o = handle(&mut c, CMD_CLEAR_HOLIDAY_SCHEDULE, &[0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
+    }
+
+    #[test]
+    fn the_log_records_events_when_enabled() {
+        let mut c: ClusterInstance<36> = server(lock_type::DEAD_BOLT, 2, true).unwrap();
+        c.set(RF_OPERATION_EVENT_MASK.id, &bits16(0xffff));
+        c.set(RF_PROGRAMMING_EVENT_MASK.id, &bits16(0xffff));
+        set_pin(&mut c, 0, user_status::OCCUPIED_ENABLED, 0, b"2468");
+        assert!(log_records(&c).is_empty());
+        c.set_bool(ENABLE_LOGGING.id, true);
+        set_pin(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"1357");
+        let _ = operate(&mut c, CMD_UNLOCK_DOOR, b"2468", T0);
+        let _ = operate(&mut c, CMD_LOCK_DOOR, b"0000", T0);
+        let log = log_records(&c);
+        assert_eq!(log.len(), 3);
+        assert_eq!(
+            (log[0].id, log[0].event_type, log[0].code, log[0].user),
+            (1, log_event::PROGRAMMING, programming_event::PIN_ADDED, 1)
+        );
+        assert_eq!(
+            (
+                log[1].id,
+                log[1].event_type,
+                log[1].source,
+                log[1].code,
+                log[1].user,
+                log[1].time
+            ),
+            (
+                2,
+                log_event::OPERATION,
+                source::RF,
+                operation_event::UNLOCK,
+                0,
+                1234
+            )
+        );
+        assert_eq!(
+            (log[2].id, log[2].code, log[2].user),
+            (3, operation_event::LOCK_FAILURE_INVALID_PIN, NO_USER)
+        );
+        // Get Log Record: by identifier, 0 or unknown for the latest.
+        let o = handle(&mut c, CMD_GET_LOG_RECORD, &[2, 0], T0, NO_TIME);
+        let f = o.response.unwrap();
+        assert_eq!(f.command, CMD_GET_LOG_RECORD_RESPONSE);
+        assert_eq!(
+            f.payload.as_slice(),
+            &[
+                2,
+                0,
+                0xd2,
+                4,
+                0,
+                0,
+                log_event::OPERATION,
+                source::RF,
+                operation_event::UNLOCK,
+                0,
+                0,
+                0
+            ]
+        );
+        let o = handle(&mut c, CMD_GET_LOG_RECORD, &[0, 0], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload[0], 3);
+        let o = handle(&mut c, CMD_GET_LOG_RECORD, &[0x34, 0x12], T0, NO_TIME);
+        assert_eq!(o.response.unwrap().payload[0], 3);
+        // The log is a FIFO of MAX_LOG_RECORDS entries.
+        for _ in 0..MAX_LOG_RECORDS {
+            let _ = operate(&mut c, CMD_LOCK_DOOR, b"0000", T0);
+        }
+        let log = log_records(&c);
+        assert_eq!(log.len(), MAX_LOG_RECORDS);
+        assert_eq!(log[0].id, 4);
     }
 
     #[test]

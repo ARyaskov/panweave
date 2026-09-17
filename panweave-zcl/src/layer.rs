@@ -1339,6 +1339,14 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             return;
         };
         let endpoint = origin.endpoint;
+        // §7.3.2.13.5: with SecurityLevel = APS, cluster transactions
+        // must arrive under APS security.
+        if c.u8(door_lock::SECURITY_LEVEL.id) == Some(door_lock::security_level::APS)
+            && !origin.aps_secured
+        {
+            let _ = self.default_response(origin, ZclStatus::NotAuthorized);
+            return;
+        }
         let outcome = door_lock::handle(c, cmd, payload, now, local_time);
         if let Some((action, user)) = outcome.action {
             self.push_event(ZclEvent::DoorLock {

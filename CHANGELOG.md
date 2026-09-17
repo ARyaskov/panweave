@@ -176,6 +176,16 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Door Lock completion (ZCL8 §7.3): week day, year day and holiday
+  schedules (Set / Get / Clear with their responses; schedule users
+  gated at RF operations against the endpoint clock with the
+  invalid-schedule events, holidays switching `OperatingMode` from the
+  dispatcher tick), RFID codes sharing the user table (Set / Get /
+  Clear / Clear All with the RFID programming events; a user keeps its
+  other code when one is cleared), the event log with Get Log Record /
+  Response under `EnableLogging`, the `SecurityLevel` APS policy
+  enforced by the dispatcher (NOT_AUTHORIZED without APS security) and
+  the counts / lengths / logging / security attributes instantiated.
 * Level Control for Lighting and Pulse Width Modulation (ZCL8 §3.19,
   §3.20, §3.10.2.3.5): `level::lighting_server` (1…254),
   `enable_frequency` with `CurrentFrequency` / `MinFrequency` /
