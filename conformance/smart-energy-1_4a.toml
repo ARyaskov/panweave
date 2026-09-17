@@ -83,8 +83,8 @@ summary = "Demand Response and Load Control cluster"
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::clusters::drlc"
-tests = ["codecs_round_trip", "scheduler_accepts_supersedes_and_reports"]
-notes = "Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, and a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out and the cancellation rules of D.2.2.3.2. Not done: the server-side event store answering Get Scheduled Events, the ECDSA signature, the random 0-5 s report delay and binding the scheduler to a ZCL endpoint (TODO(PW-SE-DRLC-SERVER))."
+tests = ["codecs_round_trip", "scheduler_accepts_supersedes_and_reports", "annex_e_overlap_rules", "server_store_answers_get_scheduled_events"]
+notes = "Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out, the cancellation rules of D.2.2.3.2 and the Annex E overlap rules, the 0–5 s report delay draw of D.2.3.3.1.2, and a server-side EventStore answering Get Scheduled Events per D.2.3.3.2.3 (completed events excluded, earliest end time and minimum issuer event id filters, id order or start-time order, count limit, per-client device class and enrollment group). The ECDSA signature (host's, ADR-0012) and binding the scheduler / store to a ZCL endpoint dispatcher are not done (TODO(PW-SE-DRLC-DISPATCH))."
 [[requirement]]
 id = "PW-SE-CL-002"
 section = "Annex D.3"
@@ -110,8 +110,8 @@ summary = "Messaging cluster"
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::clusters::messaging"
-tests = ["codecs_and_display"]
-notes = "Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), and a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules. The server-side message store and binding to a ZCL endpoint are not done (TODO(PW-SE-MESSAGING-SERVER))."
+tests = ["codecs_and_display", "server_store_answers_get_last_message_and_cancellation"]
+notes = "Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules, and a server-side Server holding the current message for Get Last Message, gathering Message Confirmations per client, and keeping a pending Cancel All Messages for GetMessageCancellation until its implementation time. Binding to a ZCL endpoint dispatcher is not done (TODO(PW-SE-MESSAGING-DISPATCH))."
 [[requirement]]
 id = "PW-SE-CL-005"
 section = "Annex D.6"

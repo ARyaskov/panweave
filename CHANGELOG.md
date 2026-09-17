@@ -329,6 +329,14 @@ Keep a Changelog; versions follow SemVer.
   the §5.3 stack profile values (join scans, rejoin intervals, poll
   rate, APS inter-frame delay, maximum incoming transfer size,
   concentrator radius) applied to a stack configuration.
+* `panweave-smart-energy::clusters::drlc::EventStore`: the ESI's store
+  of issued Load Control Events answering Get Scheduled Events with the
+  D.2.3.3.2.3 filters and orderings; `report_delay_ms` draws the 0–5 s
+  Report Event Status delay.
+* `panweave-smart-energy::clusters::messaging::Server`: the ESI's
+  message store answering Get Last Message, gathering Message
+  Confirmations and holding a pending Cancel All Messages for
+  GetMessageCancellation; `ImplementationTime` codec.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

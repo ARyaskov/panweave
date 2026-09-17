@@ -457,6 +457,183 @@ impl Display {
     }
 }
 
+/// Cancel All Messages / GetMessageCancellation payload (Figures D-95
+/// and D-97): an implementation time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ImplementationTime {
+    /// UTC seconds (0: now).
+    pub time: u32,
+}
+
+impl ImplementationTime {
+    /// Parses the payload.
+    pub fn parse(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(bytes);
+        Ok(ImplementationTime { time: r.u32_le()? })
+    }
+
+    /// Encodes the payload.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u32_le(self.time)
+    }
+}
+
+/// A message the server holds.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Published {
+    /// Message ID.
+    pub message_id: u32,
+    /// Message Control.
+    pub message_control: u8,
+    /// Extended Message Control.
+    pub extended_control: u8,
+    /// Start time (UTC seconds, resolved).
+    pub start_time: u32,
+    /// Duration in minutes (0xFFFF: until changed).
+    pub duration_minutes: u16,
+    /// Text.
+    pub message: Vec<u8, MAX_MESSAGE_LEN>,
+    /// Protected (PIN) message.
+    pub protected: bool,
+    /// Confirmations received (client short address, time).
+    pub confirmations: Vec<(u16, u32), 8>,
+}
+
+impl Published {
+    /// The Display Message payload of this message.
+    pub fn display(&self) -> DisplayMessage<'_> {
+        DisplayMessage {
+            message_id: self.message_id,
+            message_control: self.message_control,
+            start_time: self.start_time,
+            duration_minutes: self.duration_minutes,
+            message: &self.message,
+            extended_control: Some(self.extended_control),
+        }
+    }
+
+    /// Whether the message is still current at `now`.
+    pub fn is_current(&self, now: u32) -> bool {
+        self.duration_minutes == DURATION_UNTIL_CHANGED
+            || now
+                < self
+                    .start_time
+                    .saturating_add(u32::from(self.duration_minutes) * 60)
+    }
+}
+
+/// Server-side (ESI) message store (D.5.2): the single current message
+/// answering Get Last Message, the confirmations gathered for it and a
+/// pending Cancel All Messages answering GetMessageCancellation.
+#[derive(Clone, Debug, Default)]
+pub struct Server {
+    current: Option<Published>,
+    cancel_all: Option<u32>,
+}
+
+impl Server {
+    /// No message.
+    pub const fn new() -> Self {
+        Server {
+            current: None,
+            cancel_all: None,
+        }
+    }
+
+    /// Publishes a message (the Display Message the ESI sends to its
+    /// bound clients); a start time of 0 is resolved to `now`. Replaces
+    /// the previous message and clears a pending cancel-all.
+    pub fn publish(&mut self, m: &DisplayMessage<'_>, protected: bool, now: u32) -> bool {
+        let Ok(message) = Vec::from_slice(m.message) else {
+            return false;
+        };
+        self.current = Some(Published {
+            message_id: m.message_id,
+            message_control: m.message_control,
+            extended_control: m.extended_control.unwrap_or(0),
+            start_time: if m.start_time == 0 { now } else { m.start_time },
+            duration_minutes: m.duration_minutes,
+            message,
+            protected,
+            confirmations: Vec::new(),
+        });
+        self.cancel_all = None;
+        true
+    }
+
+    /// Cancels the current message by id (Cancel Message).
+    pub fn cancel(&mut self, message_id: u32) -> bool {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|m| m.message_id == message_id)
+        {
+            self.current = None;
+            return true;
+        }
+        false
+    }
+
+    /// Records a Cancel All Messages for `implementation_time` (0: now,
+    /// dropping the current message at once).
+    pub fn cancel_all(&mut self, implementation_time: u32, now: u32) {
+        if implementation_time == 0 || implementation_time <= now {
+            self.current = None;
+            self.cancel_all = None;
+        } else {
+            self.cancel_all = Some(implementation_time);
+        }
+    }
+
+    /// Advances time: a due cancel-all removes the message, an expired
+    /// message is dropped.
+    pub fn poll(&mut self, now: u32) {
+        if self.cancel_all.is_some_and(|t| now >= t) {
+            self.current = None;
+            self.cancel_all = None;
+        }
+        if self.current.as_ref().is_some_and(|m| !m.is_current(now)) {
+            self.current = None;
+        }
+    }
+
+    /// Answers Get Last Message (D.5.3.3.1.1): the current message to
+    /// send as Display (Protected) Message, or `None` for NOT_FOUND.
+    pub fn last_message(&self, now: u32) -> Option<&Published> {
+        self.current.as_ref().filter(|m| m.is_current(now))
+    }
+
+    /// Records a Message Confirmation from `client` (D.5.3.3.2); `false`
+    /// when it names another message.
+    pub fn on_confirmation(&mut self, client: u16, c: &MessageConfirmation<'_>) -> bool {
+        let Some(m) = self.current.as_mut() else {
+            return false;
+        };
+        if m.message_id != c.message_id {
+            return false;
+        }
+        if let Some(e) = m.confirmations.iter_mut().find(|(a, _)| *a == client) {
+            e.1 = c.confirmation_time;
+        } else if m.confirmations.is_full() {
+            m.confirmations.remove(0);
+            let _ = m.confirmations.push((client, c.confirmation_time));
+        } else {
+            let _ = m.confirmations.push((client, c.confirmation_time));
+        }
+        true
+    }
+
+    /// Answers GetMessageCancellation (D.5.3.3.3): the pending Cancel
+    /// All Messages with an implementation time at or after
+    /// `earliest`, or `None` for NOT_FOUND.
+    pub fn message_cancellation(&self, earliest: u32) -> Option<ImplementationTime> {
+        self.cancel_all
+            .filter(|t| *t >= earliest)
+            .map(|time| ImplementationTime { time })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +721,77 @@ mod tests {
         assert_eq!(d.on_display(&m2, false, 5000), Outcome::Replaced);
         assert!(!d.on_cancel_all(6000, 5500));
         assert!(d.on_cancel_all(6000, 6000));
+    }
+}
+
+#[cfg(test)]
+mod server_tests {
+    use super::*;
+
+    fn msg(id: u32, start: u32, minutes: u16) -> DisplayMessage<'static> {
+        DisplayMessage {
+            message_id: id,
+            message_control: message_control::CONFIRMATION_REQUIRED,
+            start_time: start,
+            duration_minutes: minutes,
+            message: b"Hello",
+            extended_control: None,
+        }
+    }
+
+    #[test]
+    fn server_store_answers_get_last_message_and_cancellation() {
+        let mut s = Server::new();
+        let now = 5000;
+        assert!(s.last_message(now).is_none());
+        assert!(s.publish(&msg(1, 0, 10), false, now));
+        let m = s.last_message(now).unwrap();
+        assert_eq!((m.message_id, m.start_time), (1, now));
+        assert_eq!(m.display().message, b"Hello");
+        // Confirmation from two clients, the second twice.
+        let c = MessageConfirmation {
+            message_id: 1,
+            confirmation_time: now + 5,
+            control: 0,
+            response: &[],
+        };
+        assert!(s.on_confirmation(0x1234, &c));
+        assert!(s.on_confirmation(0x5678, &c));
+        assert!(s.on_confirmation(
+            0x5678,
+            &MessageConfirmation {
+                confirmation_time: now + 9,
+                ..c
+            }
+        ));
+        assert!(!s.on_confirmation(0x9999, &MessageConfirmation { message_id: 2, ..c }));
+        let conf = &s.last_message(now).unwrap().confirmations;
+        assert_eq!(conf.as_slice(), &[(0x1234, now + 5), (0x5678, now + 9)]);
+        // Expiry after ten minutes.
+        s.poll(now + 600);
+        assert!(s.last_message(now + 600).is_none());
+        // Cancel all at a later time: pending until due, reported to
+        // GetMessageCancellation, then applied.
+        assert!(s.publish(&msg(2, 0, DURATION_UNTIL_CHANGED), true, now));
+        s.cancel_all(now + 100, now);
+        assert!(s.last_message(now).is_some());
+        assert_eq!(
+            s.message_cancellation(now),
+            Some(ImplementationTime { time: now + 100 })
+        );
+        assert_eq!(s.message_cancellation(now + 101), None);
+        s.poll(now + 100);
+        assert!(s.last_message(now + 100).is_none());
+        assert_eq!(s.message_cancellation(0), None);
+        // Cancel by id; immediate cancel-all.
+        s.publish(&msg(3, 0, DURATION_UNTIL_CHANGED), false, now);
+        assert!(!s.cancel(4) && s.cancel(3));
+        s.publish(&msg(5, 0, DURATION_UNTIL_CHANGED), false, now);
+        s.cancel_all(0, now);
+        assert!(s.last_message(now).is_none());
+        let mut buf = [0u8; 4];
+        let mut w = Writer::new(&mut buf);
+        ImplementationTime { time: 7 }.encode(&mut w).unwrap();
+        assert_eq!(ImplementationTime::parse(&buf).unwrap().time, 7);
     }
 }

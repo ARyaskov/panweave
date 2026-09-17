@@ -899,6 +899,122 @@ const fn overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
     a_start < b_end && b_start < a_end
 }
 
+/// Longest random delay before a Report Event Status is sent
+/// (D.2.3.3.1.2: 0–5 s, against storms).
+pub const REPORT_DELAY_MAX_MS: u32 = 5000;
+
+/// The random delay before a Report Event Status transmission
+/// (D.2.3.3.1.2), from `random` in `0..=REPORT_DELAY_MAX_MS`.
+pub fn report_delay_ms(mut random: impl FnMut(u32) -> u32) -> u32 {
+    random(REPORT_DELAY_MAX_MS + 1).min(REPORT_DELAY_MAX_MS)
+}
+
+/// Server-side (ESI) store of the Load Control Events it issued
+/// (D.2.2.3), answering Get Scheduled Events (D.2.3.3.2.3) and keeping
+/// the last Report Event Status of every event and client.
+#[derive(Clone, Debug)]
+pub struct EventStore<const N: usize> {
+    events: Vec<LoadControlEvent, N>,
+}
+
+impl<const N: usize> Default for EventStore<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> EventStore<N> {
+    /// An empty store.
+    pub const fn new() -> Self {
+        EventStore { events: Vec::new() }
+    }
+
+    /// Issues (or re-issues with the same Issuer Event ID) an event;
+    /// `false` when the store is full. A start time of 0 is replaced by
+    /// `now` so that later queries see the real period.
+    pub fn issue(&mut self, mut event: LoadControlEvent, now: u32) -> bool {
+        if event.start_time == 0 {
+            event.start_time = now;
+        }
+        if let Some(e) = self
+            .events
+            .iter_mut()
+            .find(|e| e.issuer_event_id == event.issuer_event_id)
+        {
+            *e = event;
+            return true;
+        }
+        self.events.push(event).is_ok()
+    }
+
+    /// Removes an event (a Cancel Load Control Event was sent).
+    pub fn cancel(&mut self, issuer_event_id: u32) -> bool {
+        let before = self.events.len();
+        self.events.retain(|e| e.issuer_event_id != issuer_event_id);
+        self.events.len() != before
+    }
+
+    /// Removes every event (Cancel All Load Control Events).
+    pub fn cancel_all(&mut self) {
+        self.events.clear();
+    }
+
+    /// Drops completed events.
+    pub fn expire(&mut self, now: u32) {
+        self.events.retain(|e| e.end_time() > now);
+    }
+
+    /// The events held.
+    pub fn events(&self) -> &[LoadControlEvent] {
+        &self.events
+    }
+
+    /// Answers a Get Scheduled Events at `now` for a client of `class`
+    /// and enrollment `group`: the matching events, in Issuer Event ID
+    /// order when a minimum id is given and in start-time order
+    /// otherwise, at most `number_of_events` (0: all). An empty list
+    /// means a NOT_FOUND Default Response.
+    pub fn scheduled(
+        &self,
+        req: &GetScheduledEvents,
+        now: u32,
+        class: u16,
+        group: u8,
+        out: &mut Vec<LoadControlEvent, N>,
+    ) {
+        let earliest_end = if req.earliest_end_time == 0 {
+            now
+        } else {
+            req.earliest_end_time
+        };
+        let by_id = req.minimum_issuer_event_id != u32::MAX;
+        let mut matching: Vec<LoadControlEvent, N> = self
+            .events
+            .iter()
+            .filter(|e| {
+                e.end_time() > now
+                    && e.end_time() > earliest_end
+                    && (!by_id || e.issuer_event_id >= req.minimum_issuer_event_id)
+                    && e.addresses(class, group)
+            })
+            .copied()
+            .collect();
+        if by_id {
+            matching.sort_unstable_by_key(|e| e.issuer_event_id);
+        } else {
+            matching.sort_unstable_by_key(|e| (e.start_time, e.issuer_event_id));
+        }
+        let limit = if req.number_of_events == 0 {
+            usize::MAX
+        } else {
+            usize::from(req.number_of_events)
+        };
+        for e in matching.into_iter().take(limit) {
+            let _ = out.push(e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,6 +1092,72 @@ mod tests {
         let mut w = Writer::new(&mut buf);
         c.encode(&mut w).unwrap();
         assert_eq!(CancelLoadControlEvent::parse(&buf[..12]).unwrap(), c);
+    }
+
+    #[test]
+    fn server_store_answers_get_scheduled_events() {
+        let mut store: EventStore<6> = EventStore::new();
+        let now = 10_000;
+        assert!(store.issue(event(5, 0, 30, device_class::HVAC, 0), now));
+        assert!(store.issue(event(3, now + 600, 30, device_class::HVAC, 0), now));
+        assert!(store.issue(event(9, now + 300, 60, device_class::WATER_HEATER, 0), now));
+        assert!(store.issue(event(7, now + 300, 60, device_class::HVAC, 0), now));
+        assert!(store.issue(event(1, now - 5000, 10, device_class::HVAC, 0), now));
+        assert_eq!(store.events()[0].start_time, now, "start 0 resolved to now");
+        // Completed events are never returned; start-time order without
+        // a minimum id; only events addressing the client's class.
+        let mut out = Vec::new();
+        store.scheduled(
+            &GetScheduledEvents {
+                earliest_end_time: 0,
+                number_of_events: 0,
+                minimum_issuer_event_id: u32::MAX,
+            },
+            now,
+            device_class::HVAC,
+            0,
+            &mut out,
+        );
+        let ids: Vec<u32, 6> = out.iter().map(|e| e.issuer_event_id).collect();
+        assert_eq!(ids.as_slice(), &[5, 7, 3]);
+        // With a minimum id: ascending ids from it, limited in number.
+        out.clear();
+        store.scheduled(
+            &GetScheduledEvents {
+                earliest_end_time: 0,
+                number_of_events: 2,
+                minimum_issuer_event_id: 5,
+            },
+            now,
+            device_class::HVAC | device_class::WATER_HEATER,
+            0,
+            &mut out,
+        );
+        let ids: Vec<u32, 6> = out.iter().map(|e| e.issuer_event_id).collect();
+        assert_eq!(ids.as_slice(), &[5, 7]);
+        // Earliest end time excludes events ending before it.
+        out.clear();
+        store.scheduled(
+            &GetScheduledEvents {
+                earliest_end_time: now + 2000,
+                number_of_events: 0,
+                minimum_issuer_event_id: u32::MAX,
+            },
+            now,
+            device_class::HVAC,
+            0,
+            &mut out,
+        );
+        let ids: Vec<u32, 6> = out.iter().map(|e| e.issuer_event_id).collect();
+        assert_eq!(ids.as_slice(), &[7, 3]);
+        // Cancellation and expiry.
+        assert!(store.cancel(3) && !store.cancel(3));
+        store.expire(now + 1801);
+        assert_eq!(store.events().len(), 2);
+        store.cancel_all();
+        assert!(store.events().is_empty());
+        assert_eq!(report_delay_ms(|n| n - 1), REPORT_DELAY_MAX_MS);
+        assert_eq!(report_delay_ms(|_| 0), 0);
     }
 
     #[test]
