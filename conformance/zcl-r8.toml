@@ -262,10 +262,10 @@ id = "PW-ZCL-HVAC-001"
 section = "§6.3, §6.4"
 summary = "Thermostat and Fan Control clusters"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::hvac"
-tests = []
-
+tests = ["setpoints_limits_dead_band_and_running_mode", "fan_modes_follow_the_sequence"]
+notes = "Thermostat information and settings attributes with the setpoint limit, dead-band and control-sequence rules enforced on writes, Setpoint Raise/Lower executed by the dispatcher (ZclEvent::Setpoints), the Table 6-17 running mode, the scene extension field set and heating-only / cooling-only / dual builders; Fan Control with FanMode validated against FanModeSequence; facade Thermostat device. The weekly schedule (Set / Get / Clear Weekly Schedule), relay status log, AC information set and the setpoint change tracking set are not implemented (TODO(PW-ZCL-THERMOSTAT-SCHEDULE))."
 [[requirement]]
 id = "PW-ZCL-CLOS-001"
 section = "§7.3, §7.4"

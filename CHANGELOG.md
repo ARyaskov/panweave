@@ -166,6 +166,10 @@ Keep a Changelog; versions follow SemVer.
   feeding the stack's counters; the facade instantiates Diagnostics,
   Alarms, Time, Power Configuration and IAS Zone servers / clients for
   device types that list them.
+* `panweave-zcl::clusters::hvac`: the Thermostat core (setpoint limits,
+  dead band and control-sequence rules on writes, Setpoint Raise/Lower
+  with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
+  Control; facade `thermostat_device` endpoint.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

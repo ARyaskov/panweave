@@ -353,6 +353,16 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// A Setpoint Raise/Lower adjusted a thermostat (ZCL8 §6.3.2.3.1):
+    /// the new occupied setpoints in 0.01 °C.
+    Setpoints {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Heating setpoint, when implemented.
+        heat: Option<i16>,
+        /// Cooling setpoint, when implemented.
+        cool: Option<i16>,
+    },
     /// The Color Control engine moved (ZCL8 §5.2): `mode` is the
     /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
     /// saturation, X and Y, or mireds and 0).

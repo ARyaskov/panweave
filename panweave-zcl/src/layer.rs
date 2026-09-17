@@ -17,7 +17,8 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
-    alarms, basic, color_control, ias_zone, identify, level, on_off, poll_control, scenes, time,
+    alarms, basic, color_control, hvac, ias_zone, identify, level, on_off, poll_control, scenes,
+    time,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -236,6 +237,16 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// Test duration, `None` for normal operation.
         seconds: Option<u8>,
+    },
+    /// A Setpoint Raise/Lower adjusted the thermostat on `endpoint`
+    /// (§6.3.2.3.1): the new occupied setpoints in 0.01 °C.
+    Setpoints {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Heating setpoint, when implemented.
+        heat: Option<i16>,
+        /// Cooling setpoint, when implemented.
+        cool: Option<i16>,
     },
     /// The Color Control engine on `endpoint` moved: `mode` is the
     /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
@@ -780,6 +791,35 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             color_control::ID => {
                                 self.handle_color(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            hvac::thermostat::ID => {
+                                let Some(c) = self.endpoints.get_mut(i).and_then(|e| {
+                                    e.cluster_mut(hvac::thermostat::ID, Role::Server)
+                                }) else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match hvac::thermostat::handle(c, cmd, payload) {
+                                    hvac::thermostat::Outcome::Adjusted { heat, cool } => {
+                                        if let Some(sc) = self
+                                            .endpoints
+                                            .get_mut(i)
+                                            .and_then(|e| e.cluster_mut(scenes::ID, Role::Server))
+                                        {
+                                            scenes::invalidate(sc);
+                                        }
+                                        self.push_event(ZclEvent::Setpoints {
+                                            endpoint,
+                                            heat,
+                                            cool,
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    hvac::thermostat::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
                                 continue;
                             }
                             _ => {}
@@ -1371,6 +1411,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             if let Some(c) = ep.cluster(color_control::ID, Role::Server) {
                 scenes::write_field_set(&mut w, color_control::ID, &color_control::scene_fields(c));
             }
+            if let Some(c) = ep.cluster(hvac::thermostat::ID, Role::Server) {
+                scenes::write_field_set(
+                    &mut w,
+                    hvac::thermostat::ID,
+                    &hvac::thermostat::scene_fields(c),
+                );
+            }
         }
         let n = w.position();
         Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
@@ -1416,6 +1463,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             {
                 color_control::apply_scene_fields(c, f, tenths, now);
                 self.service_color(ep_index);
+            } else if cluster == hvac::thermostat::ID
+                && let Some(c) = ep.cluster_mut(hvac::thermostat::ID, Role::Server)
+            {
+                hvac::thermostat::apply_scene_fields(c, f);
             }
         }
         // The recalled scene is what the device shows now.

@@ -11,6 +11,7 @@
 use heapless::Vec;
 use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
+use panweave_zcl::clusters::hvac::{fan_control, thermostat};
 use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
 use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
@@ -42,6 +43,8 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     time::ID,
     power_configuration::ID,
     ias_zone::ID,
+    thermostat::ID,
+    fan_control::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -61,6 +64,8 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     time::ID,
     power_configuration::ID,
     ias_zone::ID,
+    thermostat::ID,
+    fan_control::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -126,6 +131,8 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
             None,
         )
         .ok(),
+        thermostat::ID => thermostat::server(thermostat::Capability::HeatingAndCooling).ok(),
+        fan_control::ID => fan_control::server(fan_control::sequence::LOW_MED_HIGH_AUTO).ok(),
         _ => None,
     }
 }
@@ -151,6 +158,8 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
         time::ID => Some(time::client()),
         power_configuration::ID => Some(power_configuration::client()),
         ias_zone::ID => Some(ias_zone::client()),
+        thermostat::ID => Some(thermostat::client()),
+        fan_control::ID => Some(fan_control::client()),
         _ => None,
     }
 }
@@ -278,6 +287,11 @@ pub fn color_dimmable_light(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0102), &[], &[], false)
 }
 
+/// Thermostat (device 0x0301): Identify and Thermostat servers.
+pub fn thermostat_device(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0301), &[], &[], false)
+}
+
 /// Light Sensor (device 0x0106): Identify and Illuminance Measurement
 /// servers, Identify client.
 pub fn light_sensor(endpoint: Endpoint) -> Option<Built> {
@@ -326,10 +340,11 @@ mod tests {
         assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
         assert!(ep.cluster(color_control::ID, Role::Server).is_some());
         type Builder = fn(Endpoint) -> Option<Built>;
-        let sensors: [(Builder, u16, ClusterId); 3] = [
+        let sensors: [(Builder, u16, ClusterId); 4] = [
             (light_sensor, 0x0106, illuminance::ID),
             (occupancy_sensor, 0x0107, occupancy::ID),
             (temperature_sensor, 0x0302, temperature::ID),
+            (thermostat_device, 0x0301, thermostat::ID),
         ];
         for (build, id, cluster) in sensors {
             let (d, ep) = build(Endpoint(5)).unwrap();

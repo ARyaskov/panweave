@@ -1558,6 +1558,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZclEvent::ZoneTestMode { endpoint, seconds } => {
                     StackEvent::ZoneTestMode { endpoint, seconds }
                 }
+                ZclEvent::Setpoints {
+                    endpoint,
+                    heat,
+                    cool,
+                } => StackEvent::Setpoints {
+                    endpoint,
+                    heat,
+                    cool,
+                },
                 ZclEvent::Color {
                     endpoint,
                     mode,

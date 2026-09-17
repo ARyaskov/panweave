@@ -9,6 +9,7 @@ pub mod alarms;
 pub mod color_control;
 pub mod diagnostics;
 pub mod groups;
+pub mod hvac;
 pub mod ias_zone;
 pub mod keep_alive;
 pub mod level;
