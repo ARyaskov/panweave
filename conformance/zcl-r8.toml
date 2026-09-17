@@ -235,10 +235,10 @@ id = "PW-ZCL-MEAS-001"
 section = "§4.2–§4.8"
 summary = "Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::measurement"
-tests = []
-
+tests = ["servers_hold_and_report_readings", "temperature_sensor_reports_through_its_default_configuration"]
+notes = "Attribute-only servers with the §4.1.3 range attributes, unknown / invalid markers, default reporting of the measured value (BDB 3.1 §6.5) and application setters: Illuminance Measurement, Illuminance Level Sensing, Temperature, Pressure (incl. the extended scaled set definitions), Flow, Water Content (Relative Humidity / Leaf Wetness / Soil Moisture) and Occupancy Sensing with the sensor-type alignment of Table 4-24; facade endpoints for the Light, Occupancy and Temperature Sensor devices. The occupancy delay / threshold attributes are defined but not instantiated by default."
 [[requirement]]
 id = "PW-ZCL-MEAS-002"
 section = "§4.9"

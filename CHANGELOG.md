@@ -138,6 +138,12 @@ Keep a Changelog; versions follow SemVer.
   and the client's message display), Price (Publish Price with its
   optional fields, the client requests and a client-side price table)
   and Metering (mandatory attributes, formatting helpers, Get Profile).
+* `panweave-zcl::clusters::measurement`: Illuminance Measurement,
+  Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content
+  (Relative Humidity / Leaf Wetness / Soil Moisture) and Occupancy
+  Sensing servers with default reporting and application setters;
+  `ClusterInstance::{i16, set_i16}`; facade endpoints `light_sensor`,
+  `occupancy_sensor`, `temperature_sensor`.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

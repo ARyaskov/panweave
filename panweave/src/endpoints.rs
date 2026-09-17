@@ -11,6 +11,7 @@
 use heapless::Vec;
 use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
+use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -29,6 +30,9 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     level::ID,
     poll_control::ID,
     keep_alive::ID,
+    illuminance::ID,
+    temperature::ID,
+    occupancy::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -39,6 +43,9 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     level::ID,
     poll_control::ID,
     keep_alive::ID,
+    illuminance::ID,
+    temperature::ID,
+    occupancy::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -74,6 +81,11 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<16>> {
             keep_alive::DEFAULT_JITTER_SECONDS,
         )
         .ok(),
+        // Sensors: the full range of the value format until the product
+        // narrows it; readings start unknown.
+        illuminance::ID => illuminance::server(1, 0xfffe).ok(),
+        temperature::ID => temperature::server(-27315, 32767).ok(),
+        occupancy::ID => occupancy::server(occupancy::sensor_bits::PIR).ok(),
         _ => None,
     }
 }
@@ -90,6 +102,9 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<16>> {
         // application changes the policy through the cluster state.
         poll_control::ID => Some(poll_control::client(false, 0)),
         keep_alive::ID => Some(keep_alive::client()),
+        illuminance::ID => Some(illuminance::client()),
+        temperature::ID => Some(temperature::client()),
+        occupancy::ID => Some(occupancy::client()),
         _ => None,
     }
 }
@@ -211,6 +226,24 @@ pub fn on_off_switch(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0000), &[], &[], false)
 }
 
+/// Light Sensor (device 0x0106): Identify and Illuminance Measurement
+/// servers, Identify client.
+pub fn light_sensor(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0106), &[], &[], false)
+}
+
+/// Occupancy Sensor (device 0x0107): Identify and Occupancy Sensing
+/// servers, Identify client.
+pub fn occupancy_sensor(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0107), &[], &[], false)
+}
+
+/// Temperature Sensor (device 0x0302): Identify and Temperature
+/// Measurement servers, Identify client.
+pub fn temperature_sensor(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0302), &[], &[], false)
+}
+
 /// Definition of a cluster instance for custom endpoints.
 pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<16> {
     ClusterInstance::new(def, role)
@@ -237,6 +270,19 @@ mod tests {
         assert!(unsupported_clusters(light).is_empty());
         let color = DeviceType::lookup(DeviceId(0x0102)).unwrap();
         assert_eq!(unsupported_clusters(color).as_slice(), &[ClusterId(0x0300)]);
+        type Builder = fn(Endpoint) -> Option<Built>;
+        let sensors: [(Builder, u16, ClusterId); 3] = [
+            (light_sensor, 0x0106, illuminance::ID),
+            (occupancy_sensor, 0x0107, occupancy::ID),
+            (temperature_sensor, 0x0302, temperature::ID),
+        ];
+        for (build, id, cluster) in sensors {
+            let (d, ep) = build(Endpoint(5)).unwrap();
+            assert_eq!(d.device, DeviceId(id));
+            assert!(d.has_input(cluster));
+            assert!(ep.cluster(cluster, Role::Server).is_some());
+            assert!(unsupported_clusters(DeviceType::lookup(DeviceId(id)).unwrap()).is_empty());
+        }
         let (d, ep) = dimmable_light(Endpoint(3)).unwrap();
         assert!(d.has_input(level::ID));
         assert!(ep.cluster(level::ID, Role::Server).is_some());

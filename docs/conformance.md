@@ -13,9 +13,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 8 | 9 | 0 | 0 | 1 |
-| ZCL8 | 36 | 17 | 3 | 16 | 0 | 0 | 0 |
+| ZCL8 | 36 | 18 | 3 | 15 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 146 | 47 | 40 | 3 | 0 | 1 |
+| **All** | 237 | 147 | 47 | 39 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -139,7 +139,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-ZCL-GEN-009 | §3.12 | optional | not-implemented | `panweave-zcl::clusters::time` | Time cluster | — |  |
 | PW-ZCL-GEN-010 | §3.15 | optional | not-implemented | `panweave-zcl::clusters::diagnostics` | Diagnostics cluster | — |  |
 | PW-ZCL-GEN-011 | §3.16 | optional | implemented | `panweave-zcl::clusters::poll_control` | Poll Control cluster: check-in, fast polling, long/short poll intervals | `poll_control_server_checks_in_and_fast_polls`, `poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode` | Server: Table 3-132 attributes with the CheckInInterval/FastPollTimeout write validation, Check-in to the bound clients at a constant CheckInInterval (§3.16.6.1, re-armed when the attribute changes), temporary fast poll mode for 7.68 s awaiting responses, Check-in Response (longest timeout wins, INVALID_FIELD above FastPollTimeoutMax, FAILURE when late), Fast Poll Stop, Set Long/Short Poll Interval with the §3.16.4.2 relationships; the runtime switches the MAC poll rate on ZclEvent::FastPoll / LongPollInterval. Client: answers Check-ins with a configured policy and raises ZclEvent::CheckIn. The 'unbound client → FAILURE' SHOULD is not enforced (the dispatcher does not see the binding table). |
-| PW-ZCL-MEAS-001 | §4.2–§4.8 | optional | not-implemented | `panweave-zcl::clusters::measurement` | Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing | — |  |
+| PW-ZCL-MEAS-001 | §4.2–§4.8 | optional | implemented | `panweave-zcl::clusters::measurement` | Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing | `servers_hold_and_report_readings`, `temperature_sensor_reports_through_its_default_configuration` | Attribute-only servers with the §4.1.3 range attributes, unknown / invalid markers, default reporting of the measured value (BDB 3.1 §6.5) and application setters: Illuminance Measurement, Illuminance Level Sensing, Temperature, Pressure (incl. the extended scaled set definitions), Flow, Water Content (Relative Humidity / Leaf Wetness / Soil Moisture) and Occupancy Sensing with the sensor-type alignment of Table 4-24; facade endpoints for the Light, Occupancy and Temperature Sensor devices. The occupancy delay / threshold attributes are defined but not instantiated by default. |
 | PW-ZCL-MEAS-002 | §4.9 | optional | not-implemented | `panweave-zcl::clusters::electrical_measurement` | Electrical Measurement cluster | — |  |
 | PW-ZCL-LIGHT-001 | §5.2 | optional | not-implemented | `panweave-zcl::clusters::color_control` | Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions | — |  |
 | PW-ZCL-HVAC-001 | §6.3, §6.4 | optional | not-implemented | `panweave-zcl::clusters::hvac` | Thermostat and Fan Control clusters | — |  |

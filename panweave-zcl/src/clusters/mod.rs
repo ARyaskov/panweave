@@ -8,6 +8,7 @@ use panweave_types::{ClusterId, CommandId};
 pub mod groups;
 pub mod keep_alive;
 pub mod level;
+pub mod measurement;
 pub mod on_off;
 pub mod poll_control;
 pub mod scenes;

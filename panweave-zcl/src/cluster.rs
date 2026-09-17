@@ -163,6 +163,14 @@ impl<const A: usize> ClusterInstance<A> {
         self.u64(id).and_then(|v| u16::try_from(v).ok())
     }
 
+    /// 16-bit signed value of a standard attribute.
+    pub fn i16(&self, id: AttributeId) -> Option<i16> {
+        self.attributes
+            .value(id)
+            .and_then(|v| v.as_i64())
+            .and_then(|v| i16::try_from(v).ok())
+    }
+
     /// Boolean value of a standard attribute (`false` when absent or
     /// invalid).
     pub fn bool(&self, id: AttributeId) -> bool {
@@ -193,6 +201,17 @@ impl<const A: usize> ClusterInstance<A> {
             &Value::Uint {
                 width: 2,
                 value: u64::from(value),
+            },
+        )
+    }
+
+    /// Application-side write of a signed 16-bit attribute.
+    pub fn set_i16(&mut self, id: AttributeId, value: i16) -> bool {
+        self.set(
+            id,
+            &Value::Int {
+                width: 2,
+                value: i64::from(value),
             },
         )
     }
