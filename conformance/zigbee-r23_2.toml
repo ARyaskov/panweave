@@ -14,10 +14,10 @@ id = "PW-R23-GEN-001"
 section = "§1.2.5"
 summary = "Malformed Zigbee/802.15.4 frames are discarded without response and without state change"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::rx, panweave-aps::rx"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::rx"
+tests = ["frame_payload_is_borrowed", "software_filter_drops_foreign_frames"]
+notes = "Malformed NWK/MAC frames are dropped and counted; APS-level handling follows with panweave-aps."
 [[requirement]]
 id = "PW-R23-GEN-002"
 section = "§1.2.6, Annex I.1–I.2"
@@ -32,422 +32,422 @@ id = "PW-R23-GEN-003"
 section = "Annex I.4"
 summary = "Global TLVs 64–76 (manufacturer specific, supported key negotiation methods, PAN ID conflict report, next PAN ID/channel change, symmetric passphrase, router information, fragmentation parameters, joiner/beacon appendix encapsulation, configuration parameters, device capability extension)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-types::tlv::global"
-tests = []
+status = "partially-implemented"
+module = "panweave-nwk::tlv"
+tests = ["key_negotiation_methods_round_trip_and_min_length", "fixed_size_tlvs", "joiner_encapsulation_nesting"]
 
 # ---------------------------------------------------------------- NWK frames
-
+notes = "All 13 global TLVs decode/encode; BDB encapsulation (74) is opaque."
 [[requirement]]
 id = "PW-R23-NWK-001"
 section = "§3.3.1"
 summary = "General NPDU header layout: 16-bit frame control, destination and source short addresses, radius, sequence number, optional destination/source IEEE addresses, optional source-route subframe"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::frame"
-tests = []
+tests = ["data_header_round_trip", "command_header_with_ieee_addresses"]
 
 [[requirement]]
 id = "PW-R23-NWK-002"
 section = "§3.3.1.1"
 summary = "Frame control sub-fields: frame type (data, command, inter-PAN; one reserved), protocol version, discover route, deprecated multicast flag, security, source route, dst/src IEEE presence, end-device initiator; reserved bits"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::frame::FrameControl"
-tests = []
+tests = ["data_header_round_trip", "presence_flag_mismatch_is_rejected_on_encode"]
 
 [[requirement]]
 id = "PW-R23-NWK-003"
 section = "§3.3.1.8"
 summary = "Source route subframe: relay count, relay index (initialised to count-1 and decremented per hop), relay list ordered nearest-destination first"
 level = "conditional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::frame::SourceRoute"
-tests = []
+tests = ["source_route_subframe"]
 
 [[requirement]]
 id = "PW-R23-NWK-004"
 section = "§3.3.2.2, §3.4"
 summary = "NWK command frame: command identifier octet followed by command payload; command frames suppress route discovery and use originator source address"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command"
-tests = []
+tests = ["route_request_and_reply", "status_leave_rejoin_record"]
 
 [[requirement]]
 id = "PW-R23-NWK-005"
 section = "§3.4.1"
 summary = "Route Request command: command options (many-to-one, dst IEEE present, multicast deprecated), route request identifier, destination address, path cost, optional destination IEEE address, optional TLVs"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::RouteRequest"
-tests = []
+tests = ["route_request_and_reply"]
 
 [[requirement]]
 id = "PW-R23-NWK-006"
 section = "§3.4.2"
 summary = "Route Reply command: options (originator/responder IEEE presence, multicast deprecated), identifier, originator and responder addresses, path cost, optional IEEE addresses"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::RouteReply"
-tests = []
+tests = ["route_request_and_reply"]
 
 [[requirement]]
 id = "PW-R23-NWK-007"
 section = "§3.4.3"
 summary = "Network Status command: status code and destination address; defined status codes incl. no route available, tree link failure, non-tree link failure, low battery, no routing capacity, no indirect capacity, indirect transaction expiry, target device unavailable, target address unallocated, parent link failure, validate route, source route failure, many-to-one route failure, address conflict, verify addresses, PAN identifier update, network address update, bad frame counter, bad key sequence number, unknown command"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::NetworkStatus"
-tests = []
+tests = ["status_leave_rejoin_record"]
 
 [[requirement]]
 id = "PW-R23-NWK-008"
 section = "§3.4.4"
 summary = "Leave command: options rejoin, request, remove children"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::Leave"
-tests = []
+tests = ["status_leave_rejoin_record"]
 
 [[requirement]]
 id = "PW-R23-NWK-009"
 section = "§3.4.5"
 summary = "Route Record command: relay count and relay list accumulated toward the concentrator"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::RouteRecord"
-tests = []
+tests = ["status_leave_rejoin_record"]
 
 [[requirement]]
 id = "PW-R23-NWK-010"
 section = "§3.4.6, §3.4.7"
 summary = "Rejoin Request (capability information) and Rejoin Response (short address, status) commands"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::{RejoinRequest, RejoinResponse}"
-tests = []
+tests = ["status_leave_rejoin_record"]
 
 [[requirement]]
 id = "PW-R23-NWK-011"
 section = "§3.4.8"
 summary = "Link Status command: options (entry count, first frame, last frame) and list of neighbor address with incoming/outgoing cost"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::LinkStatus"
-tests = []
+tests = ["link_status_entries"]
 
 [[requirement]]
 id = "PW-R23-NWK-012"
 section = "§3.4.9, §3.4.10"
 summary = "Network Report (PAN ID conflict report with list of PAN IDs) and Network Update (PAN ID update with update id and new PAN ID) commands"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::{NetworkReport, NetworkUpdate}"
-tests = []
+tests = ["report_update_and_timeouts"]
 
 [[requirement]]
 id = "PW-R23-NWK-013"
 section = "§3.4.11, §3.4.12"
 summary = "End Device Timeout Request (requested timeout enumeration, configuration) and Response (status, parent information bitmask)"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::{EndDeviceTimeoutRequest, EndDeviceTimeoutResponse}"
-tests = []
+tests = ["report_update_and_timeouts"]
 
 [[requirement]]
 id = "PW-R23-NWK-014"
 section = "§3.4.13"
 summary = "Link Power Delta command: type (notification, request, response), list of device address and power delta"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-nwk::command::LinkPowerDelta"
-tests = []
-
+tests = ["power_delta_and_commissioning"]
+notes = "Codec only; power negotiation behaviour (§3.6.11) not implemented."
 [[requirement]]
 id = "PW-R23-NWK-015"
 section = "§3.4.14, §3.4.15"
 summary = "Network Commissioning Request (association type, capability information, TLVs) and Response (status, short address, TLVs)"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::command::{CommissioningRequest, CommissioningResponse}"
-tests = []
+tests = ["power_delta_and_commissioning"]
 
 [[requirement]]
 id = "PW-R23-NWK-016"
 section = "§3.5.1, §3.5.2"
 summary = "NWK constants (protocol version, max depth, discovery retry backoff, route discovery time, RREQ retries/retry interval, min RREQ jitter, initial RREQ retries) and NIB attributes with defaults and ranges"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::nib"
-tests = []
+tests = ["defaults_and_sequence", "clear_for_leave_resets_identity"]
 
 # ---------------------------------------------------------------- NWK maintenance
 
 [[requirement]]
 id = "PW-R23-NWK-020"
-section = "§3.6.1.1"
+section = "§3.6.1.5"
 summary = "Network discovery: active scan over requested channels, collect beacons with Zigbee payload into a network descriptor list; report to NLME-NETWORK-DISCOVERY.confirm"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::discovery"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "ranking_prefers_hub_then_update_id_then_lqa", "beacon_payload_round_trip_and_bit_layout"]
 
 [[requirement]]
 id = "PW-R23-NWK-021"
 section = "§3.6.1.2"
 summary = "Network formation by coordinator (or distributed router): energy scan + active scan, select channel with least energy/fewest networks, select PAN ID not in use, choose extended PAN ID, set short address 0x0000 (or random for distributed), start MAC"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::formation"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data"]
 
 [[requirement]]
 id = "PW-R23-NWK-022"
 section = "§3.6.1.3"
 summary = "Permit joining: router/coordinator enables MAC association for the given duration (0x00 disables, 0xFF deprecated → bounded), permit duration timer, beacon association-permit bit reflects state"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::permit_join"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "association_denied_when_permit_off"]
 
 [[requirement]]
 id = "PW-R23-NWK-023"
-section = "§3.6.1.4.1"
+section = "§3.6.1.6.1.1"
 summary = "Joining via MAC association: parent selection from neighbor table (permit joining, depth, link cost, end-device capacity), MAC associate, receive short address, update NIB and neighbor table, report to NLME-JOIN.confirm"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::join::association"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "router_joins_and_routes_between_end_devices_of_different_parents"]
 
 [[requirement]]
 id = "PW-R23-NWK-024"
-section = "§3.6.1.4.2"
+section = "§3.6.1.6.1.3"
 summary = "Parent processing of association: accept only when permit joining, capacity available, assign stochastic short address, add child to neighbor table with relationship child and keep-alive state, respond with association response"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::join::parent"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "association_indication_and_indirect_response_parent_side"]
 
 [[requirement]]
 id = "PW-R23-NWK-025"
-section = "§3.6.1.4.3"
+section = "§3.6.1.6.1.2"
 summary = "Rejoin: NWK-layer Rejoin Request to a selected parent (secured with NWK key when available, unsecured otherwise), Rejoin Response with address/status, retries and timeout"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::join::rejoin"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["secured_rejoin_after_reboot_keeps_address"]
 
 [[requirement]]
 id = "PW-R23-NWK-026"
-section = "§3.6.1.4.4"
+section = "§3.6.1.6.1.3"
 summary = "Parent processing of Rejoin Request: verify capacity/permission, allocate or keep address, respond with Rejoin Response, notify higher layer (NLME-JOIN.indication with rejoin flag and secure flag)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::join::parent"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["secured_rejoin_after_reboot_keeps_address"]
 
 [[requirement]]
 id = "PW-R23-NWK-027"
-section = "§3.6.1.4.5, §3.4.14"
+section = "§3.6.1.6, §3.4.14, §3.4.15"
 summary = "Joining via Network Commissioning Request (R23): NWK-layer association carrying capability information and TLVs, response with status and allocated address"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::join::commissioning"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::join"
+tests = ["power_delta_and_commissioning"]
+notes = "Request/response generation and parent processing implemented; not yet exercised end-to-end."
 [[requirement]]
 id = "PW-R23-NWK-028"
 section = "§3.6.1.7"
 summary = "Stochastic network address assignment: random 16-bit address in the unicast range, avoiding 0x0000, reserved and broadcast ranges and known addresses"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::addressing"
-tests = []
+status = "implemented"
+module = "panweave-nwk::address_map"
+tests = ["stochastic_allocation_avoids_used_and_reserved"]
 
 [[requirement]]
 id = "PW-R23-NWK-029"
-section = "§3.6.1.9"
+section = "§3.6.1.10"
 summary = "Address conflict detection and resolution: detect conflicting short/IEEE pairs from any frame, send Network Status (address conflict), re-assign own address when local conflict, handle child conflicts via Unicast Rejoin Response"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::conflict::address"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::join"
+tests = ["record_and_conflict"]
+notes = "Detection, Network Status broadcast, local re-addressing and child re-assignment implemented; not yet covered end-to-end."
 [[requirement]]
 id = "PW-R23-NWK-030"
-section = "§3.6.1.10"
+section = "§3.6.1.11"
 summary = "Leave: locally initiated (NLME-LEAVE.request) sends Leave command with rejoin/remove-children options and resets NIB; remotely received Leave with request flag from parent (and per nwkLeaveRequestAllowed policy) causes leave; children removed when remove-children is set"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::leave"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::join"
+tests = ["leave_and_child_aging"]
 
 [[requirement]]
 id = "PW-R23-NWK-031"
-section = "§3.6.1.11"
+section = "§3.6.1.12"
 summary = "Reset of NWK layer: warm reset preserves persisted NIB attributes; cold reset clears tables"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::reset"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer"
+tests = ["secured_rejoin_after_reboot_keeps_address"]
+notes = "Warm start restores identity/keys; a cold reset is a fresh layer instance."
 [[requirement]]
 id = "PW-R23-NWK-032"
-section = "§3.6.1.12"
+section = "§3.6.1.7"
 summary = "Neighbor table contents: extended/short address, device type, rx-on-when-idle, relationship, transmit failure, LQI, outgoing cost, age, incoming beacon timestamp, keep-alive/timeout fields, MAC interface"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::neighbor"
-tests = []
+tests = ["insert_evicts_only_stale_routers", "child_aging_and_security_timer", "path_cost_uses_max_of_directions"]
 
 [[requirement]]
 id = "PW-R23-NWK-033"
 section = "§3.6.1.13"
 summary = "PAN ID conflict: detection from beacons with same PAN ID and different extended PAN ID, Network Report to network manager, network manager selects new PAN ID and broadcasts Network Update, all devices switch after nwkNetworkBroadcastDeliveryTime"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::conflict::pan_id"
-tests = []
+status = "partially-implemented"
+module = "panweave-nwk::layer::join"
+tests = ["report_update_and_timeouts"]
 
 # ---------------------------------------------------------------- NWK transmission / reception
-
+notes = "Report/update commands and manager processing implemented; conflict scenario not yet simulated."
 [[requirement]]
 id = "PW-R23-NWK-040"
 section = "§3.6.2.1"
 summary = "Data transmission: construct NPDU with radius (default 2×nwkMaxDepth), sequence number, addressing, security per nwkSecurityLevel, routing decision (neighbor, routing table, route discovery, many-to-one, source route) and MAC data request with ack for unicast"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::tx"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::tx"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "sleepy_end_device_receives_via_indirect_delivery"]
 
 [[requirement]]
 id = "PW-R23-NWK-041"
 section = "§3.6.2.2"
 summary = "Reception and relay: validate header, decrement radius, discard when radius zero, verify end-device initiator and source consistency, deliver to NLDE when destined locally, relay otherwise; unknown frame types dropped"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::rx"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::rx"
+tests = ["router_joins_and_routes_between_end_devices_of_different_parents"]
 
 [[requirement]]
 id = "PW-R23-NWK-042"
 section = "§3.6.2.3"
 summary = "Sequence number handling: incremented per new transmitted frame, seeded randomly"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::nib"
-tests = []
+tests = ["defaults_and_sequence"]
 
 [[requirement]]
 id = "PW-R23-NWK-043"
 section = "§3.6.3"
 summary = "Link cost estimation from LQI: 1–7 with 7 for unusable; incoming cost from local measurement, outgoing cost from Link Status"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::neighbor::cost"
-tests = []
+tests = ["link_cost_table_3_76", "lqa_median_filter"]
 
 # ---------------------------------------------------------------- NWK routing
 
 [[requirement]]
 id = "PW-R23-NWK-050"
-section = "§3.6.4.1, §3.6.4.2"
+section = "§3.6.4.2"
 summary = "Routing table and route discovery table entries with status enumeration (active, discovery underway, discovery failed, inactive, validation underway), many-to-one flags, route record required flag, expiry"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::table"
-tests = []
+status = "implemented"
+module = "panweave-nwk::routing"
+tests = ["routing_table_insert_and_eviction", "discovery_table_expiry_and_reuse"]
 
 [[requirement]]
 id = "PW-R23-NWK-051"
-section = "§3.6.4.3"
+section = "§3.6.4.5.1"
 summary = "Route discovery initiation: create RDT entry, broadcast Route Request with radius, retry nwkcInitialRREQRetries then nwkcRREQRetries with jitter, expire after nwkcRouteDiscoveryTime"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::discovery"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::route"
+tests = ["router_joins_and_routes_between_end_devices_of_different_parents"]
 
 [[requirement]]
 id = "PW-R23-NWK-052"
-section = "§3.6.4.5.2"
+section = "§3.6.4.5.1.2–§3.6.4.5.1.4"
 summary = "Route Request processing at intermediate/destination: path cost accumulation, RDT update on better cost, rebroadcast with jitter, destination (or neighbor of destination) generates Route Reply"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::request"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::route"
+tests = ["router_joins_and_routes_between_end_devices_of_different_parents", "suitability_rules"]
 
 [[requirement]]
 id = "PW-R23-NWK-053"
-section = "§3.6.4.5.3"
+section = "§3.6.4.5.2"
 summary = "Route Reply processing: forward along RDT sender toward originator with cost accumulation, update routing table to active at originator"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::reply"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::route"
+tests = ["router_joins_and_routes_between_end_devices_of_different_parents"]
 
 [[requirement]]
 id = "PW-R23-NWK-054"
-section = "§3.6.4.4"
+section = "§3.6.4.5.1"
 summary = "Many-to-one route discovery from concentrator: Route Request with many-to-one flag, no Route Reply, routers install route to concentrator and mark route record required when concentrator has no memory"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::many_to_one"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::route"
+tests = ["route_request_and_reply"]
+notes = "Concentrator advertisement and route installation implemented; no end-to-end test yet."
 [[requirement]]
 id = "PW-R23-NWK-055"
-section = "§3.6.4.5.4, §3.4.5"
+section = "§3.6.4.5.5"
 summary = "Route Record: originator sends Route Record before data when route record required; relays append their address; concentrator stores source route"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::route_record"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::route"
+tests = ["source_route_table"]
+notes = "Route record origination/relay/storage implemented; no end-to-end test yet."
 [[requirement]]
 id = "PW-R23-NWK-056"
-section = "§3.6.4.6"
+section = "§3.6.4.3.1, §3.6.4.3.2"
 summary = "Source routing: originator inserts relay list; relays forward to next relay by index; source route failure reported with Network Status"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::source_route"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-nwk::layer::tx"
+tests = ["source_route_subframe"]
+notes = "Relay logic implemented; source-route origination from the concentrator table is pending."
 [[requirement]]
 id = "PW-R23-NWK-057"
-section = "§3.6.4.7"
+section = "§3.6.4.8"
 summary = "Route maintenance: count transmission failures per neighbor, initiate route repair / Network Status (no route available) toward originator on failure, route expiry after nwkRouteExpiryTime"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::routing::maintenance"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::tx"
+tests = ["routing_table_insert_and_eviction", "router_joins_and_routes_between_end_devices_of_different_parents"]
 
 [[requirement]]
 id = "PW-R23-NWK-058"
 section = "§3.6.6"
 summary = "Broadcast: broadcast transaction table with sequence/source, passive acknowledgement from neighbors, retransmission up to nwkMaxBroadcastRetries with nwkPassiveAckTimeout, jitter, radius handling, broadcast address semantics (0xFFFF all, 0xFFFD rx-on, 0xFFFC routers, 0xFFFB low-power routers)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::broadcast"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::bcast"
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "duplicate_detection_and_expiry_reuse", "passive_ack_tracking"]
 
 [[requirement]]
 id = "PW-R23-NWK-059"
 section = "§3.6.7"
 summary = "NWK multicast (deprecated in R23): frames with multicast flag are treated per deprecation rules"
 level = "deprecated"
-status = "not-implemented"
-module = "panweave-nwk::rx"
-tests = []
-
+status = "implemented"
+module = "panweave-nwk::frame"
+tests = ["data_header_round_trip"]
+notes = "Multicast flag is parsed and ignored; such frames are handled as broadcasts."
 [[requirement]]
 id = "PW-R23-NWK-060"
 section = "§3.6.8"
 summary = "Beacon payload: protocol id, stack profile, protocol version, router/end-device capacity, device depth, extended PAN ID, tx offset, update id; optional beacon appendix TLVs"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-nwk::beacon"
-tests = []
+tests = ["beacon_payload_round_trip_and_bit_layout"]
 
 [[requirement]]
 id = "PW-R23-NWK-061"
@@ -463,18 +463,18 @@ id = "PW-R23-NWK-062"
 section = "§3.6.10"
 summary = "End-device aging: child timeout negotiated with End Device Timeout Request/Response; parent ages children on keep-alive (data poll / timeout request) and removes children on expiry; end device sends keep-alive at nwkEndDeviceTimeout / 3 or per parent info"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::child"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::maint"
+tests = ["leave_and_child_aging", "coordinator_forms_and_end_device_joins_and_exchanges_data", "report_update_and_timeouts"]
 
 [[requirement]]
 id = "PW-R23-NWK-063"
-section = "§3.4.8, §3.6.1.12"
+section = "§3.6.4.4"
 summary = "Link Status periodic transmission every nwkLinkStatusPeriod by routers with all router neighbors; outgoing cost updated from received link status; neighbor age incremented and entries with age > nwkRouterAgeLimit dropped"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::link_status"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::route"
+tests = ["router_joins_and_routes_between_end_devices_of_different_parents", "insert_evicts_only_stale_routers"]
 
 [[requirement]]
 id = "PW-R23-NWK-064"
@@ -499,9 +499,9 @@ id = "PW-R23-NWK-066"
 section = "§3.6.13"
 summary = "Unknown NWK command identifiers are silently discarded (router responds with Network Status unknown command where specified)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-nwk::rx"
-tests = []
+status = "implemented"
+module = "panweave-nwk::layer::rx"
+tests = ["power_delta_and_commissioning"]
 
 [[requirement]]
 id = "PW-R23-NWK-067"
@@ -905,9 +905,9 @@ id = "PW-R23-SEC-006"
 section = "§4.3.1"
 summary = "NWK frame security: outgoing frames secured with active key and nwkSecurityLevel, incoming frames decrypted with key matching sequence number, incoming frame counter freshness per source, security failure causes drop"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-security::frame"
-tests = ["nwk_frame_protect_unprotect_round_trip", "mic_only_level_authenticates_payload_in_clear"]
+status = "implemented"
+module = "panweave-nwk::security"
+tests = ["secure_then_unsecure_with_freshness", "counter_reservation_gates_transmission", "secured_rejoin_after_reboot_keeps_address"]
 notes = "Cryptographic transform done; key selection and NIB integration follow in panweave-nwk."
 
 [[requirement]]
@@ -1144,7 +1144,7 @@ id = "PW-R23-MAC-001"
 section = "Annex D.2–D.9"
 summary = "MAC usage: beacon-order 15 non-beacon operation, association capability information, frame version, beacon payload placement, CSMA backoff exponent defaults, recommended scan duration"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-mac"
 tests = ["intra_pan_data_header_compresses_source_pan", "beacon_round_trip", "mac_commands_round_trip", "association_handshake_joiner_side", "association_indication_and_indirect_response_parent_side", "active_scan_sends_beacon_requests_per_channel_and_confirms"]
 notes = "Frame version 0 on transmit (D.6), association addressing (D.4), backoff defaults (D.8) and scan duration (D.9) implemented; Annex D.11 enhanced beacons tracked separately."
