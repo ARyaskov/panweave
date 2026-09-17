@@ -89,10 +89,10 @@ id = "PW-ZCL-FND-010"
 section = "§2.5.15–§2.5.18"
 summary = "Read/Write Attributes Structured"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::cluster"
-tests = []
-notes = "Answered with UNSUP_GENERAL_COMMAND; no structured attributes are stored."
+status = "implemented"
+module = "panweave-zcl::structured"
+tests = ["selectors_round_trip_and_reject_depth", "select_elements_and_counts", "replace_elements_and_resize_arrays", "sets_and_bags_add_and_remove", "read_structured_selects_elements_and_counts", "write_structured_replaces_adds_and_removes"]
+notes = "Selectors (indicator nibbles, depth limited to 4 as the application limit §2.5.15.1.3 allows), element reads from arrays and structures with index 0 as the count, whole-attribute reads and writes through the plain rules, element replacement with INVALID_DATA_TYPE / INVALID_SELECTOR / READ_ONLY, set and bag add (DUPLICATE_EXISTS for sets) and remove (NOT_FOUND), the Write Attributes Structured Response with the failing attribute and selector and the lone SUCCESS record. Array lengths (index 0 writes) are read-only in the dispatcher: the content of new elements is application dependent and no fill hook is exposed (structured::replace accepts one)."
 [[requirement]]
 id = "PW-ZCL-FND-011"
 section = "§2.5.19–§2.5.22"

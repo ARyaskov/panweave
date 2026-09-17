@@ -7,6 +7,7 @@ use panweave_codec::{CodecError, Decode, Encode, Reader, Writer};
 use panweave_types::{AttributeId, CommandId};
 
 use crate::frame::ZclStatus;
+use crate::structured::Selector;
 use crate::types::{DataType, Value};
 
 /// Global command identifiers (Table 2-3).
@@ -187,6 +188,91 @@ impl Encode for WriteAttributeStatus {
         w.u8(self.status.raw())?;
         if let Some(id) = self.id {
             w.u16_le(id.0)?;
+        }
+        Ok(())
+    }
+}
+
+/// A Read Attributes Structured record: identifier and selector
+/// (§2.5.15.1).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReadStructured {
+    /// Attribute identifier.
+    pub id: AttributeId,
+    /// Selector.
+    pub selector: Selector,
+}
+
+impl ReadStructured {
+    /// Encodes the record.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u16_le(self.id.0)?;
+        self.selector.encode(w)
+    }
+}
+
+/// A Write Attributes Structured record (Figure 2-32).
+#[derive(Clone, PartialEq, Debug)]
+pub struct WriteStructured<'a> {
+    /// Attribute identifier.
+    pub id: AttributeId,
+    /// Selector.
+    pub selector: Selector,
+    /// Value (carries the element's data type).
+    pub value: Value<'a>,
+}
+
+impl WriteStructured<'_> {
+    /// Encodes the record.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u16_le(self.id.0)?;
+        self.selector.encode(w)?;
+        w.u8(self.value.data_type().id())?;
+        self.value.encode(w)
+    }
+}
+
+/// A Write Attributes Structured status record (Figure 2-35): the lone
+/// SUCCESS record carries neither identifier nor selector.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WriteStructuredStatus {
+    /// Status.
+    pub status: ZclStatus,
+    /// Attribute identifier and the selector of the failing element.
+    pub target: Option<(AttributeId, Selector)>,
+}
+
+impl<'a> Decode<'a> for WriteStructuredStatus {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let status = ZclStatus::decode(r)?;
+        if status.is_success() && r.remaining() < 3 {
+            return Ok(WriteStructuredStatus {
+                status,
+                target: None,
+            });
+        }
+        let id = AttributeId(r.u16_le()?);
+        let selector = Selector::decode(r)?.unwrap_or_default();
+        Ok(WriteStructuredStatus {
+            status,
+            target: Some((id, selector)),
+        })
+    }
+}
+
+impl Encode for WriteStructuredStatus {
+    fn encoded_len(&self) -> usize {
+        1 + self
+            .target
+            .as_ref()
+            .map_or(0, |(_, s)| 3 + 2 * s.indices.len())
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.status.raw())?;
+        if let Some((id, selector)) = &self.target {
+            w.u16_le(id.0)?;
+            selector.encode(w)?;
         }
         Ok(())
     }

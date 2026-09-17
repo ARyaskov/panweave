@@ -205,6 +205,11 @@ Keep a Changelog; versions follow SemVer.
   (`set_dc` / `set_ac` return the alarm codes to raise), and the profile
   command codecs; the facade instantiates it for device types that list
   it.
+* `panweave-zcl::structured`: Read / Write Attributes Structured —
+  selectors, element lookup in arrays and structures (index 0 = count),
+  element replacement, set / bag add and remove, the Write Attributes
+  Structured Response with the failing selector — executed by every
+  cluster instance, with client codecs in `global`.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

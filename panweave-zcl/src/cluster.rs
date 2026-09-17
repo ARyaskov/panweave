@@ -11,8 +11,9 @@ use crate::frame::{Header, ZclStatus};
 use crate::global::{
     self, AttributeInfo, AttributeValue, ConfigureReportingStatus, DiscoverAttributes,
     DiscoverCommands, ReadAttributeStatus, ReadReportingConfig, ReadReportingConfigStatus, Records,
-    ReportDirection, ReportingConfig, WriteAttributeStatus, command,
+    ReportDirection, ReportingConfig, WriteAttributeStatus, WriteStructuredStatus, command,
 };
+use crate::structured::{self, Selector};
 use crate::types::{DataType, Value};
 
 /// Server or client side of a cluster.
@@ -378,6 +379,128 @@ impl<const A: usize> ClusterInstance<A> {
                 }
                 GlobalOutcome::Response(command::WRITE_ATTRIBUTES_RESPONSE)
             }
+            command::READ_ATTRIBUTES_STRUCTURED => {
+                let mut r = Reader::new(payload);
+                while !r.is_empty() {
+                    let (Ok(id), Ok(selector)) = (r.u16_le(), Selector::decode(&mut r)) else {
+                        return GlobalOutcome::Default(ZclStatus::MalformedCommand);
+                    };
+                    let id = AttributeId(id);
+                    let rec = match (self.attributes.get(id, manuf), selector) {
+                        (None, _) => ReadAttributeStatus {
+                            id,
+                            status: ZclStatus::UnsupportedAttribute,
+                            value: None,
+                        },
+                        (Some(a), _) if !a.def.access.has(Access::READ) => ReadAttributeStatus {
+                            id,
+                            status: ZclStatus::WriteOnly,
+                            value: None,
+                        },
+                        (Some(a), Ok(sel)) if sel.is_whole() => ReadAttributeStatus {
+                            id,
+                            status: ZclStatus::Success,
+                            value: Some(a.value()),
+                        },
+                        (Some(a), Ok(sel)) => {
+                            let element = match a.value() {
+                                Value::Composite { ty, bytes }
+                                    if matches!(ty, DataType::Array | DataType::Struct) =>
+                                {
+                                    structured::select(ty, bytes, &sel.indices)
+                                }
+                                _ => Err(ZclStatus::InvalidSelector),
+                            };
+                            match element {
+                                Ok(structured::Element::Count(n)) => ReadAttributeStatus {
+                                    id,
+                                    status: ZclStatus::Success,
+                                    value: Some(Value::Uint {
+                                        width: 2,
+                                        value: u64::from(n),
+                                    }),
+                                },
+                                Ok(structured::Element::Value { ty, bytes }) => {
+                                    match Value::decode(&mut Reader::new(bytes), ty) {
+                                        Ok(v) => ReadAttributeStatus {
+                                            id,
+                                            status: ZclStatus::Success,
+                                            value: Some(v),
+                                        },
+                                        Err(_) => ReadAttributeStatus {
+                                            id,
+                                            status: ZclStatus::InvalidSelector,
+                                            value: None,
+                                        },
+                                    }
+                                }
+                                Err(status) => ReadAttributeStatus {
+                                    id,
+                                    status,
+                                    value: None,
+                                },
+                            }
+                        }
+                        (Some(_), Err(status)) => ReadAttributeStatus {
+                            id,
+                            status,
+                            value: None,
+                        },
+                    };
+                    if rec.encoded_len() > out.remaining() {
+                        let _ = ReadAttributeStatus {
+                            id,
+                            status: ZclStatus::InsufficientSpace,
+                            value: None,
+                        }
+                        .encode(out);
+                        break;
+                    }
+                    if rec.encode(out).is_err() {
+                        break;
+                    }
+                }
+                GlobalOutcome::Response(command::READ_ATTRIBUTES_RESPONSE)
+            }
+            command::WRITE_ATTRIBUTES_STRUCTURED => {
+                let mut r = Reader::new(payload);
+                let mut wrote_status = false;
+                while !r.is_empty() {
+                    let (Ok(id), Ok(selector)) = (r.u16_le(), Selector::decode(&mut r)) else {
+                        return GlobalOutcome::Default(ZclStatus::MalformedCommand);
+                    };
+                    let Ok(ty) = r.u8() else {
+                        return GlobalOutcome::Default(ZclStatus::MalformedCommand);
+                    };
+                    let Ok(value) = Value::decode(&mut r, DataType::from_id(ty)) else {
+                        return GlobalOutcome::Default(ZclStatus::MalformedCommand);
+                    };
+                    let id = AttributeId(id);
+                    let (status, failed) = match selector {
+                        Ok(sel) => match self.write_structured(id, &sel, &value, manuf) {
+                            Ok(()) => continue,
+                            Err(status) => (status, sel),
+                        },
+                        Err(status) => (status, Selector::WHOLE),
+                    };
+                    let st = WriteStructuredStatus {
+                        status,
+                        target: Some((id, failed)),
+                    };
+                    if st.encode(out).is_err() {
+                        break;
+                    }
+                    wrote_status = true;
+                }
+                if !wrote_status {
+                    let _ = WriteStructuredStatus {
+                        status: ZclStatus::Success,
+                        target: None,
+                    }
+                    .encode(out);
+                }
+                GlobalOutcome::Response(command::WRITE_ATTRIBUTES_STRUCTURED_RESPONSE)
+            }
             command::CONFIGURE_REPORTING => {
                 let mut wrote = false;
                 for rec in Records::<ReportingConfig>::new(payload) {
@@ -483,10 +606,6 @@ impl<const A: usize> ClusterInstance<A> {
                     command::DISCOVER_COMMANDS_GENERATED_RESPONSE
                 })
             }
-            command::READ_ATTRIBUTES_STRUCTURED | command::WRITE_ATTRIBUTES_STRUCTURED => {
-                // No structured attributes are held by this store.
-                GlobalOutcome::Default(ZclStatus::UnsupportedGeneralCommand)
-            }
             command::REPORT_ATTRIBUTES | command::DEFAULT_RESPONSE => GlobalOutcome::None,
             c if c.0 <= command::DISCOVER_ATTRIBUTES_EXTENDED_RESPONSE.0 => {
                 // Responses arriving at a server side are informational.
@@ -526,6 +645,67 @@ impl<const A: usize> ClusterInstance<A> {
             }
         }
         Ok(())
+    }
+
+    /// One Write Attributes Structured record (§2.5.16.3): a whole
+    /// write follows the plain Write Attributes rules; an element write
+    /// rebuilds the composite; set / bag add and remove per the
+    /// indicator. Array lengths are read-only (no application fill).
+    fn write_structured(
+        &mut self,
+        id: AttributeId,
+        selector: &Selector,
+        value: &Value<'_>,
+        manuf: Option<ManufacturerCode>,
+    ) -> Result<(), ZclStatus> {
+        if selector.is_whole() && selector.op == structured::op::WRITE {
+            let rec = AttributeValue { id, value: *value };
+            self.check_write(&rec, manuf)?;
+            return self
+                .attributes
+                .get_mut(id, manuf)
+                .ok_or(ZclStatus::UnsupportedAttribute)?
+                .set(value)
+                .map(|_| ());
+        }
+        let a = self
+            .attributes
+            .get(id, manuf)
+            .ok_or(ZclStatus::UnsupportedAttribute)?;
+        let Value::Composite { ty, bytes } = a.value() else {
+            return Err(ZclStatus::InvalidSelector);
+        };
+        let rebuilt = match selector.op {
+            structured::op::WRITE => {
+                structured::replace(ty, bytes, &selector.indices, value, None)?
+            }
+            structured::op::ADD | structured::op::REMOVE => structured::add_remove(
+                ty,
+                bytes,
+                &selector.indices,
+                value,
+                selector.op == structured::op::ADD,
+            )?,
+            _ => return Err(ZclStatus::InvalidSelector),
+        };
+        if !a.def.access.has(Access::WRITE) {
+            return Err(ZclStatus::ReadOnly);
+        }
+        let whole = Value::Composite {
+            ty,
+            bytes: &rebuilt,
+        };
+        if let Some(guard) = self.write_guard {
+            let status = guard(&self.attributes, id, &whole);
+            if !status.is_success() {
+                return Err(status);
+            }
+        }
+        self.attributes
+            .get_mut(id, manuf)
+            .ok_or(ZclStatus::UnsupportedAttribute)?
+            .set(&whole)
+            .map(|_| ())
     }
 
     /// Configure Reporting processing (§2.5.7.3).
