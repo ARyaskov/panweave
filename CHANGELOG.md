@@ -346,6 +346,12 @@ Keep a Changelog; versions follow SemVer.
   cancellation and ordering rules, and a client `TariffStore` assembling
   tariffs with price and block lookup; `price::FULL_SERVER_DEF` /
   `FULL_CLIENT_DEF` declare the full command set.
+* `panweave-smart-energy::clusters::metering::extended`: every other
+  Metering command of Tables D-47 / D-63 (mirroring, fast poll,
+  snapshots with TOU sub-payloads, sampling, notification schemes and
+  flags, supply control) with `FastPoll`, `Sampler`, `Snapshots` /
+  `SnapshotAssembler`, `SupplyControl` and `MirrorTable` state helpers;
+  `metering::FULL_SERVER_DEF` / `FULL_CLIENT_DEF`.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

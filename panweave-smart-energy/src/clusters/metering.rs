@@ -11,6 +11,8 @@ use panweave_zcl::attribute::{Access, AttributeDef};
 use panweave_zcl::cluster::ClusterDef;
 use panweave_zcl::types::DataType;
 
+pub mod extended;
+
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x0702);
 
@@ -127,6 +129,23 @@ pub const CLIENT_DEF: ClusterDef = ClusterDef {
     revision: 1,
     received: &[CMD_GET_PROFILE_RESPONSE],
     generated: &[CMD_GET_PROFILE],
+};
+
+/// Server cluster definition with every command of Tables D-47 / D-63
+/// (see [`extended`]).
+pub const FULL_SERVER_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 1,
+    received: extended::RECEIVED,
+    generated: extended::GENERATED,
+};
+
+/// Client cluster definition with every command.
+pub const FULL_CLIENT_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 1,
+    received: extended::GENERATED,
+    generated: extended::RECEIVED,
 };
 
 /// `UnitofMeasure` values (Table D-26); 0x80 | value is the BCD form.

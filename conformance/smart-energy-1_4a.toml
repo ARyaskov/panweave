@@ -92,8 +92,8 @@ summary = "Metering cluster"
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::clusters::metering"
-tests = ["formatting_and_profile"]
-notes = "Mandatory Reading Information, Meter Status and Formatting attributes, the common Historical Consumption attributes, the UnitofMeasure / MeteringDeviceType / Status enumerations, the formatting and multiplier/divisor helpers and the Get Profile / Get Profile Response codecs. Mirroring, snapshots, sampling, fast poll, supply control, block and billing sets and the notification scheme are not implemented (TODO(PW-SE-METERING))."
+tests = ["codecs_round_trip", "fast_poll_applies_the_limits", "sampler_answers_get_sampled_data", "snapshots_are_stored_published_and_reassembled", "supply_control_applies_change_supply_rules", "mirror_table_allocates_endpoints"]
+notes = "Mandatory Reading Information, Meter Status and Formatting attributes, the common Historical Consumption attributes, the UnitofMeasure / MeteringDeviceType / Status enumerations, the formatting and multiplier/divisor helpers and the Get Profile / Get Profile Response codecs; clusters::metering::extended adds the codecs of every other command of Tables D-47 / D-63 (mirroring, fast poll, snapshot scheduling / taking / publishing with the TOU sub-payloads, sampling, notification schemes and flags, supply control) and the server state behind them: FastPoll with the D.3.4.2 limits (minimum period, 15-minute cap, no extension), a Sampler answering GetSampledData, a Snapshots store answering GetSnapshot with offsets and fragmenting Publish Snapshot (plus a client SnapshotAssembler), SupplyControl applying Change Supply / Local Change Supply with the immediate / delayed / cancel / NOT_AUTHORIZED / UNSUP rules, and an ESI MirrorTable allocating mirror endpoints. Not done: the block, billing, TOU and alarm attribute sets, the block-tier snapshot sub-payloads, snapshot schedules being triggered by the server, the notification-flag attribute set and predefined schemes A / B, and binding to a ZCL endpoint dispatcher (TODO(PW-SE-METERING-DISPATCH))."
 [[requirement]]
 id = "PW-SE-CL-003"
 section = "Annex D.4"
