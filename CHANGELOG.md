@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave-zcl::clusters::io`: the Analog / Binary / Multistate
+  Input, Output and Value clusters (ZCL8 §3.14) over one attribute set
+  with the §3.14.11 rules (inputs writable out of service only,
+  StatusFlags derived from Reliability and OutOfService, multistate and
+  analog range checks, reported PresentValue / StatusFlags);
+  `ClusterInstance::after_write` lets a cluster refresh derived
+  attributes after a network write.
 * `panweave-zcl::clusters::measurement::{scalar, concentration}`: the
   Electrical Conductivity, pH and Wind Speed clusters (ZCL8 §4.10–4.12)
   and the Concentration Measurement clusters 0x040c–0x0429 (§4.13,

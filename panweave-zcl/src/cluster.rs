@@ -58,6 +58,10 @@ pub enum GlobalOutcome {
 /// the Write Attributes Response record.
 pub type WriteGuard<const A: usize> = fn(&AttributeTable<A>, AttributeId, &Value<'_>) -> ZclStatus;
 
+/// Cluster-specific follow-up to a successful network write of the
+/// attribute (derived attributes such as status flags are refreshed).
+pub type AfterWrite<const A: usize> = fn(&mut ClusterInstance<A>, AttributeId);
+
 /// Cluster-specific runtime state of the clusters executed by the
 /// endpoint dispatcher.
 #[derive(Clone, Debug, Default)]
@@ -110,6 +114,8 @@ pub struct ClusterInstance<const A: usize> {
     pub state: ClusterState,
     /// Cluster-specific validation of network writes.
     pub write_guard: Option<WriteGuard<A>>,
+    /// Cluster-specific follow-up to network writes.
+    pub after_write: Option<AfterWrite<A>>,
     /// A multi-frame report is in progress: the previous Report
     /// Attributes ended with `AttributeReportingStatus` = Pending
     /// (§2.3.4.5.2).
@@ -135,6 +141,7 @@ impl<const A: usize> ClusterInstance<A> {
             tick: None,
             state: ClusterState::None,
             write_guard: None,
+            after_write: None,
             report_pending: false,
         }
     }
@@ -382,13 +389,21 @@ impl<const A: usize> ClusterInstance<A> {
                     };
                     let status = match self.check_write(&rec, manuf) {
                         Ok(()) if undivided && any_error => continue,
-                        Ok(()) => match self.attributes.get_mut(rec.id, manuf) {
-                            Some(a) => match a.set(&rec.value) {
-                                Ok(_) => continue,
+                        Ok(()) => {
+                            let set = match self.attributes.get_mut(rec.id, manuf) {
+                                Some(a) => a.set(&rec.value).map(|_| ()),
+                                None => Err(ZclStatus::UnsupportedAttribute),
+                            };
+                            match set {
+                                Ok(()) => {
+                                    if let Some(hook) = self.after_write {
+                                        hook(self, rec.id);
+                                    }
+                                    continue;
+                                }
                                 Err(s) => s,
-                            },
-                            None => ZclStatus::UnsupportedAttribute,
-                        },
+                            }
+                        }
                         Err(s) => s,
                     };
                     if respond {
@@ -700,12 +715,14 @@ impl<const A: usize> ClusterInstance<A> {
         if selector.is_whole() && selector.op == structured::op::WRITE {
             let rec = AttributeValue { id, value: *value };
             self.check_write(&rec, manuf)?;
-            return self
-                .attributes
+            self.attributes
                 .get_mut(id, manuf)
                 .ok_or(ZclStatus::UnsupportedAttribute)?
-                .set(value)
-                .map(|_| ());
+                .set(value)?;
+            if let Some(hook) = self.after_write {
+                hook(self, id);
+            }
+            return Ok(());
         }
         let a = self
             .attributes

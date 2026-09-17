@@ -17,6 +17,7 @@ pub mod hvac;
 pub mod ias_ace;
 pub mod ias_wd;
 pub mod ias_zone;
+pub mod io;
 pub mod keep_alive;
 pub mod level;
 pub mod measurement;

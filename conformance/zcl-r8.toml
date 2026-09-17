@@ -262,10 +262,10 @@ id = "PW-ZCL-GEN-015"
 section = "§3.14"
 summary = "Analog / Binary / Multistate Input, Output and Value clusters"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters"
-tests = []
-notes = "Not implemented; metadata entries only (TODO(PW-ZCL-IO-VALUE))."
+status = "implemented"
+module = "panweave-zcl::clusters::io"
+tests = ["analog_input_is_writable_out_of_service_and_flags_follow", "binary_output_and_multistate_value"]
+notes = "All nine clusters (0x000c–0x0014) as servers of one Kind: OutOfService, PresentValue (single / bool / uint16, reported), StatusFlags (reported; Fault from Reliability, Out Of Service from OutOfService, Overridden from the application), Reliability, Description; EngineeringUnits, Min / MaxPresentValue and Resolution for analog kinds, Polarity and the active / inactive texts for binary kinds, NumberOfStates for multistate kinds, RelinquishDefault and the minimum on / off times for outputs and values. An input PresentValue is writable over the air only while out of service (NOT_AUTHORIZED otherwise) and ignores physical readings then. PriorityArray and StateText (arrays) are not instantiated: a PresentValue write is the priority-16 write; ApplicationType is defined but not instantiated; the In Alarm flag stays clear (no EventState cluster)."
 [[requirement]]
 id = "PW-ZCL-GEN-016"
 section = "§3.17"
