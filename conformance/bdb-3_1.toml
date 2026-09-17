@@ -98,10 +98,10 @@ id = "PW-BDB-INIT-001"
 section = "§7.1"
 summary = "Initialization procedure: restore persistent data, if on a network attempt rejoin per §10.1 (routers resume, end devices rejoin), otherwise wait for commissioning"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::persist"
-tests = ["end_device_and_coordinator_survive_reboots", "factory_reset_erases_network_state"]
-notes = "Stack::restore + Stack::resume: routers and the coordinator resume on their network and re-announce, end devices perform a secured rejoin (falling back to a Trust Center rejoin is left to the application via JoinMode::TrustCenterRejoin); the BDB commissioning-mode dispatch that follows initialization is part of the pending panweave-bdb crate."
+tests = ["end_device_and_coordinator_survive_reboots", "factory_reset_erases_network_state", "rejoin_walks_the_channel_lists"]
+notes = "Stack::restore + Stack::resume: routers and the coordinator resume on their network and re-announce; end devices run the section 10.1 Rejoin procedure of panweave-bdb (secured rejoin on the current channel, Trust Center rejoin on a centralized network with a verified key, then secured rejoins over the primary and secondary channel lists, RejoinUnsuccessful at the end), which the facade Node::initialize starts and which a lost Trust Center enters at step 2."
 [[requirement]]
 id = "PW-BDB-INIT-002"
 section = "§7.2"
