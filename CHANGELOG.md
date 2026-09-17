@@ -199,6 +199,12 @@ Keep a Changelog; versions follow SemVer.
   its panel) and the IAS WD server (`MaxDuration`, Start Warning
   clamped and timed, Squawk, `ZclEvent::Warning` / `Squawk`); facade
   `ias_cie` and `ias_warning_device` endpoints.
+* `panweave-zcl::clusters::electrical_measurement`: `MeasurementType`,
+  the DC and single-phase AC sets with their multiplier / divisor
+  attributes, min / max tracking, overload alarm masks and thresholds
+  (`set_dc` / `set_ac` return the alarm codes to raise), and the profile
+  command codecs; the facade instantiates it for device types that list
+  it.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

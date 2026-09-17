@@ -9,6 +9,7 @@ pub mod alarms;
 pub mod color_control;
 pub mod diagnostics;
 pub mod door_lock;
+pub mod electrical_measurement;
 pub mod groups;
 pub mod hvac;
 pub mod ias_ace;

@@ -117,7 +117,7 @@ Dependencies: R23.2 (APS transport, endpoints), DTL2 (device composition).
 |---|---|---|
 | 2 Foundation | Cluster/attribute/command model, data types (§2.6), frame formats (§2.4), general commands (§2.5): read/write attributes, configure/read reporting, report attributes, default response, discover attributes/commands, read/write structured | `panweave-zcl::{frame, types, global}` |
 | 3 General | Basic, Power Configuration, Device Temperature, Identify, Groups, Scenes, On/Off, On/Off Switch Configuration, Level, Alarms, Time, RSSI Location, Diagnostics, Poll Control, Power Profile, Pulse Width Modulation | `panweave-zcl::clusters::general` |
-| 4 Measurement & Sensing | Illuminance, Illuminance Level, Temperature, Pressure, Flow, Water Content, Occupancy, Electrical, Conductivity, Wind Speed, Concentration | `panweave-zcl::clusters::measurement` |
+| 4 Measurement & Sensing | Illuminance, Illuminance Level, Temperature, Pressure, Flow, Water Content, Occupancy, Electrical, Conductivity, Wind Speed, Concentration | `panweave-zcl::clusters::{measurement, electrical_measurement}` |
 | 5 Lighting | Color Control, Ballast Configuration | `panweave-zcl::clusters::lighting` |
 | 6 HVAC | Pump, Thermostat, Fan Control, Dehumidification, Thermostat UI | `panweave-zcl::clusters::hvac` |
 | 7 Closures | Shade Configuration, Door Lock, Window Covering, Barrier Control | `panweave-zcl::clusters::{window_covering, door_lock}` |

@@ -244,10 +244,10 @@ id = "PW-ZCL-MEAS-002"
 section = "§4.9"
 summary = "Electrical Measurement cluster"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::electrical_measurement"
-tests = []
-
+tests = ["dc_server_tracks_extremes_and_alarms", "ac_server_readings_and_alarms", "profile_codecs_round_trip"]
+notes = "MeasurementType, the DC set (readings, minima / maxima, formatting, overload mask and thresholds) and the single-phase / phase A AC set (frequency, RMS voltage with extremes, RMS current, active / reactive / apparent power, power factor, formatting, ACAlarmsMask with the voltage / current / active power overload thresholds); readings fed by the application with the alarm codes (the mask bit numbers) to raise through the Alarms cluster; Get Profile Info / Get Measurement Profile request and response codecs, the profile itself left to the application. Not instantiated: the AC current / active power extremes, the RMS voltage period / counter attributes and thresholds beyond the overloads, harmonics, phases B and C."
 [[requirement]]
 id = "PW-ZCL-LIGHT-001"
 section = "§5.2"
