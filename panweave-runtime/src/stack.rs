@@ -246,6 +246,12 @@ pub enum StackEvent {
         /// The reporting device.
         from: ShortAddress,
     },
+    /// This device took a new network address after an address conflict
+    /// (§3.6.1.10) and announced it.
+    AddressChanged {
+        /// The new address.
+        short: ShortAddress,
+    },
     /// The network's PAN ID changed (Network Update, §3.6.1.13.4).
     PanIdChanged {
         /// The new PAN ID.

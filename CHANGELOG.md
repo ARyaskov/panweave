@@ -422,6 +422,11 @@ Keep a Changelog; versions follow SemVer.
   (`Nwk::interfaces`): scans and formation are confined to the channels
   an enabled interface supports, the entry records the channel in use,
   counts unicast traffic and its `RoutersAllowed` gates router joins.
+* Source routing origination (R23.2 §3.6.4.3.1): a concentrator with a
+  stored route record sends its frames source routed; a Route Record
+  precedes an originator's own data to a concentrator without a route
+  cache (§3.6.4.5.5). After an address conflict re-addressing the
+  device announces itself and reports `StackEvent::AddressChanged`.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

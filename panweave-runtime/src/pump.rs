@@ -715,6 +715,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.next_poll = None;
                         let _ = self.join(crate::JoinMode::SecuredRejoin);
                     }
+                    if code == panweave_nwk::command::NetworkStatusCode::NetworkAddressUpdate
+                        && address == self.nwk.nib.network_address
+                    {
+                        // §3.6.1.10.2: re-addressed after an address
+                        // conflict; announce the new address.
+                        let _ = self.zdo.device_announce(
+                            address,
+                            self.config.ieee,
+                            self.config.capability(),
+                        );
+                        self.push_event(StackEvent::AddressChanged { short: address });
+                    }
                     if code == panweave_nwk::command::NetworkStatusCode::PanIdConflictReport {
                         // §2.3.4.2: a legacy device reported a conflict;
                         // the application decides (Stack::change_pan_id).

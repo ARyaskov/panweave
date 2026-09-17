@@ -265,8 +265,49 @@ impl<
             });
             return Ok(id);
         }
-        let (frame, header_len) = Self::build_npdu(&header, payload)?;
+        // §3.6.4.3.1: a concentrator with a route record for the
+        // destination sends source routed; without intermediate relays
+        // the frame goes straight to the destination.
+        let mut relays: heapless::Vec<u8, { 2 * crate::frame::MAX_SOURCE_ROUTE_RELAYS }> =
+            heapless::Vec::new();
+        let mut first_hop = None;
+        if self.config.concentrator
+            && alias.is_none()
+            && let Some(sr) = self.source_routes.get(dst)
+            && !sr.relays.is_empty()
+        {
+            for r in &sr.relays {
+                let _ = relays.extend_from_slice(&r.0.to_le_bytes());
+            }
+            first_hop = sr.relays.last().copied();
+        }
         let id = self.alloc_tx_id();
+        if let Some(hop) = first_hop {
+            let index = u8::try_from(relays.len() / 2)
+                .unwrap_or(1)
+                .saturating_sub(1);
+            let header = header.with_source_route(index, &relays);
+            let (frame, header_len) = Self::build_npdu(&header, payload)?;
+            self.transmit_pending(PendingTx {
+                id,
+                frame,
+                header_len,
+                dst,
+                next_hop: hop,
+                mac_handle: None,
+                retries_left: constants::UNICAST_RETRIES,
+                retry_at: None,
+                awaiting_route: false,
+                secure,
+                indirect: false,
+                relayed_from: None,
+                source_route: true,
+                kind: TxKind::Data,
+                created: self.now,
+            })?;
+            return Ok(id);
+        }
+        let (frame, header_len) = Self::build_npdu(&header, payload)?;
         self.enqueue_unicast(PendingTx {
             id,
             frame,
@@ -301,6 +342,16 @@ impl<
                     && !n.rx_on_when_idle
                 {
                     entry.indirect = true;
+                }
+                // §3.6.4.5.5: a Route Record precedes data to a
+                // concentrator without a route cache.
+                if entry.kind == TxKind::Data
+                    && entry.relayed_from.is_none()
+                    && let Some(r) = self.routes.get(entry.dst)
+                    && r.many_to_one
+                    && r.route_record_required
+                {
+                    self.send_route_record(entry.dst, None);
                 }
                 self.transmit_pending(entry)
             }
