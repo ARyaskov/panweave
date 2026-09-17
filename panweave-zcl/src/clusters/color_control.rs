@@ -62,6 +62,177 @@ pub const COLOR_CAPABILITIES: AttributeDef =
 /// `ColorTempPhysicalMinMireds` (uint16).
 pub const COLOR_TEMP_PHYSICAL_MIN_MIREDS: AttributeDef =
     AttributeDef::new(0x400b, DataType::Uint(2), Access::RO);
+/// `DriftCompensation` (enum8, Table 5.4).
+pub const DRIFT_COMPENSATION: AttributeDef = AttributeDef::new(0x0005, DataType::Enum8, Access::RO);
+/// `CompensationText` (string).
+pub const COMPENSATION_TEXT: AttributeDef =
+    AttributeDef::new(0x0006, DataType::CharString, Access::RO);
+/// `NumberOfPrimaries` (uint8, 0…6).
+pub const NUMBER_OF_PRIMARIES: AttributeDef =
+    AttributeDef::new(0x0010, DataType::Uint(1), Access::RO);
+/// `WhitePointX` (uint16, writable).
+pub const WHITE_POINT_X: AttributeDef = AttributeDef::new(0x0030, DataType::Uint(2), Access::RW);
+/// `WhitePointY`.
+pub const WHITE_POINT_Y: AttributeDef = AttributeDef::new(0x0031, DataType::Uint(2), Access::RW);
+
+/// `DriftCompensation` values (Table 5.4).
+pub mod drift_compensation {
+    /// None.
+    pub const NONE: u8 = 0x00;
+    /// Other / unknown.
+    pub const OTHER: u8 = 0x01;
+    /// Temperature monitoring.
+    pub const TEMPERATURE_MONITORING: u8 = 0x02;
+    /// Optical luminance monitoring and feedback.
+    pub const OPTICAL_LUMINANCE: u8 = 0x03;
+    /// Optical colour monitoring and feedback.
+    pub const OPTICAL_COLOR: u8 = 0x04;
+}
+
+/// A defined primary or a colour point: CIE xyY chromaticity (x and y
+/// scaled by 65536) and relative intensity (0xff unknown).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Primary {
+    /// x × 65536.
+    pub x: u16,
+    /// y × 65536.
+    pub y: u16,
+    /// Relative intensity.
+    pub intensity: u8,
+}
+
+/// The `PrimaryNX` / `PrimaryNY` / `PrimaryNIntensity` attributes of
+/// primary `n` (1…6): primaries 1–3 in the Defined Primaries set from
+/// 0x0011 (Table 5.10), 4–6 in the Additional Defined Primaries set
+/// from 0x0020 (Table 5.11), four identifiers apart.
+pub const fn primary_attrs(n: u8) -> [AttributeDef; 3] {
+    let base = if n <= 3 {
+        0x0011 + 4 * (n as u16 - 1)
+    } else {
+        0x0020 + 4 * (n as u16 - 4)
+    };
+    [
+        AttributeDef::new(base, DataType::Uint(2), Access::RO),
+        AttributeDef::new(base + 1, DataType::Uint(2), Access::RO),
+        AttributeDef::new(base + 2, DataType::Uint(1), Access::RO),
+    ]
+}
+
+/// The colour points of Table 5.12: red, green and blue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ColorPoint {
+    /// `ColorPointR*` (0x0032–0x0034).
+    Red,
+    /// `ColorPointG*` (0x0036–0x0038).
+    Green,
+    /// `ColorPointB*` (0x003a–0x003c).
+    Blue,
+}
+
+/// The X / Y / Intensity attributes of `point` (writable).
+pub const fn color_point_attrs(point: ColorPoint) -> [AttributeDef; 3] {
+    let base = match point {
+        ColorPoint::Red => 0x0032,
+        ColorPoint::Green => 0x0036,
+        ColorPoint::Blue => 0x003a,
+    };
+    [
+        AttributeDef::new(base, DataType::Uint(2), Access::RW),
+        AttributeDef::new(base + 1, DataType::Uint(2), Access::RW),
+        AttributeDef::new(base + 2, DataType::Uint(1), Access::RW),
+    ]
+}
+
+/// Largest chromaticity coordinate.
+pub const MAX_CHROMATICITY: u16 = 0xfeff;
+
+/// Adds the drift compensation attributes (§5.2.2.2.1.6–7).
+pub fn enable_drift_compensation<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    method: u8,
+    text: &[u8],
+) -> Result<(), ZclStatus> {
+    if method > drift_compensation::OPTICAL_COLOR || text.len() > 254 {
+        return Err(ZclStatus::InvalidValue);
+    }
+    c.add_attribute(DRIFT_COMPENSATION, &Value::Enum8(method))?;
+    c.add_attribute(
+        COMPENSATION_TEXT,
+        &Value::String {
+            ty: DataType::CharString,
+            bytes: Some(text),
+        },
+    )
+}
+
+/// Adds the Defined Primaries information set (Tables 5.10 / 5.11):
+/// `NumberOfPrimaries` and the X / Y / Intensity of each of the at most
+/// six `primaries`.
+pub fn enable_primaries<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    primaries: &[Primary],
+) -> Result<(), ZclStatus> {
+    if primaries.len() > 6
+        || primaries
+            .iter()
+            .any(|p| p.x > MAX_CHROMATICITY || p.y > MAX_CHROMATICITY)
+    {
+        return Err(ZclStatus::InvalidValue);
+    }
+    c.add_attribute(
+        NUMBER_OF_PRIMARIES,
+        &Value::Uint {
+            width: 1,
+            value: u64::try_from(primaries.len()).unwrap_or(0),
+        },
+    )?;
+    for (i, p) in primaries.iter().enumerate() {
+        let [x, y, intensity] = primary_attrs(u8::try_from(i + 1).unwrap_or(1));
+        c.add_attribute(x, &u16v(p.x))?;
+        c.add_attribute(y, &u16v(p.y))?;
+        c.add_attribute(
+            intensity,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(p.intensity),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Adds the Defined Colour Points set (Table 5.12): the white point and
+/// the red, green and blue colour points, all writable.
+pub fn enable_color_points<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    white: (u16, u16),
+    red: Primary,
+    green: Primary,
+    blue: Primary,
+) -> Result<(), ZclStatus> {
+    c.add_attribute(WHITE_POINT_X, &u16v(white.0.min(MAX_CHROMATICITY)))?;
+    c.add_attribute(WHITE_POINT_Y, &u16v(white.1.min(MAX_CHROMATICITY)))?;
+    for (point, p) in [
+        (ColorPoint::Red, red),
+        (ColorPoint::Green, green),
+        (ColorPoint::Blue, blue),
+    ] {
+        let [x, y, intensity] = color_point_attrs(point);
+        c.add_attribute(x, &u16v(p.x.min(MAX_CHROMATICITY)))?;
+        c.add_attribute(y, &u16v(p.y.min(MAX_CHROMATICITY)))?;
+        c.add_attribute(
+            intensity,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(p.intensity),
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// `ColorTempPhysicalMaxMireds` (uint16).
 pub const COLOR_TEMP_PHYSICAL_MAX_MIREDS: AttributeDef =
     AttributeDef::new(0x400c, DataType::Uint(2), Access::RO);
@@ -1494,5 +1665,61 @@ mod tests {
             Outcome::Default(ZclStatus::UnsupportedClusterCommand)
         );
         assert!(server::<16>(capability::ENHANCED_HUE, (1, 2)).is_err());
+    }
+
+    #[test]
+    fn primaries_color_points_and_drift_compensation() {
+        let mut c: ClusterInstance<64> =
+            server(capability::XY | capability::COLOR_TEMPERATURE, (153, 500)).unwrap();
+        enable_drift_compensation(&mut c, drift_compensation::TEMPERATURE_MONITORING, b"NTC")
+            .unwrap();
+        let red = Primary {
+            x: 0xb333,
+            y: 0x4ccc,
+            intensity: 200,
+        };
+        let green = Primary {
+            x: 0x4ccc,
+            y: 0x9999,
+            intensity: 220,
+        };
+        let blue = Primary {
+            x: 0x2666,
+            y: 0x0f5c,
+            intensity: 60,
+        };
+        enable_primaries(&mut c, &[red, green, blue]).unwrap();
+        enable_color_points(&mut c, (0x5000, 0x5400), red, green, blue).unwrap();
+        assert_eq!(c.u8(NUMBER_OF_PRIMARIES.id), Some(3));
+        assert_eq!(primary_attrs(2)[0].id.0, 0x0015);
+        assert_eq!(primary_attrs(6)[2].id.0, 0x002a);
+        assert_eq!(c.u16(primary_attrs(3)[0].id), Some(0x2666));
+        assert_eq!(c.u8(primary_attrs(1)[2].id), Some(200));
+        assert!(c.attributes.get(primary_attrs(4)[0].id, None).is_none());
+        assert_eq!(color_point_attrs(ColorPoint::Blue)[2].id.0, 0x003c);
+        assert_eq!(
+            c.u16(color_point_attrs(ColorPoint::Green)[1].id),
+            Some(0x9999)
+        );
+        assert_eq!(c.u16(WHITE_POINT_X.id), Some(0x5000));
+        assert_eq!(
+            c.u8(DRIFT_COMPENSATION.id),
+            Some(drift_compensation::TEMPERATURE_MONITORING)
+        );
+        // Seven primaries or an out-of-range chromaticity are refused.
+        let mut d: ClusterInstance<64> = server(capability::XY, (153, 500)).unwrap();
+        assert!(enable_primaries(&mut d, &[red; 7]).is_err());
+        assert!(
+            enable_primaries(
+                &mut d,
+                &[Primary {
+                    x: 0xff00,
+                    y: 0,
+                    intensity: 0
+                }]
+            )
+            .is_err()
+        );
+        assert!(enable_drift_compensation(&mut d, 5, b"").is_err());
     }
 }
