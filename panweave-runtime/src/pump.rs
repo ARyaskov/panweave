@@ -2119,6 +2119,28 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         while let Some(e) = self.zcl.next_event() {
             any = true;
+            if let ZclEvent::StartupSetsChanged { endpoint } = e {
+                let _ = self.persist_startup_sets(endpoint);
+                self.push_event(StackEvent::StartupSetsChanged { endpoint });
+                continue;
+            }
+            if let ZclEvent::Restart {
+                endpoint,
+                install,
+                delay,
+                jitter,
+                ..
+            } = e
+            {
+                // §13.2.2.3.1: after the delay plus RAND(jitter × 80) ms
+                // the stack restarts from the current startup set
+                // (installing it) or with its running configuration.
+                let jitter_ms = u64::from(self.nwk.rng().below(u32::from(jitter) * 80 + 1));
+                let at = self.now
+                    + Duration::from_secs(u64::from(delay))
+                    + Duration::from_millis(jitter_ms);
+                self.pending_restart = Some((at, endpoint, install));
+            }
             self.push_event(match e {
                 ZclEvent::Identify { endpoint, seconds } => {
                     StackEvent::Identify { endpoint, seconds }
@@ -2221,6 +2243,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 },
                 ZclEvent::WeeklyScheduleChanged { endpoint } => {
                     StackEvent::WeeklyScheduleChanged { endpoint }
+                }
+                ZclEvent::StartupSetsChanged { endpoint } => {
+                    StackEvent::StartupSetsChanged { endpoint }
                 }
                 ZclEvent::Color {
                     endpoint,

@@ -391,8 +391,9 @@ pub enum StackEvent {
     },
     /// A Commissioning server accepted a Restart Device (ZCL8
     /// §13.2.2.3.1): after `delay` seconds plus RAND(`jitter` × 80) ms
-    /// the application calls `Stack::restart_from_startup_set` (with
-    /// `install`) or `Stack::leave_with` and rejoins.
+    /// the stack restarts from the endpoint's startup set
+    /// (`Stack::restart_from_startup_set`, when `install`) or resumes
+    /// with its running configuration; the application may prepare.
     Restart {
         /// Endpoint.
         endpoint: Endpoint,
@@ -460,6 +461,12 @@ pub enum StackEvent {
         heat: Option<i16>,
         /// Cooling setpoint, when implemented.
         cool: Option<i16>,
+    },
+    /// The saved startup sets of the Commissioning server on `endpoint`
+    /// changed over the air and were stored (ZCL8 §13.2.2.3.2).
+    StartupSetsChanged {
+        /// Endpoint.
+        endpoint: Endpoint,
     },
     /// A thermostat's weekly schedule was set or cleared over the air
     /// (ZCL8 §6.3.2.3.2, §6.3.2.3.4).
@@ -661,6 +668,10 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) factory_reset_pending: bool,
     /// OTA upgrade server discovery in progress (ZCL8 §11.8).
     pub(crate) ota_discovery: Option<crate::ota::OtaDiscovery>,
+    /// A Restart Device accepted by the Commissioning server on the
+    /// endpoint, due at the instant: install the startup set or restart
+    /// with the running configuration (ZCL8 §13.2.2.3.1).
+    pub(crate) pending_restart: Option<(Instant, Endpoint, bool)>,
     /// The On-Network TCLK Update procedure awaits the Trust Center's
     /// Node_Desc_rsp until this deadline (BDB 3.1 §10.2.4).
     pub(crate) tclk_update: Option<Instant>,
@@ -796,6 +807,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             factory_reset_pending: false,
             tclk_update: None,
             ota_discovery: None,
+            pending_restart: None,
             parent_annce: None,
             parent_link_failures: 0,
             last_rejoin_attempt: None,
@@ -1206,6 +1218,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         self.poll_parent_annce(now);
         self.poll_ota_discovery(now);
+        self.poll_pending_restart(now);
         self.poll_parent_loss_rejoin(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
@@ -1279,6 +1292,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.key_update.map(|(_, at)| at),
             self.tclk_update,
             self.ota_discovery.and_then(|d| d.deadline()),
+            self.pending_restart.map(|(at, _, _)| at),
             self.parent_annce.map(|(at, _)| at),
             self.rejoin_due,
             #[cfg(feature = "green-power")]

@@ -59,6 +59,9 @@ pub enum Kind {
     /// Past network keys a Zigbee Direct device keeps for Limited
     /// Authorization sessions (ZD 1.1 §9.1).
     DirectPastKeys,
+    /// Saved startup attribute sets of a Commissioning server (ZCL8
+    /// §13.2.2.3.2); `id` is the endpoint.
+    StartupSets,
 }
 
 /// A record key.

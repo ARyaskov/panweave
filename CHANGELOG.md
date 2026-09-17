@@ -232,6 +232,13 @@ Keep a Changelog; versions follow SemVer.
   `Stack::{startup_set, seed_startup_set, restart_from_startup_set}`
   applying a set by forming, silently adopting, rejoining or
   associating once the leave completes.
+* Commissioning cluster completion (ZCL8 §13.2.2.3): the saved startup
+  sets live in non-volatile storage (`Kind::StartupSets`, stored on
+  Save / Reset with `StackEvent::StartupSetsChanged`, restored by
+  `Stack::restore`), Restart Device is carried out by the stack after
+  the delay plus RAND(jitter × 80 ms), and an applied set's join,
+  end-device and concentrator parameters become the stack's ZDO
+  configuration attributes, poll rate and concentrator settings.
 * `Access::SECRET`: credential attributes answer NOT_AUTHORIZED to reads
   and are redacted from `Attribute`'s `Debug` output (as are all
   key128 attributes).

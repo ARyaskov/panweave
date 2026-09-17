@@ -2,8 +2,9 @@
 //! router seeds its startup set from the network it joined, the tool
 //! (coordinator) cannot read the keys back (NOT_AUTHORIZED), writes the
 //! network key and a silent-join StartupControl, saves the set under an
-//! index, and sends Restart Device; the router leaves, re-adopts the
-//! network from the set and is reachable again.
+//! index (stored in non-volatile memory and restored by a rebooted
+//! stack), and sends Restart Device; after the delay the router leaves,
+//! re-adopts the network from the set and is reachable again.
 
 #![allow(
     clippy::indexing_slicing,
@@ -17,7 +18,7 @@ use panweave_codec::{Encode, Writer};
 use panweave_mac::service::MacServiceConfig;
 use panweave_runtime::{JoinMode, StackConfig, StackEvent};
 use panweave_sim::{OnOffApp, SimStack, Simulator};
-use panweave_storage::MemoryStorage;
+use panweave_storage::{Key, Kind, MemoryStorage, Storage};
 use panweave_testkit::TestRng;
 use panweave_types::time::Duration;
 use panweave_types::{
@@ -39,13 +40,22 @@ const ROUTER_IEEE: ExtendedAddress = ExtendedAddress(0x00AA_0000_0000_0007);
 const EP: Endpoint = Endpoint(1);
 
 fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
+    node_with(role, ieee, seed, MemoryStorage::new())
+}
+
+fn node_with(
+    role: LogicalDeviceType,
+    ieee: ExtendedAddress,
+    seed: u64,
+    storage: MemoryStorage<64, 128>,
+) -> SimStack {
     let mut cfg = StackConfig::new(role, ieee);
     cfg.trust_center_policy.allow_joins = true;
     let mut n = SimStack::new(
         cfg,
         MacServiceConfig::default(),
         TestRng::seed(seed),
-        MemoryStorage::new(),
+        storage,
     );
     let mut ep = EndpointInstance::new(EP, ProfileId::HOME_AUTOMATION);
     ep.add_instance(identify::server().unwrap()).unwrap();
@@ -208,12 +218,41 @@ fn tool_writes_the_startup_set_and_restarts_the_router_into_a_silent_join() {
     assert!(sim.run_until(Duration::from_secs(10), |x| {
         reply(x.events(c), seq, cs::CMD_SAVE_STARTUP_PARAMETERS_RESPONSE) == Some(vec![0])
     }));
+    // The saved set is in non-volatile storage (§13.2.2.3.2) and a
+    // rebooted stack with the same storage gets it back.
+    assert!(
+        sim.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::StartupSetsChanged { endpoint: EP }))
+    );
+    let mut rec = [0u8; 256];
+    let stored = sim
+        .stack(r)
+        .storage
+        .load(Key::with_id(Kind::StartupSets, u64::from(EP.0)), &mut rec)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, 1 + 1 + StartupSet::ENCODED_LEN);
+    let mut rebooted = node_with(
+        LogicalDeviceType::Router,
+        ROUTER_IEEE,
+        43,
+        sim.stack(r).storage.clone(),
+    );
+    rebooted.restore().unwrap();
+    let saved = cs::saved(rebooted.zcl.cluster(EP, cs::ID, Role::Server).unwrap());
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].0, 1);
+    assert_eq!(saved[0].1.network_key, NETWORK_KEY);
+    assert_eq!(saved[0].1.startup_control, cs::startup_control::SILENT_JOIN);
     sim.take_events(c);
     sim.take_events(r);
 
-    // Restart Device: the router answers SUCCESS, its application gets
-    // the request and applies the set: leave, then silent re-adoption.
-    let n = cs::encode_restart(cs::restart_options::IMMEDIATE, 0, 0, &mut buf).unwrap();
+    // Restart Device with a 2 s delay and jitter: the router answers
+    // SUCCESS, tells its application and, once the delay has elapsed,
+    // applies the set itself: leave, then silent re-adoption.
+    let restart_sent = sim.clock.now();
+    let n = cs::encode_restart(cs::restart_options::IMMEDIATE, 2, 5, &mut buf).unwrap();
     let seq = sim
         .stack(c)
         .zcl
@@ -238,19 +277,22 @@ fn tool_writes_the_startup_set_and_restarts_the_router_into_a_silent_join() {
                         endpoint: EP,
                         install: true,
                         immediate: true,
-                        delay: 0,
-                        jitter: 0
+                        delay: 2,
+                        jitter: 5
                     }
                 )
             })
     }));
-    let set = sim.stack(r).startup_set(EP).unwrap();
-    sim.stack(r).restart_from_startup_set(&set).unwrap();
     assert!(sim.run_until(Duration::from_secs(10), |x| {
         x.events(r)
             .iter()
             .any(|e| matches!(e, StackEvent::Left { .. }))
     }));
+    // Not before the delay, not later than the delay plus 5 × 80 ms of
+    // jitter (plus the leave itself).
+    let left_at = sim.clock.now();
+    let elapsed = left_at.as_millis() - restart_sent.as_millis();
+    assert!((2_000..=4_000).contains(&elapsed), "{elapsed} ms");
     sim.run_for(Duration::from_secs(2));
     assert!(!sim.stack(r).is_idle());
     assert_eq!(sim.stack(r).short_address(), original_short);

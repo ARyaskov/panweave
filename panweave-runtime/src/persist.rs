@@ -20,6 +20,8 @@ use panweave_types::{
     KeyAttributes, KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
 };
 
+use panweave_zcl::Role;
+
 use crate::stack::{Phase, Stack};
 
 /// Format version of the NIB record.
@@ -60,6 +62,56 @@ fn record<S: Storage>(storage: &mut S, key: Key) -> Result<Option<Vec<u8, RECORD
 }
 
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+    /// Stores the saved startup sets of the Commissioning server on
+    /// `endpoint` (ZCL8 §13.2.2.3.2: non-volatile).
+    pub fn persist_startup_sets(&mut self, endpoint: Endpoint) -> Result<(), StorageError> {
+        use panweave_zcl::clusters::commissioning;
+        let Some(state) = self
+            .zcl
+            .cluster(endpoint, commissioning::ID, Role::Server)
+            .and_then(commissioning::saved_state)
+        else {
+            return Ok(());
+        };
+        let mut buf = [0u8; commissioning::State::ENCODED_LEN];
+        let n = state.encode(&mut buf).unwrap_or(0);
+        self.storage.store(
+            Key::with_id(Kind::StartupSets, u64::from(endpoint.0)),
+            buf.get(..n).unwrap_or(&[]),
+        )
+    }
+
+    /// Restores the saved startup sets of every Commissioning server
+    /// (part of [`Self::restore`]).
+    pub fn restore_startup_sets(&mut self) -> Result<(), StorageError> {
+        use panweave_zcl::clusters::commissioning;
+        let endpoints: Vec<Endpoint, 8> = self
+            .zcl
+            .endpoints()
+            .iter()
+            .filter(|e| e.cluster(commissioning::ID, Role::Server).is_some())
+            .map(|e| e.endpoint)
+            .collect();
+        for endpoint in endpoints {
+            let mut buf = [0u8; commissioning::State::ENCODED_LEN];
+            let Some(n) = self.storage.load(
+                Key::with_id(Kind::StartupSets, u64::from(endpoint.0)),
+                &mut buf,
+            )?
+            else {
+                continue;
+            };
+            let saved = commissioning::State::decode(buf.get(..n).unwrap_or(&[]));
+            if let Some(c) = self
+                .zcl
+                .cluster_mut(endpoint, commissioning::ID, Role::Server)
+            {
+                commissioning::restore_saved(c, saved);
+            }
+        }
+        Ok(())
+    }
+
     /// Persists the NIB items needed to resume the network.
     pub fn persist_nib(&mut self) -> Result<(), StorageError> {
         let nib = &self.nwk.nib;
@@ -258,6 +310,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Kind::Groups,
             Kind::GreenPower,
             Kind::DirectPastKeys,
+            Kind::StartupSets,
         ] {
             self.storage.erase_kind(k)?;
         }
@@ -282,6 +335,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 .security
                 .restore_outgoing_counter(u32::from_le_bytes(fc));
         }
+        self.restore_startup_sets()?;
         let Some(nib) = record(&mut self.storage, Key::single(Kind::Nib))? else {
             return Ok(Restored::FactoryNew);
         };

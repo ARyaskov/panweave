@@ -311,6 +311,12 @@ pub enum ZclEvent {
         /// Cooling setpoint, when implemented.
         cool: Option<i16>,
     },
+    /// The saved startup sets of the Commissioning server on `endpoint`
+    /// changed (§13.2.2.3.2 / §13.2.2.3.4): the runtime stores them.
+    StartupSetsChanged {
+        /// Endpoint.
+        endpoint: Endpoint,
+    },
     /// The weekly schedule of the thermostat on `endpoint` was set or
     /// cleared over the air (§6.3.2.3.2, §6.3.2.3.4).
     WeeklyScheduleChanged {
@@ -922,12 +928,21 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 };
                                 let endpoint = origin.endpoint;
                                 match commissioning::handle(c, cmd, payload) {
-                                    commissioning::Outcome::Reply { response, restart } => {
+                                    commissioning::Outcome::Reply {
+                                        response,
+                                        restart,
+                                        saved_changed,
+                                    } => {
                                         self.reply_cluster_specific(
                                             &origin,
                                             response.command,
                                             &[response.status.raw()],
                                         );
+                                        if saved_changed {
+                                            self.push_event(ZclEvent::StartupSetsChanged {
+                                                endpoint,
+                                            });
+                                        }
                                         if let Some(r) = restart {
                                             self.push_event(ZclEvent::Restart {
                                                 endpoint,

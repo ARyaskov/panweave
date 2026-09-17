@@ -10,8 +10,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_storage::Storage;
 use panweave_types::{
-    Channel, ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Instant, Key128, KeyAttributes,
-    KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
+    Channel, ChannelMask, CryptoRng, Duration, Endpoint, ExtendedAddress, Instant, Key128,
+    KeyAttributes, KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
 };
 
 use panweave_zcl::Role;
@@ -343,6 +343,24 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.apply_startup_set(set)
     }
 
+    /// Runs a Restart Device whose delay elapsed (ZCL8 §13.2.2.3.1).
+    pub(crate) fn poll_pending_restart(&mut self, now: Instant) {
+        let Some((at, endpoint, install)) = self.pending_restart else {
+            return;
+        };
+        if !now.has_reached(at) {
+            return;
+        }
+        self.pending_restart = None;
+        if install {
+            if let Some(set) = self.startup_set(endpoint) {
+                let _ = self.restart_from_startup_set(&set);
+            }
+        } else if self.phase == Phase::Operating {
+            let _ = self.resume();
+        }
+    }
+
     /// Applies a startup set deferred by [`Self::restart_from_startup_set`].
     pub(crate) fn apply_pending_startup(&mut self) {
         if let Some(set) = self.pending_startup.take() {
@@ -352,6 +370,26 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     fn apply_startup_set(&mut self, set: &StartupSet) -> Result<(), NwkStatus> {
         let channels = ChannelMask(set.channel_mask & ChannelMask::ALL_2_4GHZ.0);
+        // The join, end-device and concentrator parameter sets (Tables
+        // 13-7 – 13-9) become the stack's ZDO configuration attributes,
+        // poll rate and concentrator settings.
+        self.config.zdo.scan_attempts = set.scan_attempts.max(1);
+        // TimeBetweenScans is in milliseconds; the ZDO attribute counts
+        // octet durations (16 µs).
+        self.config.zdo.time_between_scans_octets =
+            u16::try_from(u32::from(set.time_between_scans) * 1000 / 16).unwrap_or(u16::MAX);
+        self.config.zdo.rejoin_interval_secs = set.rejoin_interval;
+        self.config.zdo.max_rejoin_interval_secs = set.max_rejoin_interval;
+        if set.parent_retry_threshold != 0xff {
+            self.config.zdo.parent_link_retry_threshold = set.parent_retry_threshold;
+        }
+        if set.indirect_poll_rate != 0 {
+            self.config.poll_interval = Duration::from_millis(u64::from(set.indirect_poll_rate));
+        }
+        self.nwk.config.concentrator = set.concentrator;
+        self.nwk.config.concentrator_radius = set.concentrator_radius;
+        self.nwk.config.concentrator_discovery_time_secs =
+            u32::from(set.concentrator_discovery_time);
         let key_given = set.network_key.as_bytes().iter().any(|b| *b != 0);
         let link_key_given = set
             .preconfigured_link_key

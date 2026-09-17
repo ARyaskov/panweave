@@ -269,12 +269,124 @@ impl StartupSet {
     }
 }
 
+impl StartupSet {
+    /// Length of the fixed encoding used for non-volatile storage.
+    pub const ENCODED_LEN: usize = 77;
+
+    /// Writes the fixed encoding (for storage).
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u16_le(self.short_address)?;
+        w.u64_le(self.extended_pan_id)?;
+        w.u16_le(self.pan_id)?;
+        w.u32_le(self.channel_mask)?;
+        w.u8(self.protocol_version)?;
+        w.u8(self.stack_profile)?;
+        w.u8(self.startup_control)?;
+        w.u64_le(self.trust_center_address)?;
+        w.bytes(self.network_key.as_bytes())?;
+        w.u8(u8::from(self.use_insecure_join))?;
+        w.bytes(self.preconfigured_link_key.as_bytes())?;
+        w.u8(self.network_key_seq_num)?;
+        w.u8(self.network_key_type)?;
+        w.u16_le(self.network_manager_address)?;
+        w.u8(self.scan_attempts)?;
+        w.u16_le(self.time_between_scans)?;
+        w.u16_le(self.rejoin_interval)?;
+        w.u16_le(self.max_rejoin_interval)?;
+        w.u16_le(self.indirect_poll_rate)?;
+        w.u8(self.parent_retry_threshold)?;
+        w.u8(u8::from(self.concentrator))?;
+        w.u8(self.concentrator_radius)?;
+        w.u8(self.concentrator_discovery_time)
+    }
+
+    /// Reads the fixed encoding.
+    pub fn decode(r: &mut Reader<'_>) -> Result<Self, CodecError> {
+        Ok(StartupSet {
+            short_address: r.u16_le()?,
+            extended_pan_id: r.u64_le()?,
+            pan_id: r.u16_le()?,
+            channel_mask: r.u32_le()?,
+            protocol_version: r.u8()?,
+            stack_profile: r.u8()?,
+            startup_control: r.u8()?,
+            trust_center_address: r.u64_le()?,
+            network_key: Key128::from_bytes(r.array::<16>()?),
+            use_insecure_join: r.u8()? != 0,
+            preconfigured_link_key: Key128::from_bytes(r.array::<16>()?),
+            network_key_seq_num: r.u8()?,
+            network_key_type: r.u8()?,
+            network_manager_address: r.u16_le()?,
+            scan_attempts: r.u8()?,
+            time_between_scans: r.u16_le()?,
+            rejoin_interval: r.u16_le()?,
+            max_rejoin_interval: r.u16_le()?,
+            indirect_poll_rate: r.u16_le()?,
+            parent_retry_threshold: r.u8()?,
+            concentrator: r.u8()? != 0,
+            concentrator_radius: r.u8()?,
+            concentrator_discovery_time: r.u8()?,
+        })
+    }
+}
+
 /// Server state: the saved startup sets by index.
 #[derive(Clone, Default, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct State {
     /// Saved sets.
     pub saved: Vec<(u8, StartupSet), MAX_SAVED>,
+}
+
+impl State {
+    /// Longest encoding of the saved sets (§13.2.2.3.2: the sets are
+    /// kept in non-volatile memory).
+    pub const ENCODED_LEN: usize = 1 + MAX_SAVED * (1 + StartupSet::ENCODED_LEN);
+
+    /// Encodes the saved sets for storage; returns the length.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, CodecError> {
+        let mut w = Writer::new(out);
+        w.u8(u8::try_from(self.saved.len()).unwrap_or(u8::MAX))?;
+        for (index, set) in &self.saved {
+            w.u8(*index)?;
+            set.encode(&mut w)?;
+        }
+        Ok(w.position())
+    }
+
+    /// Decodes saved sets; a malformed record yields none.
+    pub fn decode(bytes: &[u8]) -> Self {
+        let mut r = Reader::new(bytes);
+        let mut state = State::default();
+        let Ok(n) = r.u8() else {
+            return state;
+        };
+        for _ in 0..n {
+            let Ok(index) = r.u8() else {
+                break;
+            };
+            let Ok(set) = StartupSet::decode(&mut r) else {
+                break;
+            };
+            let _ = state.saved.push((index, set));
+        }
+        state
+    }
+}
+
+/// The saved sets of a server for storage (`None` without state).
+pub fn saved_state<const A: usize>(c: &ClusterInstance<A>) -> Option<&State> {
+    match &c.state {
+        ClusterState::Commissioning(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// Restores the saved sets of a server from storage.
+pub fn restore_saved<const A: usize>(c: &mut ClusterInstance<A>, saved: State) {
+    if let ClusterState::Commissioning(s) = &mut c.state {
+        *s = saved;
+    }
 }
 
 /// An accepted Restart Device (§13.2.2.3.1) for the runtime.
@@ -313,6 +425,8 @@ pub enum Outcome {
         response: Response,
         /// Restart request.
         restart: Option<Restart>,
+        /// The saved sets changed and are due for non-volatile storage.
+        saved_changed: bool,
     },
     /// Refused with a Default Response.
     Default(ZclStatus),
@@ -524,6 +638,15 @@ fn reply(command: CommandId, status: ZclStatus) -> Outcome {
     Outcome::Reply {
         response: Response { command, status },
         restart: None,
+        saved_changed: false,
+    }
+}
+
+fn reply_saved(command: CommandId, status: ZclStatus) -> Outcome {
+    Outcome::Reply {
+        response: Response { command, status },
+        restart: None,
+        saved_changed: status == ZclStatus::Success,
     }
 }
 
@@ -560,6 +683,7 @@ pub fn handle<const A: usize>(
                     jitter,
                     startup,
                 }),
+                saved_changed: false,
             }
         }
         CMD_SAVE_STARTUP_PARAMETERS => {
@@ -578,7 +702,7 @@ pub fn handle<const A: usize>(
             } else {
                 ZclStatus::InsufficientSpace
             };
-            reply(CMD_SAVE_STARTUP_PARAMETERS_RESPONSE, status)
+            reply_saved(CMD_SAVE_STARTUP_PARAMETERS_RESPONSE, status)
         }
         CMD_RESTORE_STARTUP_PARAMETERS => {
             let (Ok(_options), Ok(index)) = (r.u8(), r.u8()) else {
@@ -628,7 +752,7 @@ pub fn handle<const A: usize>(
                     }
                 }
             }
-            reply(CMD_RESET_STARTUP_PARAMETERS_RESPONSE, ZclStatus::Success)
+            reply_saved(CMD_RESET_STARTUP_PARAMETERS_RESPONSE, ZclStatus::Success)
         }
         _ => Outcome::Default(ZclStatus::UnsupportedClusterCommand),
     }
@@ -707,7 +831,10 @@ mod tests {
         let mut buf = [0u8; 4];
         let n = encode_restart(restart_options::IMMEDIATE, 3, 10, &mut buf).unwrap();
         let o = handle(&mut c, CMD_RESTART_DEVICE, &buf[..n]);
-        let Outcome::Reply { response, restart } = o else {
+        let Outcome::Reply {
+            response, restart, ..
+        } = o
+        else {
             panic!("{o:?}");
         };
         assert_eq!(
@@ -735,7 +862,8 @@ mod tests {
                     status: ZclStatus::Failure,
                     ..
                 },
-                restart: None
+                restart: None,
+                ..
             }
         ));
         // Keeping the stack state skips the check.
@@ -767,6 +895,7 @@ mod tests {
                     command: CMD_SAVE_STARTUP_PARAMETERS_RESPONSE,
                     status: ZclStatus::Success
                 },
+                saved_changed: true,
                 ..
             }
         ));
@@ -863,5 +992,33 @@ mod tests {
             guard(&d.attributes, EXTENDED_PAN_ID.id, &Value::Eui64(0)),
             ZclStatus::Failure
         );
+    }
+
+    #[test]
+    fn saved_sets_round_trip_through_storage() {
+        let mut set = StartupSet::default();
+        set.short_address = 0x1234;
+        set.extended_pan_id = 0x0011_2233_4455_6677;
+        set.network_key = Key128::from_bytes([0x5a; 16]);
+        set.concentrator = true;
+        set.startup_control = startup_control::SILENT_JOIN;
+        let mut state = State::default();
+        state.saved.push((1, set.clone())).unwrap();
+        state.saved.push((7, StartupSet::default())).unwrap();
+        let mut buf = [0u8; State::ENCODED_LEN];
+        let n = state.encode(&mut buf).unwrap();
+        assert_eq!(n, 1 + 2 * (1 + StartupSet::ENCODED_LEN));
+        let back = State::decode(&buf[..n]);
+        assert_eq!(back.saved.len(), 2);
+        assert_eq!(back.saved[0], (1, set));
+        assert_eq!(back.saved[1], (7, StartupSet::default()));
+        // A truncated record keeps what could be read.
+        let partial = State::decode(&buf[..n - 1]);
+        assert_eq!(partial.saved.len(), 1);
+        assert!(State::decode(&[]).saved.is_empty());
+        // Restored into a server.
+        let mut c = cs();
+        restore_saved(&mut c, back);
+        assert_eq!(saved(&c).len(), 2);
     }
 }
