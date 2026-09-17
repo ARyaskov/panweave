@@ -24,10 +24,12 @@ use crate::security::{self, GetConfigurationReq, SelectedKeyNegotiationMethod};
 use crate::zdp::{
     ActiveEpReq, AddrRequestType, AddrRsp, BindReq, ClearAllBindingsReq, DeviceAnnce,
     EndpointListRsp, IeeeAddrReq, MatchDescReq, MgmtBindReq, MgmtLeaveReq, MgmtLqiReq,
-    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, MgmtPermitJoiningReq, MgmtRtgReq, NeighborRecord,
-    NodeDescReq, NodeDescRsp, NwkAddrReq, ParentAnnce, ParentAnnceRsp, PowerDescReq, PowerDescRsp,
-    RouteRecord, SimpleDescReq, SimpleDescRsp, StatusRsp, SystemServerDiscoveryReq,
-    SystemServerDiscoveryRsp, TableRsp, U16List, ZdpFrame, ZdpStatus, cluster,
+    MgmtNwkBeaconSurveyReq, MgmtNwkBeaconSurveyRsp, MgmtNwkEnhancedUpdateReq,
+    MgmtNwkIeeeJoiningListReq, MgmtNwkIeeeJoiningListRsp, MgmtNwkUpdateNotify, MgmtNwkUpdateReq,
+    MgmtPermitJoiningReq, MgmtRtgReq, NeighborRecord, NodeDescReq, NodeDescRsp, NwkAddrReq,
+    ParentAnnce, ParentAnnceRsp, PowerDescReq, PowerDescRsp, RouteRecord, SimpleDescReq,
+    SimpleDescRsp, StatusRsp, SystemServerDiscoveryReq, SystemServerDiscoveryRsp, TableRsp,
+    U16List, ZdpFrame, ZdpStatus, cluster,
 };
 
 /// Largest ZDP frame (transaction data) built by the ZDO. Unfragmented
@@ -84,6 +86,26 @@ pub trait ZdoContext {
     /// NLME-PERMIT-JOINING.request; `from_trust_center` tells a Trust
     /// Center whether to apply its policy (§4.7.3.4).
     fn permit_joining(&mut self, duration: u8, from_trust_center: bool) -> ZdpStatus;
+    /// `mibJoiningPolicy` and `IeeeJoiningListUpdateID` of the enabled
+    /// MAC interface (Mgmt_NWK_IEEE_Joining_List, §2.4.3.3.11.2).
+    fn joining_policy(&self) -> (u8, u8) {
+        (0, 0)
+    }
+    /// Entry `index` of `mibJoiningIeeeList`, `None` past the end.
+    fn joining_list_entry(&self, index: u8) -> Option<ExtendedAddress> {
+        let _ = index;
+        None
+    }
+    /// Applies a Mgmt_NWK_IEEE_Joining_List_rsp (§2.4.4.3.11.2).
+    fn set_joining_list(
+        &mut self,
+        policy: u8,
+        total: u8,
+        start_index: u8,
+        entries: &[ExtendedAddress],
+    ) {
+        let _ = (policy, total, start_index, entries);
+    }
     /// Stores the network-wide beacon appendix TLVs (Mgmt_Permit_Joining
     /// from the Trust Center, §2.4.3.3.7.2).
     fn set_beacon_appendix(&mut self, tlvs: &[u8]);
@@ -175,7 +197,7 @@ pub enum ZdoAction {
 }
 
 /// Events for the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZdoEvent {
     /// No response arrived within `apsZdoResponseTimeout`.
     Timeout {
@@ -198,6 +220,33 @@ pub enum ZdoEvent {
         /// The request was broadcast (no error responses).
         broadcast: bool,
     },
+    /// A Mgmt_NWK_Enhanced_Update_req (§2.4.3.3.10): the same processing
+    /// as [`ZdoEvent::NwkUpdateRequest`] on the single page carried, or
+    /// an enhanced scan when asked for; reply with
+    /// [`Zdo::nwk_enhanced_update_notify`].
+    NwkEnhancedUpdateRequest {
+        /// Requester.
+        src: ShortAddress,
+        /// Transaction sequence to echo.
+        seq: TransactionSequence,
+        /// The request.
+        req: MgmtNwkEnhancedUpdateReq,
+        /// The request was broadcast (no error responses).
+        broadcast: bool,
+    },
+    /// A unicast Mgmt_NWK_Beacon_Survey_req (§2.4.3.3.12): run the scan
+    /// and reply with [`Zdo::beacon_survey_rsp`].
+    BeaconSurveyRequest {
+        /// Requester.
+        src: ShortAddress,
+        /// Transaction sequence to echo.
+        seq: TransactionSequence,
+        /// The request.
+        req: MgmtNwkBeaconSurveyReq,
+    },
+    /// A Mgmt_NWK_IEEE_Joining_List_rsp arrived (solicited or as the
+    /// unsolicited broadcast) and was applied to the joining list.
+    JoiningListUpdated,
 }
 
 /// A received ZDP frame of interest to the application.
@@ -581,6 +630,144 @@ impl<const EPS: usize> Zdo<EPS> {
         self.respond(dst, seq, cluster::MGMT_NWK_UPDATE_REQ, notify, None);
     }
 
+    /// Sends a Mgmt_NWK_Enhanced_Update_notify in reply to a
+    /// [`ZdoEvent::NwkEnhancedUpdateRequest`].
+    pub fn nwk_enhanced_update_notify(
+        &mut self,
+        dst: ShortAddress,
+        seq: TransactionSequence,
+        notify: &MgmtNwkUpdateNotify<'_>,
+    ) {
+        self.respond(
+            dst,
+            seq,
+            cluster::MGMT_NWK_ENHANCED_UPDATE_REQ,
+            notify,
+            None,
+        );
+    }
+
+    /// Sends a Mgmt_NWK_Beacon_Survey_rsp in reply to a
+    /// [`ZdoEvent::BeaconSurveyRequest`].
+    pub fn beacon_survey_rsp(
+        &mut self,
+        dst: ShortAddress,
+        seq: TransactionSequence,
+        rsp: &MgmtNwkBeaconSurveyRsp,
+    ) {
+        self.respond(dst, seq, cluster::MGMT_NWK_BEACON_SURVEY_REQ, rsp, None);
+    }
+
+    /// Sends a Mgmt_NWK_Unsolicited_Enhanced_Update_notify to the network
+    /// manager (§2.4.4.3.12).
+    pub fn unsolicited_enhanced_update_notify(
+        &mut self,
+        manager: ShortAddress,
+        notify: &crate::zdp::MgmtNwkUnsolicitedEnhancedUpdateNotify,
+    ) -> Result<TransactionSequence, ZdoError> {
+        self.send_unsolicited(
+            manager,
+            cluster::MGMT_NWK_UNSOLICITED_ENHANCED_UPDATE_NOTIFY,
+            notify,
+        )
+    }
+
+    /// Broadcasts the joining list to the network (the unsolicited
+    /// Mgmt_NWK_IEEE_Joining_List_rsp of §2.4.4.3.11.1): one frame per
+    /// fragment of `entries`, which are the addresses from `start_index`.
+    pub fn broadcast_joining_list(
+        &mut self,
+        update_id: u8,
+        policy: u8,
+        total: u8,
+        start_index: u8,
+        entries: &[ExtendedAddress],
+    ) -> Result<(), ZdoError> {
+        let mut bytes: Vec<u8, 64> = Vec::new();
+        for e in entries {
+            bytes
+                .extend_from_slice(&e.0.to_le_bytes())
+                .map_err(|_| ZdoError::TooLarge)?;
+        }
+        let rsp = MgmtNwkIeeeJoiningListRsp {
+            status: ZdpStatus::Success,
+            update_id,
+            policy,
+            total,
+            start_index,
+            list: crate::zdp::Eui64List(&bytes),
+        };
+        self.send_unsolicited(
+            ShortAddress::BROADCAST_RX_ON,
+            cluster::response_of(cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ),
+            &rsp,
+        )
+        .map(|_| ())
+    }
+
+    /// Answers a Mgmt_NWK_IEEE_Joining_List_req from the context's
+    /// joining list (§2.4.3.3.11.2 steps 2–5).
+    fn answer_joining_list(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+        req: MgmtNwkIeeeJoiningListReq,
+        ctx: &impl ZdoContext,
+        via: Option<RelayInfo>,
+    ) {
+        let (policy, update_id) = ctx.joining_policy();
+        let mut total: u8 = 0;
+        while total < u8::MAX && ctx.joining_list_entry(total).is_some() {
+            total += 1;
+        }
+        if total == 0 {
+            let rsp = MgmtNwkIeeeJoiningListRsp {
+                status: ZdpStatus::Success,
+                update_id,
+                policy,
+                total: 0,
+                start_index: 0,
+                list: crate::zdp::Eui64List(&[]),
+            };
+            self.respond(src, seq, cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ, &rsp, via);
+            return;
+        }
+        if req.start_index >= total {
+            let rsp = MgmtNwkIeeeJoiningListRsp {
+                status: ZdpStatus::InvalidIndex,
+                update_id: 0,
+                policy: 0,
+                total: 0,
+                start_index: 0,
+                list: crate::zdp::Eui64List(&[]),
+            };
+            self.respond(src, seq, cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ, &rsp, via);
+            return;
+        }
+        // Fill up to the MTU: the fixed part is 6 octets plus the ZDP
+        // sequence, leaving room for eight addresses.
+        let mut bytes: Vec<u8, 64> = Vec::new();
+        let mut i = req.start_index;
+        while let Some(e) = ctx.joining_list_entry(i) {
+            if bytes.extend_from_slice(&e.0.to_le_bytes()).is_err() {
+                break;
+            }
+            i = i.saturating_add(1);
+            if i == u8::MAX {
+                break;
+            }
+        }
+        let rsp = MgmtNwkIeeeJoiningListRsp {
+            status: ZdpStatus::Success,
+            update_id,
+            policy,
+            total,
+            start_index: req.start_index,
+            list: crate::zdp::Eui64List(&bytes),
+        };
+        self.respond(src, seq, cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ, &rsp, via);
+    }
+
     /// Processes an APSDE-DATA.indication for endpoint 0 / profile 0.
     pub fn on_data<'a>(
         &mut self,
@@ -598,6 +785,18 @@ impl<const EPS: usize> Zdo<EPS> {
         }
         let frame = ZdpFrame::decode_exact(ind.asdu).ok()?;
         if cluster::is_response(ind.cluster) {
+            if ind.cluster == cluster::response_of(cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ)
+                && let Ok(rsp) = MgmtNwkIeeeJoiningListRsp::decode_exact(frame.data)
+                && rsp.status == ZdpStatus::Success
+            {
+                // §2.4.4.3.11.2: solicited or the unsolicited broadcast.
+                let mut entries: Vec<ExtendedAddress, 8> = Vec::new();
+                for e in rsp.list.iter() {
+                    let _ = entries.push(e);
+                }
+                ctx.set_joining_list(rsp.policy, rsp.total, rsp.start_index, &entries);
+                self.push_event(ZdoEvent::JoiningListUpdated);
+            }
             let matched = self
                 .pending
                 .iter()
@@ -1049,6 +1248,35 @@ impl<const EPS: usize> Zdo<EPS> {
                     req,
                     broadcast,
                 });
+            }
+            cluster::MGMT_NWK_ENHANCED_UPDATE_REQ => {
+                let req = MgmtNwkEnhancedUpdateReq::decode_exact(data).ok()?;
+                self.push_event(ZdoEvent::NwkEnhancedUpdateRequest {
+                    src,
+                    seq,
+                    req,
+                    broadcast,
+                });
+            }
+            cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ => {
+                // Step 1: broadcasts are dropped.
+                if broadcast {
+                    return None;
+                }
+                let req = MgmtNwkIeeeJoiningListReq::decode_exact(data).ok()?;
+                self.answer_joining_list(src, seq, req, ctx, via);
+            }
+            cluster::MGMT_NWK_BEACON_SURVEY_REQ => {
+                if broadcast {
+                    return None;
+                }
+                match MgmtNwkBeaconSurveyReq::decode_exact(data) {
+                    Ok(req) => self.push_event(ZdoEvent::BeaconSurveyRequest { src, seq, req }),
+                    Err(_) => {
+                        let rsp = MgmtNwkBeaconSurveyRsp::failure(ZdpStatus::MissingTlv);
+                        self.respond(src, seq, ind.cluster, &rsp, via);
+                    }
+                }
             }
             cluster::SECURITY_START_KEY_NEGOTIATION_REQ
             | cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ

@@ -19,6 +19,7 @@ use super::{
     ScanPurpose, ScanState, TxKind,
 };
 use crate::address_map::allocate_stochastic;
+
 use crate::beacon::BeaconPayload;
 use crate::command::{
     CommissioningRequest, CommissioningResponse, CommissioningType, Leave, NetworkReport,
@@ -163,6 +164,7 @@ impl<
             return Err(NwkError::InvalidParameter);
         }
         self.discovery.clear();
+        self.survey = super::SurveyCounts::default();
         self.scan = Some(ScanState {
             purpose: ScanPurpose::Discovery,
             channels,
@@ -252,12 +254,34 @@ impl<
         page: ChannelPage,
         lqi: u8,
     ) {
+        let surveying = self
+            .scan
+            .is_some_and(|s| s.purpose == ScanPurpose::Discovery);
+        if surveying {
+            self.survey.total = self.survey.total.saturating_add(1);
+        }
         let Ok(payload) = BeaconPayload::decode_exact_lenient(beacon.payload) else {
+            if surveying {
+                self.survey.other_networks = self.survey.other_networks.saturating_add(1);
+            }
             return;
         };
         // §3.6.1.5.1 steps 1–3.
         if beacon.payload.is_empty() || !payload.is_zigbee_pro() {
+            if surveying {
+                self.survey.other_networks = self.survey.other_networks.saturating_add(1);
+            }
             return;
+        }
+        if surveying {
+            if self.nib.joined && payload.extended_pan_id == self.nib.extended_pan_id {
+                self.survey.on_network = self.survey.on_network.saturating_add(1);
+                if payload.end_device_capacity {
+                    self.survey.potential_parents = self.survey.potential_parents.saturating_add(1);
+                }
+            } else {
+                self.survey.other_networks = self.survey.other_networks.saturating_add(1);
+            }
         }
         let scan = self.scan;
         match scan.map(|s| s.purpose) {
@@ -1342,7 +1366,9 @@ impl<
         if !self.nib.is_router_or_coordinator() || !self.nib.router_started {
             return;
         }
-        if !self.is_permitting_joins() {
+        // Permit joining and the joining policy / IEEE list
+        // (mibJoiningPolicy, §2.4.4.3.11) both gate association.
+        if !self.is_permitting_joins() || !self.joining_list.allows(device) {
             self.push_action(NwkAction::MacAssociateResponse {
                 device,
                 short: ShortAddress::NO_SHORT_ADDRESS,
@@ -1502,7 +1528,9 @@ impl<
             // §3.6.1.6.1.3: secured initial join is not allowed.
             return;
         }
-        if initial && !self.is_permitting_joins() {
+        // Permit joining and the joining policy / IEEE list both gate
+        // an initial join (mibJoiningPolicy, §2.4.4.3.11).
+        if initial && (!self.is_permitting_joins() || !self.joining_list.allows(device)) {
             self.send_commissioning_response(
                 ctx,
                 device,

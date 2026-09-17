@@ -273,6 +273,11 @@ impl Simulator {
         &mut self.nodes[i]
     }
 
+    /// Read access to the stack of node `i`.
+    pub fn stack_ref(&self, i: usize) -> &SimStack {
+        &self.nodes[i].stack
+    }
+
     /// The stack of node `i`.
     pub fn stack(&mut self, i: usize) -> &mut SimStack {
         &mut self.nodes[i].stack

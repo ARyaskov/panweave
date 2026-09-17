@@ -60,6 +60,23 @@ pub type NpduBuf = Vec<u8, MAX_NPDU>;
 
 /// Discovery table size (`nwkDiscoveryTableSize` default 6).
 pub const DISCOVERY_TABLE_SIZE: usize = 6;
+/// Capacity of the IEEE joining list.
+pub const JOINING_LIST_SIZE: usize = 16;
+
+/// Beacon counts of a discovery scan (Beacon Survey Results TLV,
+/// §2.4.4.3.13.1.1), saturating at 255.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct SurveyCounts {
+    /// Every IEEE 802.15.4 beacon received.
+    pub total: u8,
+    /// Zigbee beacons of this network.
+    pub on_network: u8,
+    /// Of those, beacons with end device capacity.
+    pub potential_parents: u8,
+    /// Beacons of other networks (or without a Zigbee payload).
+    pub other_networks: u8,
+}
 
 /// Number of unicast frames that can wait for a route or retry.
 pub const PENDING_TX: usize = 4;
@@ -524,6 +541,11 @@ pub struct Nwk<
     pub(crate) rdt: RouteDiscoveryTable<RDT>,
     pub(crate) btt: BroadcastTransactionTable<BTT>,
     pub(crate) discovery: DiscoveryTable<DISCOVERY_TABLE_SIZE>,
+    /// Beacon counts of the current or last discovery scan
+    /// (Mgmt_NWK_Beacon_Survey, §2.4.3.3.12.3 step 8).
+    pub(crate) survey: SurveyCounts,
+    /// `mibJoiningPolicy` / `mibJoiningIeeeList`.
+    pub joining_list: crate::joining_list::JoiningList<JOINING_LIST_SIZE>,
     pub(crate) rng: R,
     pub(crate) actions: Deque<NwkAction, QUEUE_CAPACITY>,
     pub(crate) events: Deque<NwkEvent, QUEUE_CAPACITY>,
@@ -612,6 +634,8 @@ impl<
             rdt: RouteDiscoveryTable::new(),
             btt: BroadcastTransactionTable::new(),
             discovery: DiscoveryTable::new(),
+            survey: SurveyCounts::default(),
+            joining_list: crate::joining_list::JoiningList::new(),
             rreq_id: rng.next_u8(),
             rng,
             actions: Deque::new(),
@@ -658,6 +682,11 @@ impl<
     /// The discovery table (after [`NwkEvent::DiscoveryConfirm`]).
     pub const fn discovery(&self) -> &DiscoveryTable<DISCOVERY_TABLE_SIZE> {
         &self.discovery
+    }
+
+    /// Beacon counts of the last discovery scan.
+    pub const fn survey_counts(&self) -> SurveyCounts {
+        self.survey
     }
 
     /// Current time as last supplied to [`Nwk::poll_timers`].

@@ -1246,6 +1246,542 @@ impl Encode for MgmtNwkUpdateReq {
     }
 }
 
+/// A Channel List Structure (§3.2.2.2.1): one channel mask per page,
+/// each carrying its page in the top five bits.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ChannelList {
+    /// Pages, each a `ChannelMask` with the page bits set.
+    pub pages: heapless::Vec<ChannelMask, 4>,
+}
+
+impl ChannelList {
+    /// A single-page list.
+    pub fn single(mask: ChannelMask) -> Self {
+        let mut pages = heapless::Vec::new();
+        let _ = pages.push(mask);
+        ChannelList { pages }
+    }
+
+    /// The first page's mask.
+    pub fn first(&self) -> Option<ChannelMask> {
+        self.pages.first().copied()
+    }
+}
+
+impl<'a> Decode<'a> for ChannelList {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let n = r.u8()?;
+        let mut pages = heapless::Vec::new();
+        for _ in 0..n {
+            let m = ChannelMask(r.u32_le()?);
+            if pages.iter().any(|p: &ChannelMask| p.page() == m.page()) {
+                return Err(CodecError::InvalidField {
+                    field: "channel page",
+                    value: u32::from(m.page().0),
+                });
+            }
+            pages.push(m).map_err(|_| CodecError::Unrepresentable {
+                field: "channel list",
+            })?;
+        }
+        Ok(ChannelList { pages })
+    }
+}
+
+impl Encode for ChannelList {
+    fn encoded_len(&self) -> usize {
+        1 + 4 * self.pages.len()
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        #[allow(clippy::cast_possible_truncation)]
+        w.u8(self.pages.len() as u8)?;
+        for p in &self.pages {
+            w.u32_le(p.0)?;
+        }
+        Ok(())
+    }
+}
+
+/// Mgmt_NWK_Enhanced_Update_req (§2.4.3.3.10): Mgmt_NWK_Update_req with
+/// a Channel List Structure and an optional configuration bitmask.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MgmtNwkEnhancedUpdateReq {
+    /// ScanChannelsListStructure.
+    pub channels: ChannelList,
+    /// ScanDuration.
+    pub scan_duration: u8,
+    /// ScanCount (energy scans only).
+    pub scan_count: Option<u8>,
+    /// nwkUpdateId (0xfe / 0xff only).
+    pub update_id: Option<u8>,
+    /// nwkManagerAddr (0xff only).
+    pub manager: Option<ShortAddress>,
+    /// ConfigurationBitmask (bit 0: enhanced active scan); absent means
+    /// enhanced.
+    pub configuration: Option<u8>,
+}
+
+impl MgmtNwkEnhancedUpdateReq {
+    /// Configuration bit selecting an enhanced active scan.
+    pub const ENHANCED_SCAN: u8 = 0x01;
+
+    /// The equivalent single-page Mgmt_NWK_Update_req, when the list
+    /// has exactly one page.
+    pub fn as_update_req(&self) -> Option<MgmtNwkUpdateReq> {
+        if self.channels.pages.len() != 1 {
+            return None;
+        }
+        Some(MgmtNwkUpdateReq {
+            scan_channels: self.channels.first()?,
+            scan_duration: self.scan_duration,
+            scan_count: self.scan_count,
+            update_id: self.update_id,
+            manager: self.manager,
+        })
+    }
+}
+
+impl<'a> Decode<'a> for MgmtNwkEnhancedUpdateReq {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let channels = ChannelList::decode(r)?;
+        let scan_duration = r.u8()?;
+        let (scan_count, update_id, manager) = match scan_duration {
+            0..=0x05 => (Some(r.u8()?), None, None),
+            MgmtNwkUpdateReq::CHANNEL_CHANGE => (None, Some(r.u8()?), None),
+            MgmtNwkUpdateReq::ATTRIBUTE_CHANGE => {
+                (None, Some(r.u8()?), Some(ShortAddress(r.u16_le()?)))
+            }
+            v => {
+                return Err(CodecError::InvalidField {
+                    field: "ScanDuration",
+                    value: u32::from(v),
+                });
+            }
+        };
+        let configuration = if r.is_empty() { None } else { Some(r.u8()?) };
+        Ok(MgmtNwkEnhancedUpdateReq {
+            channels,
+            scan_duration,
+            scan_count,
+            update_id,
+            manager,
+            configuration,
+        })
+    }
+}
+
+impl Encode for MgmtNwkEnhancedUpdateReq {
+    fn encoded_len(&self) -> usize {
+        self.channels.encoded_len()
+            + 1
+            + usize::from(self.scan_count.is_some())
+            + usize::from(self.update_id.is_some())
+            + 2 * usize::from(self.manager.is_some())
+            + usize::from(self.configuration.is_some())
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        self.channels.encode(w)?;
+        w.u8(self.scan_duration)?;
+        if let Some(c) = self.scan_count {
+            w.u8(c)?;
+        }
+        if let Some(u) = self.update_id {
+            w.u8(u)?;
+        }
+        if let Some(m) = self.manager {
+            w.u16_le(m.0)?;
+        }
+        if let Some(c) = self.configuration {
+            w.u8(c)?;
+        }
+        Ok(())
+    }
+}
+
+/// Mgmt_NWK_IEEE_Joining_List_req (§2.4.3.3.11).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MgmtNwkIeeeJoiningListReq {
+    /// StartIndex.
+    pub start_index: u8,
+}
+
+impl<'a> Decode<'a> for MgmtNwkIeeeJoiningListReq {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        Ok(MgmtNwkIeeeJoiningListReq {
+            start_index: r.u8()?,
+        })
+    }
+}
+
+impl Encode for MgmtNwkIeeeJoiningListReq {
+    fn encoded_len(&self) -> usize {
+        1
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.start_index)
+    }
+}
+
+/// ZDO JoiningPolicy values (Table 2-112).
+pub mod joining_policy {
+    /// Any device may join.
+    pub const ALL_JOIN: u8 = 0x00;
+    /// Only devices on the IEEE joining list may join.
+    pub const IEEELIST_JOIN: u8 = 0x01;
+    /// No device may join.
+    pub const NO_JOIN: u8 = 0x02;
+}
+
+/// Mgmt_NWK_IEEE_Joining_List_rsp (§2.4.4.3.11). Every field but the
+/// status is absent on failure; the index and list are absent when the
+/// total is 0.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MgmtNwkIeeeJoiningListRsp<'a> {
+    /// Status.
+    pub status: ZdpStatus,
+    /// IeeeJoiningListUpdateID.
+    pub update_id: u8,
+    /// JoiningPolicy.
+    pub policy: u8,
+    /// IeeeJoiningListTotal: entries in the whole list.
+    pub total: u8,
+    /// StartIndex of this fragment.
+    pub start_index: u8,
+    /// The addresses of this fragment.
+    pub list: Eui64List<'a>,
+}
+
+impl<'a> Decode<'a> for MgmtNwkIeeeJoiningListRsp<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let status = ZdpStatus::decode(r)?;
+        if status != ZdpStatus::Success {
+            return Ok(MgmtNwkIeeeJoiningListRsp {
+                status,
+                update_id: 0,
+                policy: 0,
+                total: 0,
+                start_index: 0,
+                list: Eui64List(&[]),
+            });
+        }
+        let update_id = r.u8()?;
+        let policy = r.u8()?;
+        let total = r.u8()?;
+        let (start_index, list) = if total == 0 {
+            (0, Eui64List(&[]))
+        } else {
+            let start_index = r.u8()?;
+            let count = usize::from(r.u8()?);
+            (start_index, Eui64List(r.bytes(count * 8)?))
+        };
+        Ok(MgmtNwkIeeeJoiningListRsp {
+            status,
+            update_id,
+            policy,
+            total,
+            start_index,
+            list,
+        })
+    }
+}
+
+impl Encode for MgmtNwkIeeeJoiningListRsp<'_> {
+    fn encoded_len(&self) -> usize {
+        if self.status != ZdpStatus::Success {
+            return 1;
+        }
+        1 + 3
+            + if self.total == 0 {
+                0
+            } else {
+                2 + self.list.0.len()
+            }
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.status.raw())?;
+        if self.status != ZdpStatus::Success {
+            return Ok(());
+        }
+        w.u8(self.update_id)?;
+        w.u8(self.policy)?;
+        w.u8(self.total)?;
+        if self.total != 0 {
+            w.u8(self.start_index)?;
+            #[allow(clippy::cast_possible_truncation)]
+            w.u8(self.list.len() as u8)?;
+            w.bytes(self.list.0)?;
+        }
+        Ok(())
+    }
+}
+
+/// Mgmt_NWK_Unsolicited_Enhanced_Update_notify (§2.4.4.3.12).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MgmtNwkUnsolicitedEnhancedUpdateNotify {
+    /// Status.
+    pub status: ZdpStatus,
+    /// Channel in use (page in the top bits).
+    pub channel_in_use: ChannelMask,
+    /// MACTxUcastTotal.
+    pub tx_total: u16,
+    /// MACTxUcastFailures.
+    pub tx_failures: u16,
+    /// MACTxUcastRetries.
+    pub tx_retries: u16,
+    /// PeriodOfTimeForResults in minutes.
+    pub period_minutes: u8,
+}
+
+impl<'a> Decode<'a> for MgmtNwkUnsolicitedEnhancedUpdateNotify {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        Ok(MgmtNwkUnsolicitedEnhancedUpdateNotify {
+            status: ZdpStatus::decode(r)?,
+            channel_in_use: ChannelMask(r.u32_le()?),
+            tx_total: r.u16_le()?,
+            tx_failures: r.u16_le()?,
+            tx_retries: r.u16_le()?,
+            period_minutes: r.u8()?,
+        })
+    }
+}
+
+impl Encode for MgmtNwkUnsolicitedEnhancedUpdateNotify {
+    fn encoded_len(&self) -> usize {
+        12
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.status.raw())?;
+        w.u32_le(self.channel_in_use.0)?;
+        w.u16_le(self.tx_total)?;
+        w.u16_le(self.tx_failures)?;
+        w.u16_le(self.tx_retries)?;
+        w.u8(self.period_minutes)
+    }
+}
+
+/// Beacon Survey Configuration TLV id (§2.4.3.3.12.1).
+pub const BEACON_SURVEY_CONFIGURATION_TLV: u8 = 0;
+/// Beacon Survey Results TLV id (§2.4.4.3.13.1.1).
+pub const BEACON_SURVEY_RESULTS_TLV: u8 = 1;
+/// Potential Parents TLV id (§2.4.4.3.13.1.2).
+pub const POTENTIAL_PARENTS_TLV: u8 = 2;
+/// PAN ID Conflict Report global TLV id (Annex I.4.3).
+pub const PAN_ID_CONFLICT_REPORT_TLV: u8 = 66;
+
+/// Mgmt_NWK_Beacon_Survey_req (§2.4.3.3.12): the Beacon Survey
+/// Configuration TLV.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MgmtNwkBeaconSurveyReq {
+    /// ScanChannelListStructure.
+    pub channels: ChannelList,
+    /// Configuration bitmask (bit 0: enhanced active scan).
+    pub configuration: u8,
+}
+
+impl MgmtNwkBeaconSurveyReq {
+    /// Configuration bit selecting an enhanced active scan.
+    pub const ENHANCED_SCAN: u8 = 0x01;
+
+    /// Whether an enhanced active scan is asked for.
+    pub const fn enhanced(&self) -> bool {
+        self.configuration & Self::ENHANCED_SCAN != 0
+    }
+}
+
+impl<'a> Decode<'a> for MgmtNwkBeaconSurveyReq {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let set = TlvSet::validate(r.take_rest(), |_| false)?;
+        let tlv = set
+            .find(BEACON_SURVEY_CONFIGURATION_TLV)
+            .ok_or(CodecError::Tlv(panweave_codec::error::TlvError::Missing {
+                tag: BEACON_SURVEY_CONFIGURATION_TLV,
+            }))?;
+        let mut v = Reader::new(tlv.value);
+        let channels = ChannelList::decode(&mut v)?;
+        let configuration = v.u8()?;
+        Ok(MgmtNwkBeaconSurveyReq {
+            channels,
+            configuration,
+        })
+    }
+}
+
+impl Encode for MgmtNwkBeaconSurveyReq {
+    fn encoded_len(&self) -> usize {
+        2 + self.channels.encoded_len() + 1
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        let mut buf = [0u8; 20];
+        let mut inner = Writer::new(&mut buf);
+        self.channels.encode(&mut inner)?;
+        inner.u8(self.configuration)?;
+        let n = inner.position();
+        panweave_codec::tlv::write_tlv(
+            w,
+            BEACON_SURVEY_CONFIGURATION_TLV,
+            buf.get(..n).unwrap_or(&[]),
+        )
+    }
+}
+
+/// Beacon Survey Results TLV (§2.4.4.3.13.1.1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct BeaconSurveyResults {
+    /// Total beacons received.
+    pub total: u8,
+    /// Beacons of this network.
+    pub on_network: u8,
+    /// Beacons of potential parents (end device capacity).
+    pub potential_parents: u8,
+    /// Beacons of other networks.
+    pub other_networks: u8,
+}
+
+/// Potential Parents TLV (§2.4.4.3.13.1.2).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PotentialParents {
+    /// Current parent (0xFFFF for a router).
+    pub current: ShortAddress,
+    /// LQA of the current parent.
+    pub current_lqa: u8,
+    /// Other potential parents (address, LQA), best first, at most 5.
+    pub others: heapless::Vec<(ShortAddress, u8), 5>,
+}
+
+/// Mgmt_NWK_Beacon_Survey_rsp (§2.4.4.3.13).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MgmtNwkBeaconSurveyRsp {
+    /// Status; the TLVs are absent unless SUCCESS.
+    pub status: ZdpStatus,
+    /// Beacon Survey Results.
+    pub results: BeaconSurveyResults,
+    /// Potential Parents.
+    pub parents: PotentialParents,
+    /// `nwkPanIdConflictCount`, when reported.
+    pub pan_id_conflicts: Option<u16>,
+}
+
+impl MgmtNwkBeaconSurveyRsp {
+    /// A failure response.
+    pub fn failure(status: ZdpStatus) -> Self {
+        MgmtNwkBeaconSurveyRsp {
+            status,
+            results: BeaconSurveyResults::default(),
+            parents: PotentialParents {
+                current: ShortAddress(0xFFFF),
+                current_lqa: 0,
+                others: heapless::Vec::new(),
+            },
+            pan_id_conflicts: None,
+        }
+    }
+}
+
+impl<'a> Decode<'a> for MgmtNwkBeaconSurveyRsp {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let status = ZdpStatus::decode(r)?;
+        if status != ZdpStatus::Success {
+            return Ok(Self::failure(status));
+        }
+        let set = TlvSet::validate(r.take_rest(), |_| false)?;
+        let res = set.find(BEACON_SURVEY_RESULTS_TLV).ok_or(CodecError::Tlv(
+            panweave_codec::error::TlvError::Missing {
+                tag: BEACON_SURVEY_RESULTS_TLV,
+            },
+        ))?;
+        let mut v = Reader::new(res.value);
+        let results = BeaconSurveyResults {
+            total: v.u8()?,
+            on_network: v.u8()?,
+            potential_parents: v.u8()?,
+            other_networks: v.u8()?,
+        };
+        let pp = set.find(POTENTIAL_PARENTS_TLV).ok_or(CodecError::Tlv(
+            panweave_codec::error::TlvError::Missing {
+                tag: POTENTIAL_PARENTS_TLV,
+            },
+        ))?;
+        let mut v = Reader::new(pp.value);
+        let current = ShortAddress(v.u16_le()?);
+        let current_lqa = v.u8()?;
+        let count = v.u8()?;
+        if count > 5 {
+            return Err(CodecError::InvalidField {
+                field: "potential parent count",
+                value: u32::from(count),
+            });
+        }
+        let mut others = heapless::Vec::new();
+        for _ in 0..count {
+            let _ = others.push((ShortAddress(v.u16_le()?), v.u8()?));
+        }
+        let pan_id_conflicts = match set.find(PAN_ID_CONFLICT_REPORT_TLV) {
+            Some(t) => Some(Reader::new(t.value).u16_le()?),
+            None => None,
+        };
+        Ok(MgmtNwkBeaconSurveyRsp {
+            status,
+            results,
+            parents: PotentialParents {
+                current,
+                current_lqa,
+                others,
+            },
+            pan_id_conflicts,
+        })
+    }
+}
+
+impl Encode for MgmtNwkBeaconSurveyRsp {
+    fn encoded_len(&self) -> usize {
+        if self.status != ZdpStatus::Success {
+            return 1;
+        }
+        1 + (2 + 4)
+            + (2 + 4 + 3 * self.parents.others.len())
+            + if self.pan_id_conflicts.is_some() {
+                4
+            } else {
+                0
+            }
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.status.raw())?;
+        if self.status != ZdpStatus::Success {
+            return Ok(());
+        }
+        let r = &self.results;
+        panweave_codec::tlv::write_tlv(
+            w,
+            BEACON_SURVEY_RESULTS_TLV,
+            &[r.total, r.on_network, r.potential_parents, r.other_networks],
+        )?;
+        let mut buf = [0u8; 20];
+        let mut inner = Writer::new(&mut buf);
+        inner.u16_le(self.parents.current.0)?;
+        inner.u8(self.parents.current_lqa)?;
+        #[allow(clippy::cast_possible_truncation)]
+        inner.u8(self.parents.others.len() as u8)?;
+        for (a, l) in &self.parents.others {
+            inner.u16_le(a.0)?;
+            inner.u8(*l)?;
+        }
+        let n = inner.position();
+        panweave_codec::tlv::write_tlv(w, POTENTIAL_PARENTS_TLV, buf.get(..n).unwrap_or(&[]))?;
+        if let Some(c) = self.pan_id_conflicts {
+            panweave_codec::tlv::write_tlv(w, PAN_ID_CONFLICT_REPORT_TLV, &c.to_le_bytes())?;
+        }
+        Ok(())
+    }
+}
+
 /// Mgmt_NWK_Update_notify (§2.4.4.3.9).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MgmtNwkUpdateNotify<'a> {
@@ -1879,5 +2415,105 @@ mod tests {
         };
         let mut rr = [0u8; 5];
         assert_eq!(rt(&r1, &mut rr), &[1, 0, 0x10, 2, 0]);
+    }
+
+    #[test]
+    fn network_management_r23_codecs() {
+        let mask = ChannelMask(0x07ff_f800);
+        let mut b = [0u8; 64];
+        let req = MgmtNwkEnhancedUpdateReq {
+            channels: ChannelList::single(mask),
+            scan_duration: 3,
+            scan_count: Some(1),
+            update_id: None,
+            manager: None,
+            configuration: Some(0),
+        };
+        assert_eq!(rt(&req, &mut b).len(), 1 + 4 + 1 + 1 + 1);
+        assert_eq!(req.as_update_req().unwrap().scan_channels, mask);
+        let attrs = MgmtNwkEnhancedUpdateReq {
+            channels: ChannelList::single(mask),
+            scan_duration: MgmtNwkUpdateReq::ATTRIBUTE_CHANGE,
+            scan_count: None,
+            update_id: Some(3),
+            manager: Some(ShortAddress(0)),
+            configuration: None,
+        };
+        assert_eq!(rt(&attrs, &mut b).len(), 1 + 4 + 1 + 1 + 2);
+        // Two pages of the same number are refused.
+        let mut two = ChannelList::single(mask);
+        two.pages.push(mask).unwrap();
+        let mut e = [0u8; 16];
+        let n = two.encode_to_slice(&mut e).unwrap();
+        assert!(ChannelList::decode_exact(&e[..n]).is_err());
+        assert_eq!(
+            rt(&MgmtNwkIeeeJoiningListReq { start_index: 2 }, &mut b),
+            &[2]
+        );
+        let addr = [0x01u8, 0, 0, 0, 0, 0, 0, 0xaa];
+        let rsp = MgmtNwkIeeeJoiningListRsp {
+            status: ZdpStatus::Success,
+            update_id: 7,
+            policy: joining_policy::IEEELIST_JOIN,
+            total: 1,
+            start_index: 0,
+            list: Eui64List(&addr),
+        };
+        assert_eq!(rt(&rsp, &mut b).len(), 1 + 3 + 2 + 8);
+        let empty = MgmtNwkIeeeJoiningListRsp {
+            total: 0,
+            list: Eui64List(&[]),
+            ..rsp
+        };
+        assert_eq!(rt(&empty, &mut b).len(), 4);
+        let failed = MgmtNwkIeeeJoiningListRsp {
+            status: ZdpStatus::InvalidIndex,
+            update_id: 0,
+            policy: 0,
+            total: 0,
+            start_index: 0,
+            list: Eui64List(&[]),
+        };
+        assert_eq!(rt(&failed, &mut b).len(), 1);
+        rt(
+            &MgmtNwkUnsolicitedEnhancedUpdateNotify {
+                status: ZdpStatus::Success,
+                channel_in_use: ChannelMask(0x0000_0800),
+                tx_total: 100,
+                tx_failures: 2,
+                tx_retries: 5,
+                period_minutes: 60,
+            },
+            &mut b,
+        );
+        let survey = MgmtNwkBeaconSurveyReq {
+            channels: ChannelList::single(mask),
+            configuration: MgmtNwkBeaconSurveyReq::ENHANCED_SCAN,
+        };
+        let out = rt(&survey, &mut b);
+        assert_eq!(out[0], BEACON_SURVEY_CONFIGURATION_TLV);
+        assert!(survey.enhanced());
+        assert!(MgmtNwkBeaconSurveyReq::decode_exact(&[]).is_err());
+        let mut others = heapless::Vec::new();
+        others.push((ShortAddress(0x1234), 200u8)).unwrap();
+        let rsp = MgmtNwkBeaconSurveyRsp {
+            status: ZdpStatus::Success,
+            results: BeaconSurveyResults {
+                total: 5,
+                on_network: 3,
+                potential_parents: 2,
+                other_networks: 2,
+            },
+            parents: PotentialParents {
+                current: ShortAddress(0x0001),
+                current_lqa: 250,
+                others,
+            },
+            pan_id_conflicts: Some(1),
+        };
+        let out = rt(&rsp, &mut b);
+        assert_eq!(out.len(), 1 + 6 + (2 + 4 + 3) + 4);
+        let none = MgmtNwkBeaconSurveyRsp::failure(ZdpStatus::NotPermitted);
+        assert_eq!(rt(&none, &mut b), &[0x8b]);
     }
 }

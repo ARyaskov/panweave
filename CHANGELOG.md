@@ -357,6 +357,14 @@ Keep a Changelog; versions follow SemVer.
   cancellation, newer replaces older, applied on poll), with
   `Timed::apply` covering Change Payment Mode and Set Overall Debt Cap
   on the `Account`.
+* `panweave-zdo`: Mgmt_NWK_Enhanced_Update_req / _notify,
+  Mgmt_NWK_IEEE_Joining_List_req / _rsp (answered from the NWK joining
+  policy and list, applied on receipt, broadcast by
+  `Zdo::broadcast_joining_list`), Mgmt_NWK_Unsolicited_Enhanced_Update_notify
+  and Mgmt_NWK_Beacon_Survey_req / _rsp codecs and server processing;
+  `panweave-nwk::joining_list` holds `mibJoiningPolicy` /
+  `mibJoiningIeeeList` and gates association and initial commissioning
+  joins; the runtime runs beacon surveys (`StackEvent::JoiningListUpdated`).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

@@ -35,12 +35,16 @@ use panweave_zdo::security::{
     RetrieveAuthenticationTokenRsp, SelectedKeyNegotiationMethod, StartKeyNegotiationRsp,
     StartKeyUpdateReq,
 };
-use panweave_zdo::zdp::{MgmtNwkUpdateNotify, MgmtNwkUpdateReq};
+use panweave_zdo::zdp::{
+    BeaconSurveyResults, MgmtNwkBeaconSurveyReq, MgmtNwkBeaconSurveyRsp, MgmtNwkEnhancedUpdateReq,
+    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, PotentialParents,
+};
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
 use crate::stack::{
-    Challenge, EnergyScanRequest, PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData,
+    BeaconSurveyRequest, Challenge, EnergyScanRequest, PendingChild, Phase, Stack, StackEvent,
+    ZclFrame, ZdpData,
 };
 
 /// Largest NWK payload copied out of a MAC frame.
@@ -526,6 +530,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                 }
                 NwkEvent::DiscoveryConfirm { status } => {
+                    if self.beacon_survey.is_some() {
+                        self.on_beacon_survey_confirm();
+                    }
                     if let Phase::Discovering(mode) = self.phase {
                         if status.is_success() {
                             let params = JoinParams {
@@ -970,6 +977,157 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         req: &MgmtNwkUpdateReq,
         broadcast: bool,
     ) {
+        self.on_nwk_update_request_inner(src, seq, req, broadcast, false);
+    }
+
+    /// Mgmt_NWK_Enhanced_Update_req (§2.4.3.3.10): the single-page form
+    /// follows the Mgmt_NWK_Update_req procedure; a multi-page list or
+    /// an enhanced scan (no enhanced beacons on this MAC) is refused
+    /// with INV_REQUESTTYPE.
+    fn on_nwk_enhanced_update_request(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+        req: &MgmtNwkEnhancedUpdateReq,
+        broadcast: bool,
+    ) {
+        let enhanced_scan = req
+            .configuration
+            .is_none_or(|c| c & MgmtNwkEnhancedUpdateReq::ENHANCED_SCAN != 0);
+        let simple = req.as_update_req();
+        let refuse = simple.is_none() || (enhanced_scan && req.scan_duration <= 0x05);
+        match simple {
+            Some(update) if !refuse => {
+                self.on_nwk_update_request_inner(src, seq, &update, broadcast, true);
+            }
+            _ => {
+                if !broadcast {
+                    let notify = MgmtNwkUpdateNotify {
+                        status: ZdpStatus::InvalidRequestType,
+                        scanned_channels: req.channels.first().unwrap_or(ChannelMask(0)),
+                        total_transmissions: 0,
+                        transmission_failures: 0,
+                        energy: &[],
+                    };
+                    self.zdo.nwk_enhanced_update_notify(src, seq, &notify);
+                }
+            }
+        }
+    }
+
+    /// Mgmt_NWK_Beacon_Survey_req (§2.4.3.3.12.3): a coordinator refuses
+    /// (NOT_PERMITTED), an enhanced scan is unsupported
+    /// (INV_REQUESTTYPE), otherwise an active scan over the requested
+    /// channels runs and the response follows the discovery confirm.
+    fn on_beacon_survey_request(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+        req: &MgmtNwkBeaconSurveyReq,
+    ) {
+        let fail = |me: &mut Self, status: ZdpStatus| {
+            me.zdo
+                .beacon_survey_rsp(src, seq, &MgmtNwkBeaconSurveyRsp::failure(status));
+        };
+        if self.config.role == LogicalDeviceType::Coordinator {
+            fail(self, ZdpStatus::NotPermitted);
+            return;
+        }
+        if req.enhanced() {
+            fail(self, ZdpStatus::InvalidRequestType);
+            return;
+        }
+        let channels = req
+            .channels
+            .first()
+            .map(|m| m.channels_only().and(ChannelMask::ALL_2_4GHZ))
+            .unwrap_or(ChannelMask(0));
+        if channels.is_empty() || req.channels.pages.len() != 1 {
+            fail(self, ZdpStatus::InvalidRequestType);
+            return;
+        }
+        if self.beacon_survey.is_some()
+            || !matches!(self.phase, Phase::Operating | Phase::Idle)
+            || self
+                .nwk
+                .network_discovery(channels, self.config.scan_duration, false)
+                .is_err()
+        {
+            fail(self, ZdpStatus::TemporaryFailure);
+            return;
+        }
+        self.beacon_survey = Some(BeaconSurveyRequest { src, seq });
+    }
+
+    /// The discovery scan of a beacon survey finished: build the
+    /// Beacon Survey Results, Potential Parents and PAN ID Conflict
+    /// Report TLVs (§2.4.3.3.12.3 steps 9–11).
+    fn on_beacon_survey_confirm(&mut self) {
+        let Some(pending) = self.beacon_survey.take() else {
+            return;
+        };
+        let counts = self.nwk.survey_counts();
+        let is_end_device = self.config.role == LogicalDeviceType::EndDevice;
+        let parent = if is_end_device {
+            self.nwk.nib.parent_address
+        } else {
+            ShortAddress(0xFFFF)
+        };
+        let mut current_lqa = 0;
+        let mut others: Vec<(ShortAddress, u8), 5> = Vec::new();
+        // Potential parents: the on-network candidates with end device
+        // capacity, best link first (§3.6.1.5.2 ordering by LQA).
+        let mut candidates: Vec<(ShortAddress, u8), { panweave_nwk::layer::DISCOVERY_TABLE_SIZE }> =
+            Vec::new();
+        for c in self.nwk.discovery().iter() {
+            if c.extended_pan_id != self.nwk.nib.extended_pan_id {
+                continue;
+            }
+            if is_end_device && c.short == parent {
+                current_lqa = c.lqa;
+                continue;
+            }
+            if c.end_device_capacity {
+                let _ = candidates.push((c.short, c.lqa));
+            }
+        }
+        candidates.sort_unstable_by_key(|c| core::cmp::Reverse(c.1));
+        for c in candidates.iter().take(5) {
+            let _ = others.push(*c);
+        }
+        if is_end_device && current_lqa == 0 {
+            current_lqa = self
+                .nwk
+                .neighbors
+                .by_short(parent)
+                .map_or(0, |n| n.lqa.value());
+        }
+        let rsp = MgmtNwkBeaconSurveyRsp {
+            status: ZdpStatus::Success,
+            results: BeaconSurveyResults {
+                total: counts.total,
+                on_network: counts.on_network,
+                potential_parents: counts.potential_parents,
+                other_networks: counts.other_networks,
+            },
+            parents: PotentialParents {
+                current: parent,
+                current_lqa,
+                others,
+            },
+            pan_id_conflicts: (!is_end_device).then_some(self.nwk.nib.pan_id_conflict_count),
+        };
+        self.zdo.beacon_survey_rsp(pending.src, pending.seq, &rsp);
+    }
+
+    fn on_nwk_update_request_inner(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+        req: &MgmtNwkUpdateReq,
+        broadcast: bool,
+        enhanced: bool,
+    ) {
         let channels = req.scan_channels.channels_only();
         let supported = channels.and(ChannelMask::ALL_2_4GHZ);
         let error = |me: &mut Self, status: ZdpStatus| {
@@ -982,7 +1140,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     transmission_failures: 0,
                     energy: &[],
                 };
-                me.zdo.nwk_update_notify(src, seq, &notify);
+                if enhanced {
+                    me.zdo.nwk_enhanced_update_notify(src, seq, &notify);
+                } else {
+                    me.zdo.nwk_update_notify(src, seq, &notify);
+                }
             }
         };
         match req.scan_duration {
@@ -1036,6 +1198,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     channels: supported,
                     duration: req.scan_duration,
                     remaining: count - 1,
+                    enhanced,
                 });
             }
             _ => error(self, ZdpStatus::InvalidRequestType),
@@ -1059,8 +1222,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             transmission_failures: self.nwk.nib.tx_failures,
             energy: &values,
         };
-        self.zdo
-            .nwk_update_notify(pending.src, pending.seq, &notify);
+        if pending.enhanced {
+            self.zdo
+                .nwk_enhanced_update_notify(pending.src, pending.seq, &notify);
+        } else {
+            self.zdo
+                .nwk_update_notify(pending.src, pending.seq, &notify);
+        }
         if pending.remaining > 0
             && self
                 .nwk
@@ -1484,6 +1652,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     broadcast,
                 } => {
                     self.on_nwk_update_request(src, seq, &req, broadcast);
+                }
+                ZdoEvent::NwkEnhancedUpdateRequest {
+                    src,
+                    seq,
+                    req,
+                    broadcast,
+                } => {
+                    self.on_nwk_enhanced_update_request(src, seq, &req, broadcast);
+                }
+                ZdoEvent::BeaconSurveyRequest { src, seq, req } => {
+                    self.on_beacon_survey_request(src, seq, &req);
+                }
+                ZdoEvent::JoiningListUpdated => {
+                    self.push_event(StackEvent::JoiningListUpdated);
                 }
             }
         }

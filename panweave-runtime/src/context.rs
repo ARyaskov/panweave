@@ -253,6 +253,31 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
         }
     }
 
+    fn joining_policy(&self) -> (u8, u8) {
+        let j = &self.nwk.joining_list;
+        (j.policy.raw(), j.update_id)
+    }
+
+    fn joining_list_entry(&self, index: u8) -> Option<ExtendedAddress> {
+        self.nwk
+            .joining_list
+            .entries()
+            .get(usize::from(index))
+            .copied()
+    }
+
+    fn set_joining_list(
+        &mut self,
+        policy: u8,
+        total: u8,
+        start_index: u8,
+        entries: &[ExtendedAddress],
+    ) {
+        if let Some(p) = panweave_nwk::joining_list::JoiningPolicy::from_raw(policy) {
+            let _ = self.nwk.joining_list.apply(p, total, start_index, entries);
+        }
+    }
+
     fn set_beacon_appendix(&mut self, tlvs: &[u8]) {
         // §2.4.3.3.7.2: the Beacon Appendix Encapsulation Global TLV sets
         // nwkNetworkWideBeaconAppendixTLVs in its entirety.
