@@ -127,7 +127,7 @@ impl<
             }
         } else {
             if self.config.security_enabled
-                && !self.unsecured_frame_allowed(is_command, for_me, buf, header_len)
+                && !self.unsecured_frame_allowed(is_command, for_me, src, buf, header_len)
             {
                 self.stats.security_failures = self.stats.security_failures.saturating_add(1);
                 return RxOutcome::None;
@@ -336,11 +336,13 @@ impl<
         RxOutcome::None
     }
 
-    /// Whether an unsecured frame may be processed (§3.6.2.2).
+    /// Whether an unsecured frame may be processed (§3.6.2.2; see
+    /// ADR-0002).
     fn unsecured_frame_allowed(
         &self,
         is_command: bool,
         for_me: bool,
+        src: ShortAddress,
         buf: &[u8],
         header_len: usize,
     ) -> bool {
@@ -349,22 +351,40 @@ impl<
         } else {
             None
         };
+        // APS frame control of a data frame: type in bits 0–1, security
+        // in bit 5.
+        let aps_fc = buf.get(header_len).copied().unwrap_or(0);
+        let aps_command = aps_fc & 0x03 == 0x01;
+        let aps_secured = aps_fc & 0x20 != 0;
         if self.nib.joined && self.nib.authenticated {
-            // Joined: only rejoin/commissioning requests destined to us.
-            return matches!(
-                cmd_id,
-                Some(NwkCommandId::RejoinRequest | NwkCommandId::CommissioningRequest)
-            ) && for_me;
+            if is_command {
+                // Joined: only rejoin/commissioning requests destined to us.
+                return matches!(
+                    cmd_id,
+                    Some(NwkCommandId::RejoinRequest | NwkCommandId::CommissioningRequest)
+                ) && for_me;
+            }
+            // A parent accepts APS command frames (Relay Message
+            // Upstream) from its own unauthenticated children
+            // (§4.6.3.2.1); the APS checks the command.
+            return for_me
+                && aps_command
+                && self
+                    .neighbors
+                    .by_short(src)
+                    .is_some_and(|n| n.relationship == Relationship::UnauthenticatedChild);
         }
         // Not authenticated (joining / TC rejoin in progress): responses to
-        // our own requests, and data frames that look like an APS command
-        // (Transport Key); the APS layer enforces the command identifier.
+        // our own requests, and data frames that are APS commands
+        // (Transport Key, Relay Message Downstream) or APS-secured frames
+        // extracted by the parent from a Tunnel / Relay command; the APS
+        // layer enforces the command identifier and key.
         match cmd_id {
             Some(NwkCommandId::RejoinResponse | NwkCommandId::CommissioningResponse) => {
                 self.join.as_ref().is_some_and(|j| !j.secure)
             }
             Some(_) => false,
-            None => for_me && buf.get(header_len).is_some_and(|b| b & 0x03 == 0x01),
+            None => for_me && (aps_command || aps_secured),
         }
     }
 

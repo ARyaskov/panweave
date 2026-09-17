@@ -519,81 +519,81 @@ id = "PW-R23-APS-001"
 section = "§2.2.5.1"
 summary = "APS frame header: frame control (frame type, delivery mode, ack format, security, ack request, extended header), destination endpoint, group address, cluster id, profile id, source endpoint, APS counter, extended header (fragmentation, block number, ack bitfield)"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-aps::frame"
-tests = []
+tests = ["data_header_round_trip", "group_header_round_trip", "command_and_ack_headers", "fragmented_headers", "malformed_headers_are_rejected"]
 
 [[requirement]]
 id = "PW-R23-APS-002"
 section = "§2.2.5.2"
 summary = "Data, command and acknowledgement frame layouts"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-aps::frame"
-tests = []
+tests = ["data_header_round_trip", "command_and_ack_headers"]
 
 [[requirement]]
 id = "PW-R23-APS-003"
 section = "§2.2.7"
 summary = "APS constants and AIB attributes (ack wait duration, max frame retries, fragmentation parameters, binding/group tables, interframe delay, max window size)"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-aps::aib"
-tests = []
-
+tests = ["fragmented_asdu_is_reassembled", "lost_acknowledgements_trigger_retries_then_no_ack"]
+notes = "Constants of Table 2-23 and scalar attributes of Tables 2-24/4-35; the statistics table (Table 2-26) and the fragmentation cache (Table 2-27) are not implemented (window size 1 needs no per-peer parameters)."
 [[requirement]]
 id = "PW-R23-APS-004"
 section = "§2.2.8.4.2"
 summary = "Reliable unicast: APS ack request, retransmission up to apscMaxFrameRetries with apscAckWaitDuration, confirm with status"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::ack"
-tests = []
-
+status = "implemented"
+module = "panweave-aps::layer::tx"
+tests = ["acked_unicast_is_delivered_once_and_confirmed", "lost_acknowledgements_trigger_retries_then_no_ack"]
+notes = "Retransmissions of APS-secured frames use a fresh frame counter; NWK failures of acknowledged frames are retried like a lost acknowledgement."
 [[requirement]]
 id = "PW-R23-APS-005"
 section = "§2.2.8.4.5"
 summary = "Fragmentation and reassembly: block numbers, window size, ack bitfield, interframe delay, reassembly timeout, per-transaction state"
 level = "conditional"
-status = "not-implemented"
-module = "panweave-aps::fragment"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-aps::layer"
+tests = ["fragmented_asdu_is_reassembled", "fragment_loss_is_recovered_by_retransmission"]
+notes = "Window size 1 only (the sole interoperable value); the receiver accepts blocks in order and acknowledges every block; window sizes greater than 1 and the fragmentation cache / Node Descriptor discovery of peer support (§2.2.8.4.5.1) are not implemented."
 [[requirement]]
 id = "PW-R23-APS-006"
 section = "§2.2.8.4.3"
 summary = "Duplicate rejection using source address + APS counter within apsDuplicateRejectionTimeout"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::dedup"
-tests = []
-
+status = "implemented"
+module = "panweave-aps::tables"
+tests = ["duplicate_rejection_expiry_and_eviction", "acked_unicast_is_delivered_once_and_confirmed"]
+notes = "Entry lifetime is apscAckWaitDuration x (1 + apscMaxFrameRetries); frames tunnelled to an unauthorized device bypass the table (§4.6.3.7.3)."
 [[requirement]]
 id = "PW-R23-APS-007"
 section = "§2.2.8.2, §2.2.8.3"
 summary = "Binding table and indirect (bound) transmission to unicast/group destinations; group table membership and group delivery to endpoints"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::{binding, group}"
-tests = []
+status = "implemented"
+module = "panweave-aps::tables"
+tests = ["binding_table_bind_unbind", "group_table_membership", "group_delivery_and_loopback", "bound_transmission_fans_out"]
 
 [[requirement]]
 id = "PW-R23-APS-008"
 section = "§2.2.4.2"
 summary = "APSME management: bind/unbind, add/remove group, get/set AIB"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::management"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-aps::tables"
+tests = ["binding_table_bind_unbind", "group_table_membership"]
+notes = "Bind/unbind and group add/remove are table operations; APSME-GET/SET are direct field access on Aib. The ZDO front-ends (Bind_req etc.) belong to panweave-zdo."
 [[requirement]]
 id = "PW-R23-APS-009"
 section = "§2.2.9"
 summary = "APS status values"
 level = "mandatory"
 status = "implemented"
-module = "panweave-types::status::ApsStatus"
-tests = ["nwk_status_round_trip_and_unknown_preservation"]
+module = "panweave-types::status"
+tests = ["data_header_round_trip"]
 
 [[requirement]]
 id = "PW-R23-APS-010"
@@ -924,82 +924,82 @@ id = "PW-R23-SEC-008"
 section = "§4.4.1"
 summary = "APS frame security using link keys (data and command frames), key-transport/key-load key selection for transport key commands"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-security::frame"
-tests = ["aps_frame_without_extended_nonce_uses_supplied_source"]
-notes = "Transform implemented; APS command key selection lands with panweave-aps."
+status = "implemented"
+module = "panweave-aps::security"
+tests = ["data_key_round_trip_with_and_without_extended_nonce", "derived_keys_and_fallback_entry", "unverified_key_cannot_encrypt_and_counter_needs_reservation", "link_key_secured_data_round_trip"]
+notes = "Incoming frame-counter freshness is enforced for unique link keys only (§4.4.1.2 step 4); APS frame counter synchronization (§4.6.3.8, step 8) is not implemented."
 
 [[requirement]]
 id = "PW-R23-SEC-009"
 section = "§4.4.11.1"
 summary = "Transport Key command: standard network key (key, sequence number, destination and source addresses), trust center link key, application link key with partner and initiator flag"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::TransportKey"
-tests = []
+status = "implemented"
+module = "panweave-aps::command"
+tests = ["transport_key_variants", "trust_center_join_and_link_key_update"]
 
 [[requirement]]
 id = "PW-R23-SEC-010"
 section = "§4.4.11.2"
 summary = "Update Device command: device address, short address, status (standard secured/unsecured rejoin, left, TC rejoin)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::UpdateDevice"
-tests = []
+status = "implemented"
+module = "panweave-aps::command"
+tests = ["device_management_commands", "trust_center_join_and_link_key_update"]
 
 [[requirement]]
 id = "PW-R23-SEC-011"
 section = "§4.4.11.3"
 summary = "Remove Device command with target address"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::RemoveDevice"
-tests = []
+status = "implemented"
+module = "panweave-aps::command"
+tests = ["device_management_commands"]
 
 [[requirement]]
 id = "PW-R23-SEC-012"
 section = "§4.4.11.4"
 summary = "Request Key command: key type (application link key, TC link key), partner address"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::RequestKey"
-tests = []
+status = "implemented"
+module = "panweave-aps::command"
+tests = ["device_management_commands", "trust_center_join_and_link_key_update"]
 
 [[requirement]]
 id = "PW-R23-SEC-013"
 section = "§4.4.11.5"
 summary = "Switch Key command with sequence number"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::SwitchKey"
-tests = []
+status = "implemented"
+module = "panweave-aps::command"
+tests = ["device_management_commands", "unauthorized_joiner_ignores_data_and_unencrypted_key"]
 
 [[requirement]]
 id = "PW-R23-SEC-014"
 section = "§4.4.11.6"
 summary = "Tunnel command wrapping an APS command for a joining device via its parent"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::Tunnel"
-tests = []
+status = "implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["device_management_commands", "trust_center_join_and_link_key_update"]
 
 [[requirement]]
 id = "PW-R23-SEC-015"
 section = "§4.4.11.7, §4.4.11.8"
 summary = "Verify Key (key type, source address, initiator verify-key hash) and Confirm Key (status, key type, destination address)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::{VerifyKey, ConfirmKey}"
-tests = []
+status = "implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["device_management_commands", "trust_center_join_and_link_key_update"]
 
 [[requirement]]
 id = "PW-R23-SEC-016"
 section = "§4.4.11.9, §4.4.11.10"
 summary = "Relay Message Downstream/Upstream commands for relaying APS commands to/from joiners through a router"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps::security_commands::Relay"
-tests = []
+status = "implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["relay_message_tlv", "relayed_frames_reach_the_trust_center_and_back"]
 
 [[requirement]]
 id = "PW-R23-SEC-017"
@@ -1015,28 +1015,28 @@ id = "PW-R23-SEC-018"
 section = "§4.6.3.2"
 summary = "Joining device authentication: after MAC association receive Transport Key (network key) protected with pre-configured/derived link key; start authentication timer; leave on failure"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::procedures::join"
-tests = []
-
+status = "implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["trust_center_join_and_link_key_update", "unauthorized_joiner_ignores_data_and_unencrypted_key"]
+notes = "The joiner learns apsTrustCenterAddress from the Transport Key source and renames its pre-installed key entry; unencrypted transport keys are refused while unauthorized when requireLinkKeyEncryptionForApsTransportKey is set. Forwarding of an APS-encrypted Transport Key by a parent without the Tunnel command (UseParent without TunnelCommand) is not supported because the parent cannot decrypt it; see docs/adr."
 [[requirement]]
 id = "PW-R23-SEC-019"
 section = "§4.6.3.2, §4.7"
 summary = "Trust Center handling of Update Device: apply policy (allow joins, install code requirement, rejoin policy), send Transport Key (tunnelled via parent when joiner is not a neighbor), start TCLK exchange timer, Remove Device on rejection"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::trust_center::join"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["trust_center_join_and_link_key_update"]
+notes = "The APS delivers the Update Device indication and provides Transport Key (direct / tunnelled / broadcast) and Remove Device; the policy decision (panweave-security::trust_center) is wired by the Trust Center application in panweave-runtime."
 [[requirement]]
 id = "PW-R23-SEC-020"
 section = "§4.6.3.4"
 summary = "Network key update: TC broadcasts new key via Transport Key (nwkKeyType alternate), then Switch Key after nwkNetworkBroadcastDeliveryTime; devices store alternate key and switch on Switch Key; frame counters reset"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::procedures::key_update"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["unauthorized_joiner_ignores_data_and_unencrypted_key"]
+notes = "Broadcast Transport Key (alternate key) and Switch Key are implemented; the broadcast delivery timer between them and the unicast-to-sleepy-children repetition (§4.4.2.3 last paragraph) are left to the runtime."
 [[requirement]]
 id = "PW-R23-SEC-021"
 section = "§4.6.3.5"
@@ -1069,10 +1069,10 @@ id = "PW-R23-SEC-024"
 section = "§4.7.2, §4.9.3, §4.9.4"
 summary = "Trust Center link keys: well-known global key, install-code derived keys, unique TCLK per device, key attributes provisional/unverified/verified, Verify Key / Confirm Key exchange after receiving a new TCLK"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::trust_center::link_keys"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-aps::layer::cmd"
+tests = ["trust_center_join_and_link_key_update"]
+notes = "Request Key / Transport Key (TCLK) / Verify Key / Confirm Key with key attribute transitions provisional -> unverified -> verified are implemented; the BDB join-time TCLK update state machine is in panweave-bdb."
 [[requirement]]
 id = "PW-R23-SEC-025"
 section = "§4.4.9, §4.9.6, Annex J"
@@ -1097,10 +1097,10 @@ id = "PW-R23-SEC-027"
 section = "§4.8"
 summary = "Distributed security network: TC address 0xFFFF…FF, router issues network key on join, distributed global link key usage"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::distributed"
+status = "partially-implemented"
+module = "panweave-aps::layer::cmd"
 tests = []
-
+notes = "Distributed-network Transport Key source 0xFFFF...FF handling and apsTrustCenterAddress semantics are implemented in the APS; the router-side issue of the network key on join is wired by the runtime."
 [[requirement]]
 id = "PW-R23-SEC-028"
 section = "§4.7.4"

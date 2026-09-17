@@ -228,6 +228,7 @@ checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
  "defmt",
  "hash32",
+ "serde_core",
  "stable_deref_trait",
 ]
 
@@ -298,8 +299,14 @@ name = "panweave-aps"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-codec",
+ "panweave-security",
  "panweave-types",
+ "proptest",
  "serde",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
