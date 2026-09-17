@@ -221,6 +221,20 @@ Keep a Changelog; versions follow SemVer.
 * `Access::SECRET`: credential attributes answer NOT_AUTHORIZED to reads
   and are redacted from `Attribute`'s `Debug` output (as are all
   key128 attributes).
+* Touchlink commissioning (BDB 3.1 §12, ZCL8 §13.3):
+  `panweave-security::touchlink` (network key transport with the
+  development, master and certification algorithms, §13.3.4.11 test
+  vectors; `BlockCipher::decrypt_block`), `panweave-zcl::clusters::touchlink`
+  (all inter-PAN and utility command codecs), `panweave-aps::interpan`
+  (stub NWK and inter-PAN APS headers), `panweave-bdb::touchlink`
+  (initiator and target machines: channel scans, candidate selection,
+  device information and identify, address / group / free-range
+  assignment, network start and join, network update, touchlink reset,
+  stealing policy) and the runtime integration (`Stack::{enable_touchlink,
+  touchlink_start, touchlink_select, touchlink_identify,
+  touchlink_device_information}`, `StackEvent::Touchlink`, inter-PAN
+  transmission through `MacService::data_request_inter_pan`, distributed
+  network formation / adoption / rejoin from the exchanged parameters).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

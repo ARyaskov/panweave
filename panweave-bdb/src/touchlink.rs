@@ -361,6 +361,11 @@ impl Initiator {
         self.transaction
     }
 
+    /// The targets found by the last device discovery.
+    pub fn candidates(&self) -> &[Candidate] {
+        &self.candidates
+    }
+
     /// Next instant `poll` should run.
     pub fn next_deadline(&self) -> Option<Instant> {
         match &self.state {
@@ -1078,6 +1083,10 @@ impl Target {
             if rssi <= self.policy.rssi_threshold || !req.touchlink.initiator {
                 return None;
             }
+            // The initiator repeats its scan request (five times on the
+            // first channel): the response identifier must stay the same
+            // within one transaction or the key transport would diverge.
+            let same = self.transaction.is_some_and(|t| t.0 == req.transaction);
             self.transaction = Some((
                 req.transaction,
                 src,
@@ -1085,7 +1094,9 @@ impl Target {
                 channel,
                 now.saturating_add(Duration::from_millis(tl::TRANSACTION_LIFETIME_MS)),
             ));
-            self.response_id = node.random_u32();
+            if !same {
+                self.response_id = node.random_u32();
+            }
             let mut subs = Vec::new();
             node.sub_devices(&mut subs);
             let network = node.network();

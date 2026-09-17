@@ -600,10 +600,10 @@ id = "PW-R23-APS-010"
 section = "Annex G"
 summary = "Inter-PAN transmission and reception with stub NWK header and inter-PAN APS header"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-aps::interpan"
-tests = []
-
+tests = ["round_trips_and_detects_inter_pan", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another"]
+notes = "The stub NWK header and inter-PAN APS header (unicast, broadcast, group delivery) are encoded and decoded, MacService::data_request_inter_pan transmits with an explicit source PAN and the extended source address, and the runtime routes received inter-PAN frames (NWK frame type 0b11) to touchlink. Only the Touchlink Commissioning cluster / profile 0xc05e is dispatched; a general INTRP-DATA service for applications is not exposed."
 [[requirement]]
 id = "PW-R23-APS-011"
 section = "§2.2.8.1"

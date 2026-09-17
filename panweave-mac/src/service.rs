@@ -765,6 +765,49 @@ impl MacService {
         Ok(handle)
     }
 
+    /// Queues an inter-PAN data frame (ZCL8 §13.3.4.5): destination PAN
+    /// `dst_pan` (the broadcast PAN for touchlink), an explicit source
+    /// PAN and the extended source address, never indirect.
+    ///
+    /// May transmit; does not persist state.
+    pub fn data_request_inter_pan(
+        &mut self,
+        dst_pan: PanId,
+        dst: MacAddress,
+        src_pan: PanId,
+        payload: &[u8],
+        ack_request: bool,
+    ) -> Result<TxHandle, MacError> {
+        let seq = self.next_dsn();
+        let header = Header::new(
+            FrameType::Data,
+            seq,
+            dst_pan,
+            dst,
+            src_pan,
+            MacAddress::Extended(self.pib.extended_address),
+        );
+        let ack_request = ack_request && !dst.is_broadcast();
+        let header = Header {
+            frame_control: header.frame_control.with_ack_request(ack_request),
+            ..header
+        };
+        let frame = Self::build_frame(&header, &payload)?;
+        let handle = self.alloc_handle();
+        self.enqueue(QueuedTx {
+            kind: InFlightKind::Data { handle },
+            frame,
+            seq,
+            ack_request,
+            options: if ack_request {
+                TxOptions::ACKED
+            } else {
+                TxOptions::UNACKED
+            },
+        })?;
+        Ok(handle)
+    }
+
     /// Removes a queued indirect frame (MCPS-PURGE).
     pub fn purge(&mut self, handle: TxHandle) -> bool {
         let before = self.indirect.len();

@@ -38,6 +38,7 @@ mod persist;
 mod provision;
 mod pump;
 mod stack;
+pub mod touchlink;
 
 pub use persist::Restored;
 pub use provision::{AdoptParams, FormationParams};

@@ -224,10 +224,10 @@ id = "PW-BDB-TL-001"
 section = "§12"
 summary = "Touchlink initiator and target procedures (inter-PAN scan, identify, network start/join, key transport with touchlink key)"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-bdb::touchlink"
-tests = []
-
+tests = ["ranges_assign_and_split", "factory_new_end_device_starts_a_network_with_a_router_target", "initiator_on_a_network_joins_a_router_and_respects_stealing_policy", "same_network_reconciles_update_id_and_reset_sends_the_request", "target_ignores_weak_scans_wrong_transactions_and_expires", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another"]
+notes = "Initiator (§12.1): random non-zero transaction identifier, five scan requests on the first primary channel then one per remaining channel, the optional secondary set, candidate collection with RSSI correction, device information and identify requests, the same-network nwkUpdateId reconciliation (§13.3.4.9/10 wrap rule) with Network Update Request, the centralized-network and address-assignment checks, Network Start Request from a factory new end device to a router target (network address 0x0001 for itself, 0x0002 onwards for targets, group and free-range splitting per §13.3.4.8) followed by adoption of the responded parameters and a secured rejoin after aplcMinStartupDelayTime, Network Join Router / End Device Requests from an initiator on a network, aplcRxWindowDuration timeouts, the touchlink reset request. Target (§12.2): RSSI threshold and link-initiator checks, the transaction lifetime, a stable response identifier per transaction, scan responses with the device information table, network start (parameters chosen when the initiator leaves them open) and join under the stealing policy (refused with status 1 on centralized networks unless allowed), network update, reset to factory new. Runtime: inter-PAN frames through the MAC, distributed network formation / adoption with the assigned address, end-device rejoin. Not done: a factory new router initiator (it forms through the BDB formation procedure, step 19), NLME-ADD-NEIGHBOR of the initiator (the rejoin adds it as a child), binding links of step 25, and the master key (index 4) is only used when the application supplies it."
 [[requirement]]
 id = "PW-BDB-RESET-001"
 section = "§13.1–§13.3"

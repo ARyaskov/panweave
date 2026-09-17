@@ -403,6 +403,8 @@ pub enum StackEvent {
         /// PIN user, or `door_lock::NO_USER`.
         user: u16,
     },
+    /// Touchlink commissioning progress (BDB 3.1 §12).
+    Touchlink(crate::touchlink::TouchlinkEvent),
     /// A Window Covering server accepted a motion command or recalled a
     /// scene (ZCL8 §7.4.2.2, §7.4.2.4): the application drives the motor
     /// and reports positions back through the cluster helpers.
@@ -540,6 +542,8 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// Green Power Basic Proxy, when enabled.
     #[cfg(feature = "green-power")]
     pub(crate) green_power: Option<crate::green_power::GreenPower>,
+    /// Touchlink commissioning, when enabled.
+    pub(crate) touchlink: Option<crate::touchlink::Touchlink>,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -632,6 +636,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             keep_alive: crate::keep_alive::KeepAlive::default(),
             #[cfg(feature = "green-power")]
             green_power: None,
+            touchlink: None,
             dropped_events: 0,
         }
     }
@@ -936,6 +941,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.poll_keep_alive(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
+        self.poll_touchlink(now);
         self.service_polling(now);
         self.pump();
     }
@@ -989,6 +995,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.keep_alive.deadline(),
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
+            self.touchlink_deadline(),
             self.next_poll
                 .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]

@@ -157,8 +157,10 @@ Touchlink), DTL2.
 | 13 | Reset procedures (basic cluster, touchlink, local action), node removal | `panweave-bdb::reset` |
 
 State machines: top-level commissioning mode sequencing, network steering
-(on/off network), formation, finding & binding, touchlink, TCLK update, rejoin
-back-off, device interview.
+(on/off network), formation, finding & binding, rejoin back-off, device
+interview (`panweave-bdb::Bdb`); the touchlink initiator and target (§12)
+are separate machines in `panweave-bdb::touchlink` driven by the runtime
+over inter-PAN frames.
 
 ## DTL2 — Device Type Library
 

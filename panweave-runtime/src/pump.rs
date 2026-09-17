@@ -157,6 +157,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     self.on_gpdf(&frame, lqi, rssi);
                     return;
                 }
+                if panweave_aps::interpan::InterPanHeader::is_inter_pan(frame.payload) {
+                    // Touchlink inter-PAN frames never enter the NWK layer.
+                    self.on_inter_pan(&frame, meta.rssi_dbm, channel);
+                    return;
+                }
                 let Some(mac_src) = frame.header.src.short() else {
                     return;
                 };
@@ -607,6 +612,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.fast_poll_mode = None;
                         self.push_event(StackEvent::Left { rejoin });
                         self.apply_pending_startup();
+                        self.apply_pending_touchlink();
                     }
                     Some(ieee) => {
                         if child {
@@ -627,6 +633,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         );
                         self.push_event(StackEvent::Left { rejoin: false });
                         self.apply_pending_startup();
+                        self.apply_pending_touchlink();
                     }
                     Some(child) if status.is_success() => {
                         // A child this router made leave (Remove Device or

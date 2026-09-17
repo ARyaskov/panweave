@@ -107,6 +107,13 @@ radio bytes ─► mac::Frame<'a> (borrowed) ─► nwk::Frame<'a> (borrowed, se
    zdo | zcl | green-power | app indication (owned copies only where needed)
 ```
 
+Inter-PAN frames (a stub NWK header of frame type 0b11, ZCL8 §13.3.4.5)
+leave this path at the MAC: `panweave-runtime::touchlink` decodes the
+`panweave-aps::interpan` headers and feeds the Touchlink Commissioning
+command to the initiator or target machine of `panweave-bdb::touchlink`,
+which drives the stack (channel switches, key transport, network start /
+adoption / rejoin) through its `TouchlinkNode` view.
+
 Transmit path builds frames outermost-last into a caller-provided buffer:
 the APS payload is written first at the correct offset, then the APS header,
 NWK header, security transform in place, then MAC header. No per-frame heap

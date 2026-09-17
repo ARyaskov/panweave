@@ -316,10 +316,10 @@ id = "PW-ZCL-COMM-002"
 section = "§13.3"
 summary = "Touchlink commissioning cluster (inter-PAN commands, utility commands)"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::touchlink"
-tests = []
-
+tests = ["scan_request_and_response_round_trip", "start_join_update_round_trip", "information_and_utility_round_trip", "update_id_comparison_handles_wrap", "certification_key_test_vectors", "development_key_test_vector"]
+notes = "Codecs of every inter-PAN command (Scan Request / Response with the single sub-device fields, Device Information Request / Response, Identify, Reset To Factory New, Network Start / Join Router / Join End Device Requests and Responses, Network Update Request) and the utility commands (Endpoint Information, Get Group Identifiers, Get Endpoint List), the ZigBee and Touchlink information fields, the constants of Table 13-21, the nwkUpdateId comparison of §13.3.4.10 and the key transport algorithms of §13.3.4.11 in panweave-security::touchlink (development, master, certification; the published test vectors pass). The utility commands are codecs only: the dispatcher does not answer Get Group Identifiers / Get Endpoint List (TODO(PW-ZCL-TOUCHLINK-UTILITY))."
 [[requirement]]
 id = "PW-ZCL-MISC-001"
 section = "§9, §12, §14, §15"
