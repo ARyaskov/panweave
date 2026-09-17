@@ -206,6 +206,11 @@ fn end_device_and_coordinator_survive_reboots() {
     assert_eq!(fresh.pan_id(), pan);
     assert_eq!(fresh.nwk.nib.extended_pan_id, epid);
     assert_eq!(fresh.aps.aib.trust_center_address, COORD_IEEE);
+    // The Table 2-24 startup attributes came back with the AIB: the
+    // network to rejoin, the channel mask, not a designated coordinator.
+    assert_eq!(fresh.aps.aib.use_extended_pan_id, epid);
+    assert_eq!(fresh.aps.aib.channel_mask, sim.stack(d).config.channels);
+    assert!(!fresh.aps.aib.designated_coordinator);
     let tclk = fresh.aps.security.entry(COORD_IEEE).unwrap();
     assert_eq!(tclk.attributes, KeyAttributes::VerifiedKey);
     // The restored counter continues past the persisted reservation and
@@ -238,6 +243,8 @@ fn end_device_and_coordinator_survive_reboots() {
     assert_eq!(fresh.restore().unwrap(), Restored::OnNetwork);
     assert_eq!(fresh.short_address(), ShortAddress::COORDINATOR);
     assert_eq!(fresh.pan_id(), pan);
+    assert!(fresh.aps.aib.designated_coordinator);
+    assert_eq!(fresh.aps.aib.use_extended_pan_id, epid);
     assert!(fresh.nwk.security.has_key());
     // The child is back in the neighbor table with a full timeout period
     // (§3.6.10.8) and its verified link key.

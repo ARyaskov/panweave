@@ -176,6 +176,11 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* The Table 2-24 startup AIB attributes are kept: `apsDesignatedCoordinator`
+  and `apsChannelMaskList` come from the configuration,
+  `apsUseExtendedPANID` is learnt when a network is formed or joined
+  and steers later joins, and all four are stored in the AIB record
+  (format 2) and restored on warm start (R23.2 §2.2.5).
 * Electrical Measurement completion (ZCL8 §4.9.2.2.4–11): the RMS
   current / active power extremes, the voltage quality attributes and
   the full ACAlarmsMask (reactive power overload, average / extreme

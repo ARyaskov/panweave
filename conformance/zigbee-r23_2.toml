@@ -609,10 +609,10 @@ id = "PW-R23-APS-011"
 section = "§2.2.8.1"
 summary = "APS persistent data: binding table, group table, designated coordinator, channel mask list, use extended PAN ID, use insecure join, descriptors, network manager address survive reset"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::persist"
 tests = ["end_device_and_coordinator_survive_reboots"]
-notes = "Binding and group tables and the network manager address are persisted and restored; descriptors are compile-time application data re-registered on boot; apsDesignatedCoordinator, apsChannelMaskList, apsUseExtendedPANID and apsUseInsecureJoin are StackConfig values supplied by the application rather than stored."
+notes = "Binding and group tables and the network manager address are persisted and restored; descriptors are compile-time application data re-registered on boot; apsDesignatedCoordinator and apsChannelMaskList are seeded from the configuration, apsUseExtendedPANID is learnt on formation / joining and restricts later network selection (JoinParams.extended_pan_id), apsUseInsecureJoin is kept for the application, and the four are stored in the AIB record and restored on warm start. apsChannelMaskList covers channel page 0."
 
 [[requirement]]
 id = "PW-R23-SEC-032"

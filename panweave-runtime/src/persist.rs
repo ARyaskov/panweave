@@ -16,8 +16,9 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_storage::{Key, Kind, Storage, StorageError};
 use panweave_types::{
-    Channel, ChannelPage, ClusterId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, Key128,
-    KeyAttributes, KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
+    Channel, ChannelMask, ChannelPage, ClusterId, CryptoRng, Endpoint, ExtendedAddress,
+    GroupAddress, Key128, KeyAttributes, KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId,
+    ShortAddress,
 };
 
 use panweave_zcl::Role;
@@ -35,7 +36,7 @@ const BINDINGS_FORMAT: u8 = 1;
 /// Format version of the group record.
 const GROUPS_FORMAT: u8 = 1;
 /// Format version of the AIB record.
-const AIB_FORMAT: u8 = 1;
+const AIB_FORMAT: u8 = 2;
 /// Format version of the children record.
 const CHILDREN_FORMAT: u8 = 1;
 
@@ -225,8 +226,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 .store(Key::with_id(Kind::LinkKey, *partner), &buf[..*n])?;
         }
         // The AIB record doubles as the index of link-key records: the
-        // storage trait has no enumeration.
-        let mut buf = [0u8; 16 + 8 * 8];
+        // storage trait has no enumeration. Format 2 appends the startup
+        // attributes of Table 2-24 (apsDesignatedCoordinator,
+        // apsChannelMaskList, apsUseExtendedPANID, apsUseInsecureJoin).
+        let mut buf = [0u8; 16 + 8 * 8 + 16];
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(AIB_FORMAT);
         let _ = w.u64_le(self.aps.aib.trust_center_address.0);
@@ -235,6 +238,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         for (partner, _, _) in &records {
             let _ = w.u64_le(*partner);
         }
+        let aib = &self.aps.aib;
+        let _ = w.u8(u8::from(aib.designated_coordinator));
+        let _ = w.u32_le(aib.channel_mask.0);
+        let _ = w.u64_le(aib.use_extended_pan_id.0);
+        let _ = w.u8(u8::from(aib.use_insecure_join));
         let n = w.position();
         self.storage.store(Key::single(Kind::Aib), &buf[..n])
     }
@@ -396,7 +404,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let mut partners: Vec<u64, 8> = Vec::new();
         if let Some(aib) = record(&mut self.storage, Key::single(Kind::Aib))? {
             let mut r = Reader::new(&aib);
-            if r.u8().ok() == Some(AIB_FORMAT)
+            let format = r.u8().ok();
+            if matches!(format, Some(1 | AIB_FORMAT))
                 && let Ok(tc) = r.u64_le()
             {
                 self.aps.aib.trust_center_address = ExtendedAddress(tc);
@@ -404,6 +413,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 for _ in 0..n {
                     let Ok(p) = r.u64_le() else { break };
                     let _ = partners.push(p);
+                }
+                if format == Some(AIB_FORMAT)
+                    && let (Ok(dc), Ok(mask), Ok(epid), Ok(insecure)) =
+                        (r.u8(), r.u32_le(), r.u64_le(), r.u8())
+                {
+                    self.aps.aib.designated_coordinator = dc != 0;
+                    self.aps.aib.channel_mask = ChannelMask(mask);
+                    self.aps.aib.use_extended_pan_id = ExtendedAddress(epid);
+                    self.aps.aib.use_insecure_join = insecure != 0;
                 }
             }
         }

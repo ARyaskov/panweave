@@ -767,6 +767,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             },
         );
         aps.seed_counter(nwk.rng().next_u8());
+        // §2.2.5 / Table 2-24: the startup AIB attributes come from the
+        // configuration; apsUseExtendedPANID is learnt on joining.
+        aps.aib.designated_coordinator =
+            config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        aps.aib.channel_mask = config.channels;
         if is_tc {
             aps.aib.trust_center_address = config.ieee;
         } else {

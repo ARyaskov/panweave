@@ -592,6 +592,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.aps
                             .set_network_state(short, DeviceState::JoinedAuthorized);
                         self.phase = Phase::Operating;
+                        self.aps.aib.use_extended_pan_id = self.nwk.nib.extended_pan_id;
+                        let _ = self.persist_link_keys();
                         self.push_event(StackEvent::NetworkFormed {
                             pan_id: self.nwk.nib.pan_id,
                             extended_pan_id: self.nwk.nib.extended_pan_id,
@@ -607,8 +609,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     if let Phase::Discovering(mode) = self.phase {
                         if status.is_success() {
+                            // apsUseExtendedPANID (§2.2.5): when set, only
+                            // that network is joined.
+                            let wanted = self.aps.aib.use_extended_pan_id;
                             let params = JoinParams {
-                                extended_pan_id: None,
+                                extended_pan_id: (wanted != ExtendedAddress::ZERO
+                                    && wanted != ExtendedAddress::BROADCAST)
+                                    .then_some(wanted),
                                 rejoin: mode != crate::JoinMode::Association,
                                 as_router: self.config.role == LogicalDeviceType::Router,
                                 secure: mode == crate::JoinMode::SecuredRejoin,
@@ -860,6 +867,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let swapped = core::mem::take(&mut self.swap_out_pending);
         if (!rejoin && !self.aps.aib.is_distributed() && global) || swapped {
             self.start_tclk_update(tc);
+        }
+        // apsUseExtendedPANID remembers the network for later rejoins
+        // (§2.2.5) and is stored with the AIB.
+        if self.aps.aib.use_extended_pan_id != self.nwk.nib.extended_pan_id {
+            self.aps.aib.use_extended_pan_id = self.nwk.nib.extended_pan_id;
+            let _ = self.persist_link_keys();
         }
         self.push_event(StackEvent::Joined {
             short,
