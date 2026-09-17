@@ -432,6 +432,15 @@ Keep a Changelog; versions follow SemVer.
   end device's parent on a centralized one. A router of a distributed
   network now installs the joiner's entry under the distributed global
   link key before handing out the network key.
+* On-Network TCLK Update procedure (BDB 3.1 §10.2.4): after a join
+  with a global link key the node sends Node_Desc_req to the Trust
+  Center with its key negotiation methods; below stack revision 21 the
+  key stays (`StackEvent::LinkKeyUpdateSkipped`), the symmetric
+  exchange runs below revision 23 or when the Zigbee 3.0 mechanism is
+  selected, the selected SPEKE negotiation otherwise;
+  `StackEvent::LinkKeyUpdateFailed` when the descriptor never arrives.
+  The Trust Center's Node_Desc_rsp carries the Selected Key
+  Negotiation Method TLV (`ZdoContext::select_key_negotiation`).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

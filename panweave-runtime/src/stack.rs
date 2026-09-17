@@ -222,6 +222,17 @@ pub enum StackEvent {
     ZclReport(ZclFrame),
     /// The Trust Center link key was updated (verified).
     LinkKeyUpdated,
+    /// The On-Network TCLK Update procedure (BDB 3.1 §10.2.4) ended
+    /// without a key update: the Trust Center's node descriptor reports
+    /// a stack revision below 21, which cannot update link keys.
+    LinkKeyUpdateSkipped {
+        /// The Trust Center's stack compliance revision.
+        revision: u8,
+    },
+    /// The On-Network TCLK Update procedure failed: no Node_Desc_rsp
+    /// from the Trust Center within `apsSecurityTimeOutPeriod` (BDB 3.1
+    /// §10.2.4 step 2).
+    LinkKeyUpdateFailed,
     /// A dynamic link key negotiation with `partner` failed or timed out;
     /// the previous key-pair entry was restored (R23.2 §4.4.9).
     KeyNegotiationFailed {
@@ -599,6 +610,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// A factory reset waits for the leave to complete before clearing
     /// persistent data (BDB 3.1 §13.2).
     pub(crate) factory_reset_pending: bool,
+    /// The On-Network TCLK Update procedure awaits the Trust Center's
+    /// Node_Desc_rsp until this deadline (BDB 3.1 §10.2.4).
+    pub(crate) tclk_update: Option<Instant>,
     /// The key being awaited completes a rejoin (not an initial join).
     pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
@@ -709,6 +723,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             swap_out_pending: false,
             key_update: None,
             factory_reset_pending: false,
+            tclk_update: None,
             awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
@@ -1105,6 +1120,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         self.poll_keep_alive(now);
         self.poll_key_update(now);
+        if self.tclk_update.is_some_and(|t| now.has_reached(t)) {
+            self.tclk_update = None;
+            self.push_event(StackEvent::LinkKeyUpdateFailed);
+        }
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
         self.poll_touchlink(now);
@@ -1160,6 +1179,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.next_scan.map(|(at, _, _)| at),
             self.keep_alive.deadline(),
             self.key_update.map(|(_, at)| at),
+            self.tclk_update,
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),

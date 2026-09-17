@@ -37,7 +37,7 @@ use panweave_zdo::security::{
 };
 use panweave_zdo::zdp::{
     BeaconSurveyResults, MgmtNwkBeaconSurveyReq, MgmtNwkBeaconSurveyRsp, MgmtNwkEnhancedUpdateReq,
-    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, PotentialParents,
+    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, NodeDescReq, NodeDescRsp, PotentialParents,
 };
 use panweave_zdo::{ZdpStatus, cluster};
 
@@ -260,6 +260,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     if cluster == cluster::response_of(cluster::SECURITY_CHALLENGE_REQ) {
                         self.on_challenge_response(data);
+                    }
+                    if cluster == cluster::response_of(cluster::NODE_DESC_REQ)
+                        && self.tclk_update.is_some()
+                        && src_ieee.is_none_or(|s| s == self.aps.aib.trust_center_address)
+                    {
+                        self.on_tclk_update_descriptor(data);
                     }
                     let keep_alive_match = cluster == cluster::response_of(cluster::MATCH_DESC_REQ)
                         && self.on_keep_alive_match(seq, data);
@@ -824,12 +830,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         // replaced before any APS-secured messaging.
         let swapped = core::mem::take(&mut self.swap_out_pending);
         if (!rejoin && !self.aps.aib.is_distributed() && global) || swapped {
-            let tc_short = AddrView(&self.nwk)
-                .short_of(tc)
-                .unwrap_or(ShortAddress::COORDINATOR);
-            let _ = self
-                .aps
-                .request_key(tc_short, RequestKeyType::TrustCenterLinkKey, None);
+            self.start_tclk_update(tc);
         }
         self.push_event(StackEvent::Joined {
             short,
@@ -1695,6 +1696,86 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// On-Network TCLK Update procedure, step 1 (BDB 3.1 §10.2.4): ask
+    /// the Trust Center for its node descriptor, offering our key
+    /// negotiation methods, and wait `apsSecurityTimeOutPeriod` for the
+    /// answer that says how (or whether) the link key is updated.
+    pub(crate) fn start_tclk_update(&mut self, tc: ExtendedAddress) {
+        let tc_short = AddrView(&self.nwk)
+            .short_of(tc)
+            .unwrap_or(ShortAddress::COORDINATOR);
+        let mut tlvs = [0u8; 16];
+        let n = {
+            let mut w = panweave_codec::Writer::new(&mut tlvs);
+            let ok = SupportedKeyNegotiationMethods {
+                protocols: self.aps.aib.supported_key_negotiation_methods,
+                secrets: SupportedKeyNegotiationMethods::SECRET_AUTH_TOKEN
+                    | SupportedKeyNegotiationMethods::SECRET_INSTALL_CODE,
+                source: Some(self.config.ieee),
+            }
+            .write(&mut w)
+            .is_ok();
+            if ok { w.position() } else { 0 }
+        };
+        let req = NodeDescReq {
+            addr: tc_short,
+            tlvs: tlvs.get(..n).unwrap_or(&[]),
+        };
+        if self
+            .zdo
+            .request(tc_short, cluster::NODE_DESC_REQ, &req)
+            .is_ok()
+        {
+            self.tclk_update = Some(self.now + self.aps.aib.security_timeout_period);
+        } else {
+            // Cannot even ask: fall back to the symmetric exchange.
+            let _ = self
+                .aps
+                .request_key(tc_short, RequestKeyType::TrustCenterLinkKey, None);
+        }
+    }
+
+    /// On-Network TCLK Update procedure, steps 3–5 (BDB 3.1 §10.2.4):
+    /// the Trust Center's node descriptor decides. Below revision 21
+    /// there is no update; below 23, or when the Trust Center selected
+    /// the Zigbee 3.0 mechanism (or nothing), the symmetric Request Key
+    /// / Verify Key exchange runs; otherwise the selected key
+    /// negotiation runs with the pre-shared secret it names, falling
+    /// back to the symmetric exchange when this device holds no such
+    /// secret.
+    fn on_tclk_update_descriptor(&mut self, data: &[u8]) {
+        let Ok(rsp) = NodeDescRsp::decode_exact(data) else {
+            return;
+        };
+        let Some(descriptor) = rsp.descriptor.filter(|_| rsp.status.is_success()) else {
+            return;
+        };
+        self.tclk_update = None;
+        let tc = self.aps.aib.trust_center_address;
+        let tc_short = AddrView(&self.nwk)
+            .short_of(tc)
+            .unwrap_or(ShortAddress::COORDINATOR);
+        let revision = descriptor.server_mask.stack_compliance_revision();
+        if revision < 21 {
+            self.push_event(StackEvent::LinkKeyUpdateSkipped { revision });
+            return;
+        }
+        let selected = panweave_zdo::security::validate(rsp.tlvs)
+            .ok()
+            .and_then(|set| SelectedKeyNegotiationMethod::find(&set))
+            .filter(|m| m.protocol != SelectedKeyNegotiationMethod::PROTOCOL_ZIGBEE_3_0);
+        if revision >= 23
+            && let Some(method) = selected
+            && crate::dlk::passphrase_for(self.aps.security.entry(tc), method.secret).is_some()
+            && self.start_key_negotiation(tc, method, None).is_ok()
+        {
+            return;
+        }
+        let _ = self
+            .aps
+            .request_key(tc_short, RequestKeyType::TrustCenterLinkKey, None);
     }
 
     /// §4.4.2.3 last paragraph: a router that received the Trust

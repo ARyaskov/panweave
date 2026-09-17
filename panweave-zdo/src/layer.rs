@@ -147,6 +147,20 @@ pub trait ZdoContext {
     /// ActiveLinkKeyType) of `target` from the key-pair set
     /// (§2.4.3.4.3.4 steps 6–8).
     fn authentication_level(&self, target: ExtendedAddress) -> Result<(u8, u8), ZdpStatus>;
+    /// Node_Desc_req carrying the requester's Supported Key Negotiation
+    /// Methods (§2.4.4.2.3.3): the method and pre-shared secret this
+    /// device (as Trust Center) selects for `requester`, or `None` for
+    /// the Zigbee 3.0 mechanism (protocol 0). The default selects
+    /// nothing.
+    fn select_key_negotiation(
+        &self,
+        requester: Option<ExtendedAddress>,
+        protocols: u8,
+        secrets: u8,
+    ) -> Option<(u8, u8)> {
+        let _ = (requester, protocols, secrets);
+        None
+    }
     /// Security_Start_Key_Update_req from the Trust Center: start the
     /// selected method (§2.4.3.4.6.4 steps 4–5). Returns `NoMatch` when
     /// the method is unsupported.
@@ -931,8 +945,37 @@ impl<const EPS: usize> Zdo<EPS> {
                 } else {
                     (Self::not_local(ctx), None)
                 };
-                let mut tlv = [0u8; 8];
-                let n = crate::fragmentation_parameters_tlv(&mut tlv, me, self.node);
+                let mut tlv = [0u8; 24];
+                let mut n = crate::fragmentation_parameters_tlv(&mut tlv, me, self.node);
+                // §2.4.4.2.3.3: the Selected Key Negotiation Method TLV,
+                // chosen from what the requester offered (protocol 0 when
+                // nothing suits).
+                let offered = {
+                    use panweave_nwk::tlv::GlobalTlvs as _;
+                    tlv::TlvSet::validate(req.tlvs, |_| false)
+                        .ok()
+                        .and_then(|set| set.key_negotiation_methods())
+                };
+                let (protocol, secret) = offered
+                    .and_then(|o| {
+                        ctx.select_key_negotiation(
+                            o.source.or(ind.src_ieee),
+                            o.protocols,
+                            o.secrets,
+                        )
+                    })
+                    .unwrap_or((SelectedKeyNegotiationMethod::PROTOCOL_ZIGBEE_3_0, 0));
+                let mut w = Writer::new(tlv.get_mut(n..).unwrap_or(&mut []));
+                if (SelectedKeyNegotiationMethod {
+                    protocol,
+                    secret,
+                    sender: ctx.local_ieee(),
+                })
+                .write(&mut w)
+                .is_ok()
+                {
+                    n += w.position();
+                }
                 self.respond(
                     src,
                     seq,

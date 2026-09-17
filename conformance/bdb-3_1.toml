@@ -152,10 +152,10 @@ id = "PW-BDB-STEER-002"
 section = "§9.2, §9.3"
 summary = "Join using symmetric key exchange: select network with permit join, MAC associate, receive network key with preconfigured link key (global or install code), then TCLK update"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-bdb"
-tests = ["steering_leaves_after_failed_key_exchange", "bdb_formation_steering_finding_binding_and_rejoin"]
-notes = "Join, network key delivery, Device_annce, Request Key / Verify Key TCLK exchange with bdbcfSecurityTimeoutPeriod and leave on failure are implemented. The Node_Desc_req to detect an r20 Trust Center (steps 5–7) and the CBKE branch are not."
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["r23_trust_center_leads_to_the_symmetric_exchange", "pre_r21_trust_center_keeps_the_global_key", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Join, network key delivery, Device_annce and the On-Network TCLK Update procedure of section 10.2.4: Node_Desc_req to the Trust Center with the Supported Key Negotiation Methods TLV and apsSecurityTimeOutPeriod (LinkKeyUpdateFailed on silence), no update below stack revision 21 (LinkKeyUpdateSkipped, which the BDB machine treats as success), the symmetric Request Key / Verify Key exchange below revision 23 or when the Trust Center selects the Zigbee 3.0 mechanism, and the selected key negotiation with the named pre-shared secret otherwise (symmetric fallback when this device holds no such secret). The Trust Center answers Node_Desc_req with the Selected Key Negotiation Method TLV (SPEKE with the device authentication token or install-code key when it holds one, protocol 0 otherwise). The CBKE branch belongs to PW-BDB-STEER-004."
 [[requirement]]
 id = "PW-BDB-STEER-003"
 section = "§9.4, §9.5"

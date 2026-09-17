@@ -220,6 +220,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             StackEvent::Joined { .. } => BdbEvent::JoinConfirm { success: true },
             StackEvent::JoinFailed(_) => BdbEvent::JoinConfirm { success: false },
             StackEvent::LinkKeyUpdated => BdbEvent::LinkKeyUpdated,
+            // BDB 3.1 §10.2.4 step 3: a pre-r21 Trust Center ends the
+            // update procedure successfully without a new key.
+            StackEvent::LinkKeyUpdateSkipped { .. } => BdbEvent::LinkKeyUpdated,
             StackEvent::Left { .. } => BdbEvent::Left,
             StackEvent::Identify { endpoint, seconds } => BdbEvent::Identify {
                 endpoint: *endpoint,

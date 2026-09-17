@@ -442,6 +442,41 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
         ))
     }
 
+    fn select_key_negotiation(
+        &self,
+        requester: Option<ExtendedAddress>,
+        protocols: u8,
+        secrets: u8,
+    ) -> Option<(u8, u8)> {
+        // BDB 3.1 §10.2.4 step 5: the Trust Center picks SPEKE when both
+        // sides support it and it holds a secret the device can
+        // authenticate with: its authentication token (passphrase) or
+        // its install-code derived key.
+        if !cfg!(feature = "dlk") || !self.is_trust_center {
+            return None;
+        }
+        let common = protocols
+            & self.aps.aib.supported_key_negotiation_methods
+            & SupportedKeyNegotiationMethods::PROTO_SPEKE_CURVE25519_AES_MMO;
+        if common == 0 {
+            return None;
+        }
+        let entry = self.aps.security.entry(requester?)?;
+        let secret = if entry.passphrase.is_some()
+            && secrets & SupportedKeyNegotiationMethods::SECRET_AUTH_TOKEN != 0
+        {
+            SelectedKeyNegotiationMethod::SECRET_AUTH_TOKEN
+        } else if entry.initial_join_authentication
+            == panweave_security::material::InitialJoinAuthentication::InstallCodeKey
+            && secrets & SupportedKeyNegotiationMethods::SECRET_INSTALL_CODE != 0
+        {
+            SelectedKeyNegotiationMethod::SECRET_INSTALL_CODE
+        } else {
+            return None;
+        };
+        Some((SelectedKeyNegotiationMethod::PROTOCOL_SPEKE_AES_MMO, secret))
+    }
+
     fn start_key_update(
         &mut self,
         method: &SelectedKeyNegotiationMethod,
