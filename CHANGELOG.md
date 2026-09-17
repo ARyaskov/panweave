@@ -427,6 +427,11 @@ Keep a Changelog; versions follow SemVer.
   precedes an originator's own data to a concentrator without a route
   cache (§3.6.4.5.5). After an address conflict re-addressing the
   device announces itself and reports `StackEvent::AddressChanged`.
+* `Stack::remove_node` (BDB 3.1 §13.4 / §13.5): Mgmt_Leave_req on a
+  distributed network, Remove Device to a router itself or through an
+  end device's parent on a centralized one. A router of a distributed
+  network now installs the joiner's entry under the distributed global
+  link key before handing out the network key.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

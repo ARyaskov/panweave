@@ -953,6 +953,70 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         r
     }
 
+    /// Removes `device` from the network the BDB way (BDB 3.1 §13.4,
+    /// §13.5): on a distributed network any router sends it a
+    /// Mgmt_Leave_req; on a centralized network the Trust Center sends
+    /// an APS Remove Device to a router itself or to an end device's
+    /// parent (`parent`, or this device when the end device is our own
+    /// child; a remote end device with an unknown parent gets a
+    /// Mgmt_Leave_req instead). The device must be addressable (a
+    /// neighbour or in the address map).
+    pub fn remove_node(
+        &mut self,
+        device: ExtendedAddress,
+        parent: Option<ExtendedAddress>,
+    ) -> Result<(), NwkStatus> {
+        let short = crate::context::AddrView(&self.nwk)
+            .short_of(device)
+            .ok_or(NwkStatus::UnknownDevice)?;
+        let mgmt_leave = |s: &mut Self| {
+            s.zdo
+                .request(
+                    short,
+                    panweave_zdo::zdp::cluster::MGMT_LEAVE_REQ,
+                    &panweave_zdo::zdp::MgmtLeaveReq {
+                        device,
+                        remove_children: false,
+                        rejoin: false,
+                    },
+                )
+                .map(|_| ())
+                .map_err(|_| NwkStatus::InvalidRequest)
+        };
+        if self.aps.aib.is_distributed() {
+            let r = mgmt_leave(self);
+            self.pump();
+            return r;
+        }
+        if !self.aps.config.is_trust_center {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let neighbour = self.nwk.neighbors.by_extended(device);
+        let r = if neighbour.is_some_and(|n| n.relationship.is_child()) {
+            self.nwk
+                .leave(Some(device), false, false)
+                .map_err(|_| NwkStatus::InvalidRequest)
+        } else if let Some(p) = parent {
+            let parent_short = crate::context::AddrView(&self.nwk)
+                .short_of(p)
+                .ok_or(NwkStatus::UnknownDevice)?;
+            self.aps
+                .remove_device(p, parent_short, device)
+                .map(|_| ())
+                .map_err(|_| NwkStatus::InvalidRequest)
+        } else if neighbour.is_some_and(|n| n.is_end_device()) {
+            mgmt_leave(self)
+        } else {
+            // A router: it is its own "parent" (§13.4).
+            self.aps
+                .remove_device(device, short, device)
+                .map(|_| ())
+                .map_err(|_| NwkStatus::InvalidRequest)
+        };
+        self.pump();
+        r
+    }
+
     /// Network manager: changes the PAN ID (§3.6.1.13.3), using
     /// `nwkNextPanId` when staged. The application decides when a
     /// conflict warrants it (§2.3.4); the stack never changes it alone.

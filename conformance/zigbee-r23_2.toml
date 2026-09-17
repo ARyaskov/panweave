@@ -1137,10 +1137,10 @@ id = "PW-R23-SEC-027"
 section = "§4.8"
 summary = "Distributed security network: TC address 0xFFFF…FF, router issues network key on join, distributed global link key usage"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-aps::layer::cmd"
-tests = []
-notes = "Distributed-network Transport Key source 0xFFFF...FF handling and apsTrustCenterAddress semantics are implemented in the APS; the router-side issue of the network key on join is wired by the runtime."
+tests = ["any_router_removes_a_node_with_mgmt_leave", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another"]
+notes = "Distributed-network Transport Key source 0xFFFF...FF handling and apsTrustCenterAddress semantics are in the APS; a router of a distributed network hands the network key to a joiner itself under the distributed security global link key (the preconfigured global entry, else the development key), installing the per-device entry it needs."
 [[requirement]]
 id = "PW-R23-SEC-028"
 section = "§4.7.4"

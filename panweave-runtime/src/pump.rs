@@ -864,8 +864,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.trust_center_authorize(device, short, status, None, joiner_tlvs);
         } else if self.aps.aib.is_distributed() {
             // Distributed network: the router hands out the network key
-            // itself (§4.6.3.2.1).
+            // itself (§4.6.3.2.1), under the distributed security global
+            // link key every joiner holds (BDB 3.1 §6.2.4): the key of the
+            // preconfigured global entry, else the development key.
             if status != UpdateDeviceStatus::SecuredRejoin {
+                if self.aps.security.entry(device).is_none() {
+                    let key = self
+                        .aps
+                        .security
+                        .keys()
+                        .iter()
+                        .find(|e| e.kind == LinkKeyKind::Global)
+                        .map_or(Key128::DISTRIBUTED_GLOBAL_DEVELOPMENT, |e| e.key.clone());
+                    let e = LinkKeyEntry::provisional(device, key, LinkKeyKind::Global);
+                    let _ = self.aps.install_link_key(e);
+                }
                 self.send_network_key(
                     device,
                     short,

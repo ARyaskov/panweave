@@ -417,6 +417,23 @@ fn trust_center_removes_a_device_through_its_parent() {
         StackEvent::DeviceLeft { ieee, .. } if *ieee == SED_IEEE
     )));
     assert!(sim.stack(r).nwk.neighbors.by_extended(SED_IEEE).is_none());
+
+    // BDB 3.1 §13.4: a router is removed with a Remove Device addressed
+    // to itself.
+    sim.take_events(r);
+    sim.take_events(c);
+    sim.stack(c).remove_node(ROUTER_IEEE, None).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::Left { rejoin: false }))
+    }));
+    assert!(!sim.stack(r).is_operating());
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c).iter().any(
+            |e| matches!(e, StackEvent::DeviceLeft { ieee, rejoin: false } if *ieee == ROUTER_IEEE),
+        )
+    }));
 }
 
 /// Mgmt_NWK_Update_req (R23.2 §2.4.3.3.9): an energy scan is reported
