@@ -18,7 +18,7 @@ use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, hvac, ias_zone, identify, level, on_off, poll_control, scenes,
-    time,
+    time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -237,6 +237,15 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// Test duration, `None` for normal operation.
         seconds: Option<u8>,
+    },
+    /// The Window Covering server on `endpoint` accepted a motion
+    /// command or recalled a scene (§7.4.2.2, §7.4.2.4): the application
+    /// drives the motor and reports positions back.
+    WindowCovering {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// What to do.
+        command: window_covering::Command,
     },
     /// A Setpoint Raise/Lower adjusted the thermostat on `endpoint`
     /// (§6.3.2.3.1): the new occupied setpoints in 0.01 °C.
@@ -718,6 +727,21 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     {
                         ias_zone::after_write(c, ind.src, ind.src_endpoint, now);
                     }
+                    if role == Role::Server
+                        && ind.cluster == window_covering::ID
+                        && matches!(
+                            frame.header.command,
+                            command::WRITE_ATTRIBUTES
+                                | command::WRITE_ATTRIBUTES_UNDIVIDED
+                                | command::WRITE_ATTRIBUTES_NO_RESPONSE
+                        )
+                        && let Some(c) = self
+                            .endpoints
+                            .get_mut(i)
+                            .and_then(|e| e.cluster_mut(window_covering::ID, Role::Server))
+                    {
+                        window_covering::after_write(c);
+                    }
                     match outcome {
                         Some(GlobalOutcome::Response(cmd)) => {
                             let header = frame.header.response(cmd, FrameType::Global);
@@ -791,6 +815,36 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             color_control::ID => {
                                 self.handle_color(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            window_covering::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get(i)
+                                    .and_then(|e| e.cluster(window_covering::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match window_covering::handle(c, cmd, payload) {
+                                    window_covering::Outcome::Execute(command) => {
+                                        if let Some(sc) = self
+                                            .endpoints
+                                            .get_mut(i)
+                                            .and_then(|e| e.cluster_mut(scenes::ID, Role::Server))
+                                        {
+                                            scenes::invalidate(sc);
+                                        }
+                                        self.push_event(ZclEvent::WindowCovering {
+                                            endpoint,
+                                            command,
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    window_covering::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
                                 continue;
                             }
                             hvac::thermostat::ID => {
@@ -1418,6 +1472,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     &hvac::thermostat::scene_fields(c),
                 );
             }
+            if let Some(c) = ep.cluster(window_covering::ID, Role::Server) {
+                scenes::write_field_set(
+                    &mut w,
+                    window_covering::ID,
+                    &window_covering::scene_fields(c),
+                );
+            }
         }
         let n = w.position();
         Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
@@ -1467,6 +1528,12 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 && let Some(c) = ep.cluster_mut(hvac::thermostat::ID, Role::Server)
             {
                 hvac::thermostat::apply_scene_fields(c, f);
+            } else if cluster == window_covering::ID
+                && let Some(c) = ep.cluster(window_covering::ID, Role::Server)
+                && let Some(command) = window_covering::apply_scene_fields(c, f, tenths)
+            {
+                let endpoint = ep.endpoint;
+                self.push_event(ZclEvent::WindowCovering { endpoint, command });
             }
         }
         // The recalled scene is what the device shows now.

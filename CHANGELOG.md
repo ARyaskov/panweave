@@ -170,6 +170,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave-zcl::clusters::window_covering`: the Window Covering
+  cluster — information / settings attributes, per-axis open- or
+  closed-loop control, the seven motion commands validated against the
+  installed limits and the `Mode` maintenance bit, percentages reported
+  by default, the scene extension recalled as a timed go-to, and
+  `ZclEvent::WindowCovering` handing the accepted command to the
+  application; facade `window_covering_device` endpoint.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

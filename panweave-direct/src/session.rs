@@ -105,6 +105,10 @@ impl Ephemeral {
         Self::from_secret::<C>(secret, method, psk)
     }
 
+    #[cfg_attr(
+        not(feature = "curve25519"),
+        allow(clippy::extra_unused_type_parameters)
+    )]
     fn from_secret<C: BlockCipher>(
         secret: [u8; 32],
         method: Method,
@@ -153,6 +157,10 @@ impl Ephemeral {
     /// Derives the session key: `KDF(H(xk || I || PSK-or-G), {0x01})`
     /// with the session identifier ordering the (address, point) pairs by
     /// EUI-64 value.
+    #[cfg_attr(
+        not(feature = "curve25519"),
+        allow(clippy::extra_unused_type_parameters)
+    )]
     fn derive<C: BlockCipher>(
         &self,
         local: ExtendedAddress,

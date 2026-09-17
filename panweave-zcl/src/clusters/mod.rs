@@ -20,6 +20,7 @@ pub mod poll_control;
 pub mod power_configuration;
 pub mod scenes;
 pub mod time;
+pub mod window_covering;
 
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};

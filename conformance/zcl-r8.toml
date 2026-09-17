@@ -271,10 +271,10 @@ id = "PW-ZCL-CLOS-001"
 section = "§7.3, §7.4"
 summary = "Door Lock and Window Covering clusters"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters::closures"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zcl::clusters::window_covering"
+tests = ["commands_are_validated_against_the_control", "scenes_become_timed_go_to_commands", "go_to_lift_percentage_reaches_the_application_and_the_position_is_reported"]
+notes = "Window Covering (§7.4): information and settings attributes, open-/closed-loop lift and tilt, the seven commands with INVALID_VALUE / UNSUPPORTED_COMMAND validation and the Mode maintenance bit (refused with FAILURE, a status the spec does not name for this case), Mode reversal mirrored into ConfigStatus, percentage reporting by default, the scene extension recalled as a timed go-to command handed to the application (ZclEvent::WindowCovering); Go To Value accepts any value between the two installed limits whichever is larger. Intermediate setpoint strings and the velocity / acceleration attributes are not instantiated. Door Lock (§7.3) is not implemented (TODO(PW-ZCL-DOOR-LOCK))."
 [[requirement]]
 id = "PW-ZCL-IAS-001"
 section = "§8.2"

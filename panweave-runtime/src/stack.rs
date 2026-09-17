@@ -353,6 +353,15 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// A Window Covering server accepted a motion command or recalled a
+    /// scene (ZCL8 §7.4.2.2, §7.4.2.4): the application drives the motor
+    /// and reports positions back through the cluster helpers.
+    WindowCovering {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// What to do.
+        command: panweave_zcl::clusters::window_covering::Command,
+    },
     /// A Setpoint Raise/Lower adjusted a thermostat (ZCL8 §6.3.2.3.1):
     /// the new occupied setpoints in 0.01 °C.
     Setpoints {
