@@ -12,10 +12,12 @@
     clippy::panic
 )]
 
-use panweave_codec::{Encode, Writer};
+use panweave_codec::{Decode, Encode, Writer};
 use panweave_green_power::cluster::CommunicationMode;
 use panweave_green_power::command;
-use panweave_green_power::commissioning::{Commissioning, KeyField, SecurityCapabilities};
+use panweave_green_power::commissioning::{
+    Commissioning, CommissioningReply, KeyField, SecurityCapabilities,
+};
 use panweave_green_power::gpdf::{
     ApplicationId, ExtendedFrameControl, FrameType, GpdId, NwkFrameControl, SecurityLevel,
     mac_header, write_header,
@@ -81,12 +83,12 @@ fn gpdf(
     level: SecurityLevel,
     counter: Option<u32>,
     app: &[u8],
-    key: Option<&Key128>,
+    key: Option<(&Key128, bool)>,
 ) -> Vec<u8> {
     let e = ExtendedFrameControl {
         application_id: ApplicationId::SrcId,
         security_level: level,
-        individual_key: key.is_some(),
+        individual_key: key.is_some_and(|k| k.1),
         rx_after_tx: false,
         from_proxy: false,
     };
@@ -100,7 +102,7 @@ fn gpdf(
     write_header(&mut w, fc, Some(e), Some(&GPD), counter).unwrap();
     let hl = w.position();
     let mut payload = app.to_vec();
-    let mic = key.map(|k| {
+    let mic = key.map(|(k, _)| {
         security::protect::<SoftwareAes>(
             k,
             level,
@@ -305,7 +307,7 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
         SecurityLevel::Mic,
         Some(0x11),
         &[command::TOGGLE],
-        Some(&OOB_KEY),
+        Some((&OOB_KEY, true)),
     ));
     sim.run_for(Duration::from_secs(3));
     let evs = sim.take_events(c);
@@ -334,7 +336,7 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
         SecurityLevel::Mic,
         Some(0x12),
         &[command::TOGGLE],
-        Some(&OOB_KEY),
+        Some((&OOB_KEY, true)),
     ));
     assert!(sim.run_until(Duration::from_secs(5), |x| {
         x.events(c).iter().any(|e| {
@@ -364,7 +366,7 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
         SecurityLevel::Mic,
         Some(0x12),
         &[command::TOGGLE],
-        Some(&OOB_KEY),
+        Some((&OOB_KEY, true)),
     ));
     sim.run_for(Duration::from_secs(3));
     assert!(
@@ -395,7 +397,7 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
         SecurityLevel::Mic,
         Some(0x13),
         &[command::DECOMMISSIONING],
-        Some(&OOB_KEY),
+        Some((&OOB_KEY, true)),
     ));
     assert!(sim.run_until(Duration::from_secs(5), |x| {
         x.events(c)
@@ -407,5 +409,199 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
         x.stack_ref(r)
             .green_power_proxy_ref()
             .is_some_and(|p| p.table.find(&GPD).is_none())
+    }));
+}
+
+fn bidirectional_commissioning_gpdf(seq: u8, counter: u32) -> Vec<u8> {
+    let c = Commissioning {
+        device_id: 0x02,
+        sequence_number_capable: true,
+        rx_on_capable: false,
+        pan_id_request: true,
+        key_request: true,
+        fixed_location: false,
+        security: Some(SecurityCapabilities {
+            level: 0b10,
+            key_type: KeyType::None,
+            key_encryption: true,
+        }),
+        key: None,
+        outgoing_counter: Some(counter),
+        application: None,
+    };
+    let mut body = vec![command::COMMISSIONING];
+    let mut buf = [0u8; 64];
+    let n = c.encode_to_slice(&mut buf).unwrap();
+    body.extend(&buf[..n]);
+    let e = ExtendedFrameControl {
+        application_id: ApplicationId::SrcId,
+        security_level: SecurityLevel::None,
+        individual_key: false,
+        rx_after_tx: true,
+        from_proxy: false,
+    };
+    let mut hdr = [0u8; 16];
+    let mut w = Writer::new(&mut hdr);
+    write_header(
+        &mut w,
+        NwkFrameControl {
+            frame_type: FrameType::Data,
+            auto_commissioning: false,
+            extension: true,
+        },
+        Some(e),
+        Some(&GPD),
+        None,
+    )
+    .unwrap();
+    let hl = w.position();
+    let mut frame_body = hdr[..hl].to_vec();
+    frame_body.extend(&body);
+    let mut frame = [0u8; 96];
+    let n = MacFrame {
+        header: mac_header(
+            seq,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &frame_body,
+    }
+    .encode_to_slice(&mut frame)
+    .unwrap();
+    frame[..n].to_vec()
+}
+
+#[test]
+fn bidirectional_commissioning_through_a_proxy_delivers_the_key() {
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "sink",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 51),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "proxy",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 52),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .enable_green_power_sink(SinkOptions::default())
+        .unwrap();
+    sim.stack(r).enable_green_power_proxy().unwrap();
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::Joined { .. }))
+    }));
+    sim.run_for(Duration::from_secs(3));
+    sim.take_events(c);
+    sim.take_events(r);
+    sim.stack(c)
+        .green_power_commission(true, Some(Duration::from_secs(60)))
+        .unwrap();
+    sim.run_for(Duration::from_secs(2));
+    sim.block_injector(c);
+    // First commissioning attempt: the sink appoints the proxy
+    // SelectedSender by GP Response; the proxy has nothing to send yet.
+    sim.inject(&bidirectional_commissioning_gpdf(1, 7));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.stack_ref(r)
+            .green_power_proxy_ref()
+            .is_some_and(|p| p.is_first_to_forward())
+    }));
+    assert!(sim.stack(c).green_power_sink().unwrap().table.is_empty());
+    // Second attempt: the GPD's receive window is answered by the proxy
+    // with the Commissioning Reply prepared for the first attempt
+    // (§A.3.9.1 step 13.d), carrying the PAN ID and the NWK-key derived
+    // group key under the gpLinkKey with that attempt's counter.
+    sim.trace_enabled = true;
+    sim.inject(&bidirectional_commissioning_gpdf(2, 8));
+    sim.run_for(Duration::from_secs(1));
+    let reply = sim
+        .trace
+        .iter()
+        .filter(|t| t.node == r)
+        .find_map(|t| {
+            let m = MacFrame::decode_exact(&t.frame).ok()?;
+            let p = m.payload;
+            (p.len() > 7 && p[0] == 0x8C && p[1] == 0x80 && p[6] == command::COMMISSIONING_REPLY)
+                .then(|| p[7..].to_vec())
+        })
+        .expect("Commissioning Reply GPDF from the proxy");
+    let reply = CommissioningReply::decode_exact(&reply).unwrap();
+    assert_eq!(reply.pan_id, Some(sim.stack(c).pan_id()));
+    assert_eq!(reply.key_type, KeyType::NwkDerivedGroupKey);
+    assert_eq!(reply.frame_counter, Some(7));
+    let derived = security::derive_group_key::<SoftwareAes>(&NETWORK_KEY);
+    let kf = reply.key.unwrap();
+    assert_eq!(
+        security::unprotect_gpd_key::<SoftwareAes>(
+            &Key128::WELL_KNOWN_GLOBAL_TCLK,
+            &GPD,
+            Direction::ToGpd,
+            7,
+            &kf.bytes,
+            &kf.mic.unwrap()
+        )
+        .unwrap(),
+        derived
+    );
+    // The Success, protected with the delivered key, is forwarded by the
+    // proxy with SecurityProcessingFailed (it has no key for the GPD) and
+    // verified by the sink itself.
+    sim.take_events(c);
+    sim.inject(&gpdf(
+        3,
+        SecurityLevel::Mic,
+        Some(9),
+        &[command::SUCCESS],
+        Some((&derived, false)),
+    ));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::GreenPowerPaired { gpd, .. } if *gpd == GPD))
+    }));
+    let e = sim
+        .stack(c)
+        .green_power_sink()
+        .unwrap()
+        .table
+        .find(&GPD)
+        .cloned()
+        .unwrap();
+    assert_eq!(e.key_type(), KeyType::NwkDerivedGroupKey);
+    assert_eq!(e.security.as_ref().unwrap().key, Some(derived.clone()));
+    assert_eq!(e.frame_counter, 9);
+    // The GPD's commands are then tunnelled by the proxy, which derives
+    // the key from the NWK key like the sink.
+    sim.take_events(c);
+    sim.inject(&gpdf(
+        4,
+        SecurityLevel::Mic,
+        Some(10),
+        &[command::ON],
+        Some((&derived, false)),
+    ));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.events(c).iter().any(|e| {
+            matches!(
+                e,
+                StackEvent::OnOff {
+                    endpoint: Endpoint(1),
+                    on: true
+                }
+            )
+        })
     }));
 }

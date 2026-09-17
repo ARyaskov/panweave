@@ -27,7 +27,7 @@ use crate::commissioning::{
     ChannelConfiguration, ChannelRequest, Commissioning, CommissioningReply, KeyField,
 };
 use crate::gpdf::{
-    ExtendedFrameControl, FrameType, GpdId, Gpdf, GpdfBuilder, NwkFrameControl, SRC_ID_UNSPECIFIED,
+    ExtendedFrameControl, FrameType, GpdId, Gpdf, NwkFrameControl, SRC_ID_UNSPECIFIED,
     SecurityLevel,
 };
 use crate::proxy::{
@@ -37,12 +37,9 @@ use crate::proxy::{
 use crate::proxy_table::{ALIAS_DERIVED, SecurityOptions, derived_alias};
 use crate::security::{self, Direction, KeyType};
 use crate::sink_table::{SinkEntry, SinkTable};
+use crate::tx_queue::{self, TxEntry, TxQueue};
+pub use crate::tx_queue::{GP_TX_OFFSET, GpdfTx, MAX_GPDF};
 
-/// gpTxOffset (§A.1.5.2.1.2): the GPDF answering a frame with RxAfterTx
-/// is transmitted this long after the triggering frame.
-pub const GP_TX_OFFSET: Duration = Duration::from_millis(20);
-/// Largest GPDF (NWK header and payload) the sink transmits.
-pub const MAX_GPDF: usize = 80;
 /// Largest GPD command payload delivered to the application.
 pub const MAX_COMMAND_PAYLOAD: usize = 64;
 /// GPDs that may be in the middle of bidirectional commissioning at once.
@@ -132,17 +129,6 @@ pub struct SinkFrame {
     pub command: CommandId,
     /// Encoded payload.
     pub payload: Vec<u8, MAX_PAYLOAD>,
-}
-
-/// A GPDF the sink transmits itself as SelectedSender.
-#[derive(Clone, Debug)]
-pub struct GpdfTx {
-    /// Earliest transmission time (gpTxOffset after the trigger).
-    pub not_before: Instant,
-    /// MAC destination (0xffff or the GPD IEEE address).
-    pub dst: MacAddress,
-    /// NWK header and application payload.
-    pub frame: Vec<u8, MAX_GPDF>,
 }
 
 /// Why a commissioning attempt was refused (§A.3.9.1 step 13,
@@ -258,14 +244,6 @@ struct Candidate {
     until: Instant,
 }
 
-/// One gpTxQueue entry (§A.1.5.2.1.1).
-#[derive(Clone, Debug)]
-struct TxEntry {
-    gpd: GpdId,
-    dst: MacAddress,
-    frame: Vec<u8, MAX_GPDF>,
-}
-
 /// How a GPD command reached the sink.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Via {
@@ -296,7 +274,7 @@ pub struct Sink<C: BlockCipher, const N: usize> {
     pub table: SinkTable<N>,
     commissioning: Option<Window>,
     candidates: Vec<Candidate, CANDIDATES>,
-    tx_queue: Vec<TxEntry, 2>,
+    tx_queue: TxQueue<2>,
     duplicates: Vec<Duplicate, DUPLICATE_ENTRIES>,
     frames: Deque<SinkFrame, QUEUE_CAPACITY>,
     gpdfs: Deque<GpdfTx, 2>,
@@ -313,7 +291,7 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
             table: SinkTable::new(),
             commissioning: None,
             candidates: Vec::new(),
-            tx_queue: Vec::new(),
+            tx_queue: TxQueue::new(),
             duplicates: Vec::new(),
             frames: Deque::new(),
             gpdfs: Deque::new(),
@@ -775,27 +753,13 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
         };
         let mut app = [command::CHANNEL_CONFIGURATION, 0];
         let _ = cfg.encode_to_slice(app.get_mut(1..).unwrap_or(&mut []));
-        let builder = GpdfBuilder {
-            frame_control: NwkFrameControl {
-                frame_type: FrameType::Maintenance,
-                auto_commissioning: false,
-                extension: false,
-            },
-            extended: None,
-            gpd: None,
-            frame_counter: None,
-            application_payload: &app,
-            mic: None,
-        };
-        let mut frame: Vec<u8, MAX_GPDF> = Vec::new();
-        if frame.resize(builder.encoded_len(), 0).is_err()
-            || builder.encode_to_slice(&mut frame).is_err()
-        {
+        let Some(frame) = tx_queue::build_maintenance_gpdf(&app) else {
             return;
-        }
+        };
         let _ = self.gpdfs.push_back(GpdfTx {
             not_before: self.now + GP_TX_OFFSET,
             dst: MacAddress::Short(ShortAddress::BROADCAST_ALL),
+            channel: None,
             frame,
         });
     }
@@ -822,15 +786,11 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
     }
 
     fn flush_tx_queue(&mut self, gpd: &GpdId) {
-        let Some(i) = self.tx_queue.iter().position(|e| e.gpd.same_device(gpd)) else {
-            return;
-        };
-        let e = self.tx_queue.swap_remove(i);
-        let _ = self.gpdfs.push_back(GpdfTx {
-            not_before: self.now + GP_TX_OFFSET,
-            dst: e.dst,
-            frame: e.frame,
-        });
+        if let Some(e) = self.tx_queue.take(gpd) {
+            let _ = self
+                .gpdfs
+                .push_back(TxQueue::<2>::transmission(e, self.now));
+        }
     }
 
     fn is_duplicate(&self, gpd: &GpdId, counter: u32) -> bool {
@@ -1286,46 +1246,16 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
     /// Stores an unprotected Data GPDF to `gpd` in the gpTxQueue (one
     /// entry per GPD).
     fn queue_gpdf(&mut self, gpd: &GpdId, application_payload: &[u8]) {
-        let builder = GpdfBuilder {
-            frame_control: NwkFrameControl {
-                frame_type: FrameType::Data,
-                auto_commissioning: false,
-                extension: true,
-            },
-            extended: Some(ExtendedFrameControl {
-                application_id: gpd.application_id(),
-                security_level: SecurityLevel::None,
-                individual_key: false,
-                rx_after_tx: false,
-                from_proxy: true,
-            }),
-            gpd: Some(*gpd),
-            frame_counter: None,
-            application_payload,
-            mic: None,
-        };
-        let mut frame: Vec<u8, MAX_GPDF> = Vec::new();
-        if frame.resize(builder.encoded_len(), 0).is_err()
-            || builder.encode_to_slice(&mut frame).is_err()
-        {
+        let Some(frame) = tx_queue::build_data_gpdf(gpd, application_payload) else {
             return;
-        }
-        let dst = match gpd {
-            GpdId::SrcId(_) => MacAddress::Short(ShortAddress::BROADCAST_ALL),
-            GpdId::Ieee { address, .. } => MacAddress::Extended(*address),
         };
-        self.tx_queue.retain(|e| !e.gpd.same_device(gpd));
-        if self
-            .tx_queue
-            .push(TxEntry {
-                gpd: *gpd,
-                dst,
-                frame,
-            })
-            .is_err()
-        {
-            self.tx_queue.remove(0);
-        }
+        self.tx_queue.put(TxEntry {
+            gpd: *gpd,
+            endpoint_match: false,
+            dst: tx_queue::destination_of(gpd),
+            channel: None,
+            frame,
+        });
     }
 
     /// GPD Success (step 18): the candidate becomes a pairing.
@@ -1345,7 +1275,7 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
         if inc.level.is_protected() {
             entry.frame_counter = inc.counter;
         }
-        self.tx_queue.retain(|e| !e.gpd.same_device(&inc.gpd));
+        self.tx_queue.remove(&inc.gpd);
         self.finalize(entry);
     }
 

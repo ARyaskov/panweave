@@ -13,8 +13,8 @@ use panweave_aps::layer::{DataRequest, Delivery, SecurityStatus, TxOptions};
 use panweave_codec::{Decode, Encode, Reader, Writer};
 use panweave_green_power::cluster::{
     self as gp_cluster, CommissioningNotification, CommunicationMode, GppGpdLink, Notification,
-    Pairing, ProxyCommissioningMode, ProxyTableRequest, SinkCommissioningMode, SinkSecurityLevel,
-    SinkTableRequest,
+    Pairing, ProxyCommissioningMode, ProxyTableRequest, Response, SinkCommissioningMode,
+    SinkSecurityLevel, SinkTableRequest,
 };
 use panweave_green_power::gpdf::{GpdId, Gpdf};
 use panweave_green_power::proxy::{
@@ -198,6 +198,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     gp_cluster::server_cmd::PAIRING,
                     gp_cluster::server_cmd::PROXY_COMMISSIONING_MODE,
                     gp_cluster::server_cmd::PROXY_TABLE_REQUEST,
+                    gp_cluster::server_cmd::RESPONSE,
                 ],
                 generated: &[
                     gp_cluster::client_cmd::NOTIFICATION,
@@ -438,6 +439,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         Err(_) => ZclStatus::MalformedCommand,
                     }
                 }
+                gp_cluster::server_cmd::RESPONSE => match Response::decode_exact(payload) {
+                    Ok(r) => {
+                        gp.proxy.on_response(&r);
+                        ZclStatus::Success
+                    }
+                    Err(_) => ZclStatus::MalformedCommand,
+                },
                 _ => ZclStatus::UnsupportedClusterCommand,
             },
             Direction::ToServer => {
@@ -761,6 +769,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 break;
             }
         }
+        while let Some(g) = gp.proxy.next_gpdf() {
+            if gp.gpdfs.push(g).is_err() {
+                break;
+            }
+        }
         let mut sink_frames: Vec<panweave_green_power::sink::SinkFrame, 8> = Vec::new();
         if let Some(s) = gp.sink.as_mut() {
             while let Some(f) = s.next_frame() {
@@ -808,7 +821,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         for f in sink_frames {
             self.send_sink_frame(&f);
         }
+        let channel = self.nwk.nib.channel.raw();
         for g in due_gpdfs {
+            // TODO(PW-GP-CHANNEL): a SelectedSender appointed for another
+            // channel would switch to it for 5 s (§A.3.9.1 steps 8–9);
+            // the stub stays on the operational channel. Spec: GP Basic
+            // 1.1.2 §A.3.9.1.
+            if g.channel.is_some_and(|c| c != channel) {
+                continue;
+            }
             let _ = self.mac.data_request_inter_pan(
                 PanId::BROADCAST,
                 g.dst,

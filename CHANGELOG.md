@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Green Power proxies act as SelectedSender (GP 1.1.2 §A.3.9.1 steps 8,
+  9, 14): `Proxy::on_response` stores the GP Response's GPD command in
+  the shared gpTxQueue (`tx_queue::{TxQueue, GpdfTx, build_data_gpdf,
+  build_maintenance_gpdf}`), `Proxy::next_gpdf` hands out the
+  Commissioning Reply / Channel Configuration gpTxOffset after the GPD's
+  receive window, and the runtime transmits it; a frame appointed for
+  another channel is dropped (`TODO(PW-GP-CHANNEL)`).
 * Runtime Green Power Basic Combo (feature `green-power`):
   `Stack::enable_green_power_sink(SinkOptions)` registers endpoint 242 as
   GP Combo Basic with the Table 24 server attributes, restores the

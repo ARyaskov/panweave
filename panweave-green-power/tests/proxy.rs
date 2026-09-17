@@ -13,7 +13,8 @@
 use panweave_codec::{Decode, Encode};
 use panweave_green_power::cluster::{
     self, CommissioningNotification, CommunicationMode, GppGpdLink, Notification, Pairing,
-    ProxyCommissioningMode, ProxyTableRequest, ProxyTableResponse, SinkAddress, TableStatus,
+    ProxyCommissioningMode, ProxyTableRequest, ProxyTableResponse, Response, SinkAddress,
+    TableStatus,
 };
 use panweave_green_power::command;
 use panweave_green_power::gpdf::{GpdId, Gpdf, SecurityLevel, mac_header};
@@ -481,4 +482,163 @@ fn proxy_table_request_by_index_and_by_gpd() {
     };
     p.on_pairing(&rm, false);
     assert_eq!(p.table.len(), 1);
+}
+
+#[test]
+fn gp_response_appoints_the_selected_sender() {
+    let mut p = proxy();
+    p.on_commissioning_mode(
+        &ProxyCommissioningMode {
+            enter: true,
+            exit_on_first_pairing: false,
+            exit_on_command: true,
+            unicast: true,
+            window_secs: Some(60),
+            channel: None,
+        },
+        SINK_SHORT,
+    );
+    let _ = (drain(&mut p), events(&mut p));
+    // Another proxy is appointed: nothing is queued here.
+    let reply = [0x50, 0x62, 0x1A];
+    let other = Response {
+        gpd: GPD,
+        endpoint_match: false,
+        selected_sender: ShortAddress(0x2222),
+        tx_channel: 15,
+        command_id: command::COMMISSIONING_REPLY,
+        payload: Some(&reply),
+    };
+    p.on_response(&other);
+    assert!(!p.is_first_to_forward());
+    let mut buf = [0u8; 40];
+    let mut body = [0u8; 8];
+    body[0] = 0x8C;
+    body[1] = 0x40; // ApplicationID 0, RxAfterTx
+    body[2..6].copy_from_slice(&0x8765_4321u32.to_le_bytes());
+    body[6] = command::COMMISSIONING;
+    body[7] = 0x02;
+    let n = MacFrame {
+        header: mac_header(
+            30,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &body[..8],
+    }
+    .encode_to_slice(&mut buf)
+    .unwrap();
+    feed(&mut p, &buf[..n]);
+    assert!(p.next_gpdf().is_none());
+    // The commissioning frame is still tunnelled (with RxAfterTx).
+    let out = drain(&mut p);
+    assert_eq!(out.len(), 1);
+    assert!(
+        CommissioningNotification::decode_exact(&out[0].payload)
+            .unwrap()
+            .rx_after_tx
+    );
+    // This proxy is appointed: the Commissioning Reply GPDF goes out
+    // gpTxOffset after the GPD's next frame with RxAfterTx, on the
+    // channel named by the sink.
+    p.on_response(&Response {
+        selected_sender: PROXY_SHORT,
+        ..other
+    });
+    assert!(p.is_first_to_forward());
+    assert!(p.next_gpdf().is_none(), "nothing until the receive window");
+    body[7] = 0x03;
+    let n = MacFrame {
+        header: mac_header(
+            31,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &body[..8],
+    }
+    .encode_to_slice(&mut buf)
+    .unwrap();
+    p.poll(T0 + Duration::from_secs(1));
+    feed(&mut p, &buf[..n]);
+    let tx = p.next_gpdf().unwrap();
+    assert_eq!(tx.not_before, T0 + Duration::from_millis(1020));
+    assert_eq!(tx.channel, Some(15));
+    assert_eq!(tx.dst, MacAddress::Short(ShortAddress(0xffff)));
+    assert_eq!(&tx.frame[..2], &[0x8C, 0x80]);
+    assert_eq!(&tx.frame[2..6], &0x8765_4321u32.to_le_bytes());
+    assert_eq!(tx.frame[6], command::COMMISSIONING_REPLY);
+    assert_eq!(&tx.frame[7..], &reply);
+    // One transmission per entry: a further window sends nothing.
+    body[7] = 0x04;
+    let n = MacFrame {
+        header: mac_header(
+            32,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &body[..8],
+    }
+    .encode_to_slice(&mut buf)
+    .unwrap();
+    feed(&mut p, &buf[..n]);
+    assert!(p.next_gpdf().is_none());
+    // A Channel Configuration for the Maintenance GPD answers a Channel
+    // Request with a receive window (Auto-Commissioning clear).
+    p.on_response(&Response {
+        gpd: GpdId::SrcId(0),
+        endpoint_match: false,
+        selected_sender: PROXY_SHORT,
+        tx_channel: 20,
+        command_id: command::CHANNEL_CONFIGURATION,
+        payload: Some(&[0x14]),
+    });
+    let n = MacFrame {
+        header: mac_header(
+            33,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &[0x4D, command::CHANNEL_REQUEST, 0x94],
+    }
+    .encode_to_slice(&mut buf)
+    .unwrap();
+    feed(&mut p, &buf[..n]);
+    assert!(
+        p.next_gpdf().is_none(),
+        "no window after Auto-Commissioning"
+    );
+    let n = MacFrame {
+        header: mac_header(
+            34,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &[0x0D, command::CHANNEL_REQUEST, 0x94],
+    }
+    .encode_to_slice(&mut buf)
+    .unwrap();
+    feed(&mut p, &buf[..n]);
+    let tx = p.next_gpdf().unwrap();
+    assert_eq!(tx.channel, Some(20));
+    assert_eq!(
+        tx.frame.as_slice(),
+        &[0x0D, command::CHANNEL_CONFIGURATION, 0x14]
+    );
+    // Leaving commissioning mode drops the queue.
+    p.on_response(&Response {
+        selected_sender: PROXY_SHORT,
+        ..other
+    });
+    p.on_commissioning_mode(
+        &ProxyCommissioningMode {
+            enter: false,
+            exit_on_first_pairing: false,
+            exit_on_command: false,
+            unicast: false,
+            window_secs: None,
+            channel: None,
+        },
+        SINK_SHORT,
+    );
+    assert!(!p.is_first_to_forward());
 }

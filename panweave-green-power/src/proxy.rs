@@ -3,7 +3,9 @@
 //! commands and produces the GP Notification / GP Commissioning
 //! Notification / GP Proxy Table Response frames to tunnel through the
 //! Zigbee network, with the delay, destination and NWK alias each of them
-//! must be sent with. Time, keys and the radio belong to the caller.
+//! must be sent with, and — when a sink appoints it SelectedSender by GP
+//! Response — the GPDFs it transmits to a GPD from its gpTxQueue. Time,
+//! keys and the radio belong to the caller.
 
 use heapless::{Deque, Vec};
 use panweave_codec::Encode;
@@ -13,12 +15,14 @@ use panweave_types::{CommandId, ExtendedAddress, Key128, ShortAddress};
 
 use crate::cluster::{
     self, CommissioningNotification, CommunicationMode, GppGpdLink, Notification, Pairing,
-    ProxyCommissioningMode, ProxyTableRequest, ProxyTableResponse, SinkAddress, TableStatus,
+    ProxyCommissioningMode, ProxyTableRequest, ProxyTableResponse, Response, SinkAddress,
+    TableStatus,
 };
 use crate::command;
 use crate::gpdf::{FrameType, GpdId, Gpdf, SRC_ID_UNSPECIFIED, SecurityLevel};
 use crate::proxy_table::{ALIAS_DERIVED, ProxyEntry, ProxyTable, SecurityOptions, derived_alias};
 use crate::security::{self, Direction, KeyType};
+use crate::tx_queue::{self, GpdfTx, MAX_GPDF, TxEntry, TxQueue};
 
 /// gppCommissioningWindow default (§A.3.6.3.2).
 pub const DEFAULT_COMMISSIONING_WINDOW: Duration = Duration::from_secs(180);
@@ -167,6 +171,9 @@ pub struct Proxy<const N: usize> {
     commissioning: Option<Commissioning>,
     duplicates: Vec<Duplicate, DUPLICATE_ENTRIES>,
     outgoing: Deque<Outgoing, QUEUE_CAPACITY>,
+    gpdfs: Deque<GpdfTx, 2>,
+    tx_queue: TxQueue<1>,
+    first_to_forward: bool,
     events: Deque<ProxyEvent, QUEUE_CAPACITY>,
     now: Instant,
 }
@@ -180,6 +187,9 @@ impl<const N: usize> Proxy<N> {
             commissioning: None,
             duplicates: Vec::new(),
             outgoing: Deque::new(),
+            gpdfs: Deque::new(),
+            tx_queue: TxQueue::new(),
+            first_to_forward: false,
             events: Deque::new(),
             now: Instant::from_millis(0),
         }
@@ -188,6 +198,59 @@ impl<const N: usize> Proxy<N> {
     /// Next frame to transmit.
     pub fn next_outgoing(&mut self) -> Option<Outgoing> {
         self.outgoing.pop_front()
+    }
+
+    /// Next GPDF to transmit to a GPD (this proxy is the SelectedSender).
+    pub fn next_gpdf(&mut self) -> Option<GpdfTx> {
+        self.gpdfs.pop_front()
+    }
+
+    /// True after a GP Response appointed this proxy SelectedSender
+    /// (FirstToForward, §A.3.9.1 step 14).
+    pub fn is_first_to_forward(&self) -> bool {
+        self.first_to_forward
+    }
+
+    /// GP Response received (§A.3.9.1 steps 8 and 14): the appointed
+    /// SelectedSender stores the GPD command in its gpTxQueue for the
+    /// GPD's next receive window; the others drop their entry.
+    pub fn on_response(&mut self, r: &Response<'_>) {
+        if r.selected_sender != self.config.short {
+            self.tx_queue.remove(&r.gpd);
+            self.first_to_forward = false;
+            return;
+        }
+        let mut app: Vec<u8, MAX_GPDF> = Vec::new();
+        if app.push(r.command_id).is_err()
+            || app.extend_from_slice(r.payload.unwrap_or(&[])).is_err()
+        {
+            return;
+        }
+        let maintenance = r.gpd == GpdId::SrcId(SRC_ID_UNSPECIFIED);
+        let frame = if maintenance {
+            tx_queue::build_maintenance_gpdf(&app)
+        } else {
+            tx_queue::build_data_gpdf(&r.gpd, &app)
+        };
+        let Some(frame) = frame else {
+            return;
+        };
+        self.tx_queue.put(TxEntry {
+            gpd: r.gpd,
+            endpoint_match: r.endpoint_match,
+            dst: tx_queue::destination_of(&r.gpd),
+            channel: Some(r.tx_channel),
+            frame,
+        });
+        self.first_to_forward = true;
+    }
+
+    fn flush_tx_queue(&mut self, gpd: &GpdId) {
+        if let Some(e) = self.tx_queue.take(gpd) {
+            let _ = self
+                .gpdfs
+                .push_back(TxQueue::<1>::transmission(e, self.now));
+        }
     }
 
     /// Next event.
@@ -254,6 +317,8 @@ impl<const N: usize> Proxy<N> {
                 .events
                 .push_back(ProxyEvent::CommissioningMode(Some(until)));
         } else if self.commissioning.take().is_some() {
+            self.tx_queue.clear();
+            self.first_to_forward = false;
             let _ = self.events.push_back(ProxyEvent::CommissioningMode(None));
         }
     }
@@ -514,6 +579,10 @@ impl<const N: usize> Proxy<N> {
         if !gpd.is_valid() {
             return;
         }
+        // The gpTxQueue answers a frame with RxAfterTx (§A.1.5.2.2).
+        if gpdf.extended.rx_after_tx {
+            self.flush_tx_queue(&gpd);
+        }
         let level = gpdf.extended.security_level;
         // Commands reserved for the direction to the GPD never arrive in
         // the clear from a GPD (§A.1.5.2.2).
@@ -615,6 +684,11 @@ impl<const N: usize> Proxy<N> {
             return;
         }
         let gpd = GpdId::SrcId(SRC_ID_UNSPECIFIED);
+        // Step 9: the SelectedSender answers a Channel Request followed
+        // by a receive window from its gpTxQueue.
+        if command_id == command::CHANNEL_REQUEST && !gpdf.frame_control.auto_commissioning {
+            self.flush_tx_queue(&gpd);
+        }
         let counter = u32::from(gpdf.mac_sequence);
         if self.is_duplicate(&gpd, counter) {
             return;
