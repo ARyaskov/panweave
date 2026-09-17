@@ -212,6 +212,15 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* GP Pairing Configuration (GP 1.1.2 §A.3.3.4.6, §A.3.5.2.4.1): the
+  codec (`cluster::{PairingConfiguration, ConfigurationAction,
+  PairedEndpoints}`, sharing the Sink Table entry body) and
+  `Sink::on_pairing_configuration` applying no-action / extend /
+  replace / remove-pairing / remove-GPD with the security and
+  communication-mode checks, the paired local endpoints
+  (`SinkEvent::LocalEndpoints`, honoured by the runtime when executing
+  the GPD's commands), GP Pairing on request and the group / announce
+  follow-ups; the application description action is refused.
 * Green Power proxies act as SelectedSender (GP 1.1.2 §A.3.9.1 steps 8,
   9, 14): `Proxy::on_response` stores the GP Response's GPD command in
   the shared gpTxQueue (`tx_queue::{TxQueue, GpdfTx, build_data_gpdf,

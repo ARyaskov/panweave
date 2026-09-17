@@ -772,3 +772,177 @@ fn direct_channel_request_and_sink_table_request() {
     );
     assert_eq!(commands(&events(&mut s)), [command::TOGGLE]);
 }
+
+#[test]
+fn pairing_configuration_manages_the_sink_table() {
+    use panweave_green_power::cluster::{
+        ConfigurationAction, PairedEndpoints, PairingConfiguration,
+    };
+    use panweave_green_power::proxy_table::{ALIAS_DERIVED, SecurityOptions};
+    use panweave_green_power::sink::ConfigurationError;
+    use panweave_green_power::sink_table::SinkEntry;
+    let mut s = sink();
+    let secured = |gpd: GpdId, mode: CommunicationMode| {
+        let mut e = SinkEntry::new(gpd, mode, 0x02);
+        e.sequence_number_capable = true;
+        e.security = Some(SecurityOptions {
+            level: SecurityLevel::Mic,
+            key_type: KeyType::Individual,
+            key: Some(OOB_KEY.clone()),
+        });
+        e.frame_counter = 5;
+        e
+    };
+    let cfg = |action, send_pairing, entry: SinkEntry, endpoints| PairingConfiguration {
+        action,
+        send_pairing,
+        entry,
+        paired_endpoints: endpoints,
+        application_info: None,
+        reports: None,
+    };
+    // A commissioning tool adds a lightweight unicast pairing with two
+    // local endpoints: the entry is stored, the endpoints reported, the
+    // GP Pairing sent, no Device_annce for lightweight unicast.
+    let c = cfg(
+        ConfigurationAction::Extend,
+        true,
+        secured(GPD, CommunicationMode::LightweightUnicast),
+        PairedEndpoints::List(&[1, 2]),
+    );
+    assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
+    let evs = events(&mut s);
+    assert!(evs.contains(&SinkEvent::TableChanged));
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SinkEvent::LocalEndpoints { gpd: GPD, endpoints: Some(l) } if l.as_slice() == [1, 2]
+    )));
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SinkEvent::Paired {
+            gpd: GPD,
+            mode: CommunicationMode::LightweightUnicast,
+            announce: false,
+            group: None,
+            ..
+        }
+    )));
+    let out = frames(&mut s);
+    assert_eq!(out.len(), 1);
+    let p = Pairing::decode_exact(&out[0].payload).unwrap();
+    assert!(p.add_sink);
+    assert_eq!(p.sink, Some(SinkAddress::Unicast(SINK_IEEE, SINK_SHORT)));
+    assert_eq!(p.key, Some(OOB_KEY.clone()));
+    // Extending with another communication mode is refused; the
+    // existing pairing stays.
+    let other = cfg(
+        ConfigurationAction::Extend,
+        false,
+        secured(GPD, CommunicationMode::DerivedGroupcast),
+        PairedEndpoints::All,
+    );
+    assert_eq!(
+        s.on_pairing_configuration(&other, true),
+        Err(ConfigurationError::Failure)
+    );
+    assert_eq!(
+        s.table.find(&GPD).unwrap().mode,
+        CommunicationMode::LightweightUnicast
+    );
+    // A pre-commissioned group pairing for a second GPD: the sink joins
+    // the group and announces the alias.
+    let other_gpd = GpdId::SrcId(0x0000_0055);
+    let mut e = secured(other_gpd, CommunicationMode::CommissionedGroupcast);
+    e.groups.push((0x0010, ALIAS_DERIVED)).unwrap();
+    let c = cfg(
+        ConfigurationAction::Extend,
+        true,
+        e,
+        PairedEndpoints::Derived,
+    );
+    assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
+    let evs = events(&mut s);
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SinkEvent::Paired {
+            gpd,
+            group: Some(0x0010),
+            announce: true,
+            ..
+        } if *gpd == other_gpd
+    )));
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SinkEvent::LocalEndpoints {
+            endpoints: None,
+            ..
+        }
+    )));
+    let _ = frames(&mut s);
+    // Removing that group pairing empties the entry.
+    let mut e = SinkEntry::new(other_gpd, CommunicationMode::CommissionedGroupcast, 0);
+    e.groups.push((0x0010, ALIAS_DERIVED)).unwrap();
+    let c = cfg(
+        ConfigurationAction::RemovePairing,
+        true,
+        e,
+        PairedEndpoints::None,
+    );
+    assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
+    assert!(s.table.find(&other_gpd).is_none());
+    assert!(events(&mut s).iter().any(|e| matches!(
+        e,
+        SinkEvent::Decommissioned {
+            group: Some(0x0010),
+            ..
+        }
+    )));
+    let out = frames(&mut s);
+    let p = Pairing::decode_exact(&out[0].payload).unwrap();
+    assert!(!p.add_sink && !p.remove_gpd);
+    assert_eq!(p.sink, Some(SinkAddress::Group(0x0010)));
+    // Below the security policy, and an unsupported action.
+    let plain = cfg(
+        ConfigurationAction::Extend,
+        false,
+        SinkEntry::new(GpdId::SrcId(0x66), CommunicationMode::FullUnicast, 0),
+        PairedEndpoints::All,
+    );
+    assert_eq!(
+        s.on_pairing_configuration(&plain, true),
+        Err(ConfigurationError::Failure)
+    );
+    let desc = PairingConfiguration {
+        action: ConfigurationAction::ApplicationDescription,
+        reports: Some((1, 1, &[])),
+        ..plain.clone()
+    };
+    assert_eq!(
+        s.on_pairing_configuration(&desc, true),
+        Err(ConfigurationError::Unsupported)
+    );
+    // Remove GPD sends the RemoveGPD pairing; a second time: NOT_FOUND.
+    let c = cfg(
+        ConfigurationAction::RemoveGpd,
+        true,
+        SinkEntry::new(GPD, CommunicationMode::FullUnicast, 0),
+        PairedEndpoints::None,
+    );
+    assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
+    assert!(s.table.is_empty());
+    let out = frames(&mut s);
+    assert!(Pairing::decode_exact(&out[0].payload).unwrap().remove_gpd);
+    assert_eq!(
+        s.on_pairing_configuration(&c, true),
+        Err(ConfigurationError::NotFound)
+    );
+    // No action with Send GP Pairing for an unknown GPD sends nothing.
+    let c = cfg(
+        ConfigurationAction::NoAction,
+        true,
+        SinkEntry::new(GPD, CommunicationMode::FullUnicast, 0),
+        PairedEndpoints::None,
+    );
+    assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
+    assert!(frames(&mut s).is_empty());
+}

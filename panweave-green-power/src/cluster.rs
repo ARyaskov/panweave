@@ -11,6 +11,7 @@ use panweave_types::{ClusterId, Endpoint, ExtendedAddress, Key128, ProfileId, Sh
 
 use crate::gpdf::{ApplicationId, GpdId, MIC_LEN, SecurityLevel};
 use crate::security::KeyType;
+use crate::sink_table::SinkEntry;
 
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x0021);
@@ -880,6 +881,219 @@ impl<'a> Decode<'a> for Response<'a> {
     }
 }
 
+/// Action of a GP Pairing Configuration (Table 34).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ConfigurationAction {
+    /// 0b000: no action.
+    NoAction,
+    /// 0b001: extend the Sink Table entry.
+    Extend,
+    /// 0b010: replace the Sink Table entry.
+    Replace,
+    /// 0b011: remove a pairing.
+    RemovePairing,
+    /// 0b100: remove the GPD.
+    RemoveGpd,
+    /// 0b101: application description.
+    ApplicationDescription,
+}
+
+impl ConfigurationAction {
+    /// Raw 3-bit value.
+    pub const fn raw(self) -> u8 {
+        match self {
+            ConfigurationAction::NoAction => 0,
+            ConfigurationAction::Extend => 1,
+            ConfigurationAction::Replace => 2,
+            ConfigurationAction::RemovePairing => 3,
+            ConfigurationAction::RemoveGpd => 4,
+            ConfigurationAction::ApplicationDescription => 5,
+        }
+    }
+
+    /// From the raw value (0b110–0b111 reserved).
+    pub const fn from_raw(v: u8) -> Option<Self> {
+        Some(match v & 0x07 {
+            0 => ConfigurationAction::NoAction,
+            1 => ConfigurationAction::Extend,
+            2 => ConfigurationAction::Replace,
+            3 => ConfigurationAction::RemovePairing,
+            4 => ConfigurationAction::RemoveGpd,
+            5 => ConfigurationAction::ApplicationDescription,
+            _ => return None,
+        })
+    }
+}
+
+/// The Number of paired endpoints field of a GP Pairing Configuration
+/// (§A.3.3.4.6.3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PairedEndpoints<'a> {
+    /// 0x00 / 0xfd: not for local execution.
+    None,
+    /// 0xff: all matching endpoints.
+    All,
+    /// 0xfe: derived by the sink.
+    Derived,
+    /// An explicit list of local endpoints.
+    List(&'a [u8]),
+}
+
+/// GP Pairing Configuration (§A.3.3.4.6).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PairingConfiguration<'a> {
+    /// Action.
+    pub action: ConfigurationAction,
+    /// Send GP Pairing after handling.
+    pub send_pairing: bool,
+    /// The Sink Table entry carried (GPD ID, endpoint, DeviceID, group
+    /// list, alias, radius, security).
+    pub entry: SinkEntry,
+    /// Paired local endpoints.
+    pub paired_endpoints: PairedEndpoints<'a>,
+    /// Application information (raw, in the §A.4.2.1.1.4 layout).
+    pub application_info: Option<&'a [u8]>,
+    /// Report descriptors of an Application description action: total
+    /// number of reports, number in this command, descriptors.
+    pub reports: Option<(u8, u8, &'a [u8])>,
+}
+
+impl PairingConfiguration<'_> {
+    fn options(&self) -> u16 {
+        let e = &self.entry;
+        u16::from(e.gpd.application_id().raw())
+            | (u16::from(e.mode.raw()) << 3)
+            | (u16::from(e.sequence_number_capable) << 5)
+            | (u16::from(e.rx_on_capable) << 6)
+            | (u16::from(e.fixed_location) << 7)
+            | (u16::from(e.assigned_alias.is_some()) << 8)
+            | (u16::from(e.security.is_some()) << 9)
+            | (u16::from(self.application_info.is_some()) << 10)
+    }
+}
+
+impl Encode for PairingConfiguration<'_> {
+    fn encoded_len(&self) -> usize {
+        // The entry's own options are replaced by the command's.
+        1 + self.entry.encoded_len()
+            + 1
+            + match self.paired_endpoints {
+                PairedEndpoints::List(l) => l.len(),
+                _ => 0,
+            }
+            + self.application_info.map_or(0, <[u8]>::len)
+            + self.reports.map_or(0, |(_, _, d)| 2 + d.len())
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u8(self.action.raw() | (u8::from(self.send_pairing) << 3))?;
+        w.u16_le(self.options())?;
+        // The entry body: encode the whole entry and drop its options.
+        let mut buf = [0u8; 80];
+        let mut ew = Writer::new(&mut buf);
+        self.entry.encode(&mut ew)?;
+        let n = ew.position();
+        w.bytes(buf.get(2..n).ok_or(CodecError::Unrepresentable {
+            field: "sink table entry",
+        })?)?;
+        match self.paired_endpoints {
+            PairedEndpoints::None => w.u8(0x00)?,
+            PairedEndpoints::All => w.u8(0xff)?,
+            PairedEndpoints::Derived => w.u8(0xfe)?,
+            PairedEndpoints::List(l) => {
+                let n = u8::try_from(l.len())
+                    .ok()
+                    .filter(|n| *n < 0xfd && *n > 0)
+                    .ok_or(CodecError::Unrepresentable {
+                        field: "paired endpoints",
+                    })?;
+                w.u8(n)?;
+                w.bytes(l)?;
+            }
+        }
+        if let Some(a) = self.application_info {
+            w.bytes(a)?;
+        }
+        if let Some((total, count, descriptors)) = self.reports {
+            w.u8(total)?;
+            w.u8(count)?;
+            w.bytes(descriptors)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Decode<'a> for PairingConfiguration<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
+        let actions = r.u8()?;
+        let action =
+            ConfigurationAction::from_raw(actions & 0x07).ok_or(CodecError::InvalidField {
+                field: "action",
+                value: u32::from(actions & 0x07),
+            })?;
+        let options = r.u16_le()?;
+        let entry = SinkEntry::decode_body(options & 0x03ff, r)?;
+        let paired_endpoints = match r.u8()? {
+            0x00 | 0xfd => PairedEndpoints::None,
+            0xff => PairedEndpoints::All,
+            0xfe => PairedEndpoints::Derived,
+            n => PairedEndpoints::List(r.bytes(usize::from(n))?),
+        };
+        let application_info = if options & (1 << 10) != 0 {
+            Some(application_info_field(r)?)
+        } else {
+            None
+        };
+        let reports = if action == ConfigurationAction::ApplicationDescription {
+            let total = r.u8()?;
+            let count = r.u8()?;
+            Some((total, count, r.take_rest()))
+        } else {
+            None
+        };
+        Ok(PairingConfiguration {
+            action,
+            send_pairing: actions & 0x08 != 0,
+            entry,
+            paired_endpoints,
+            application_info,
+            reports,
+        })
+    }
+}
+
+/// Consumes an Application information field (§A.4.2.1.1.4 layout) and
+/// returns its raw octets.
+fn application_info_field<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], CodecError> {
+    let start = r.consumed().len();
+    let a = r.u8()?;
+    if a & 0x01 != 0 {
+        r.u16_le()?;
+    }
+    if a & 0x02 != 0 {
+        r.u16_le()?;
+    }
+    if a & 0x04 != 0 {
+        let n = usize::from(r.u8()?);
+        r.bytes(n)?;
+    }
+    if a & 0x08 != 0 {
+        let len = r.u8()?;
+        r.bytes(2 * usize::from((len & 0x0f) + (len >> 4)))?;
+    }
+    if a & 0x10 != 0 {
+        let n = usize::from(r.u8()?);
+        r.bytes(n)?;
+    }
+    let end = r.consumed().len();
+    r.consumed()
+        .get(start..end)
+        .ok_or(CodecError::Unrepresentable {
+            field: "application information",
+        })
+}
+
 /// GP Sink Table Request (§A.3.3.4.7): the same form as the Proxy Table
 /// Request.
 pub type SinkTableRequest = ProxyTableRequest;
@@ -1174,6 +1388,75 @@ mod tests {
         assert_eq!(Response::decode_exact(&buf[..len]).unwrap(), bare);
         assert_eq!(SinkSecurityLevel::from_raw(0x06).raw(), 0x06);
         assert_eq!(SinkSecurityLevel::DEFAULT.raw(), 0x06);
+    }
+
+    #[test]
+    fn pairing_configuration_round_trips() {
+        use crate::proxy_table::SecurityOptions;
+        let mut entry = SinkEntry::new(
+            GpdId::SrcId(0x0000_1234),
+            CommunicationMode::CommissionedGroupcast,
+            0x02,
+        );
+        entry.sequence_number_capable = true;
+        entry.groups.push((0x0010, ShortAddress(0xffff))).unwrap();
+        entry.groupcast_radius = 4;
+        entry.security = Some(SecurityOptions {
+            level: SecurityLevel::Mic,
+            key_type: KeyType::Individual,
+            key: Some(Key128::from_bytes([0x77; 16])),
+        });
+        entry.frame_counter = 9;
+        let app = [0x05, 0x34, 0x12, 0x02, 0x20, 0x21];
+        let c = PairingConfiguration {
+            action: ConfigurationAction::Extend,
+            send_pairing: true,
+            entry: entry.clone(),
+            paired_endpoints: PairedEndpoints::List(&[1, 2]),
+            application_info: Some(&app),
+            reports: None,
+        };
+        let mut buf = [0u8; 96];
+        let len = c.encode_to_slice(&mut buf).unwrap();
+        assert_eq!(len, c.encoded_len());
+        // Actions: extend + send pairing; Options: mode 0b10, seq caps,
+        // security use, application info.
+        assert_eq!(buf[0], 0x09);
+        assert_eq!(
+            u16::from_le_bytes([buf[1], buf[2]]),
+            (0b10 << 3) | (1 << 5) | (1 << 9) | (1 << 10)
+        );
+        let back = PairingConfiguration::decode_exact(&buf[..len]).unwrap();
+        assert_eq!(back, c);
+        assert_eq!(back.entry.groups[0], (0x0010, ShortAddress(0xffff)));
+        // Remove GPD: nothing but the identity and the mandatory fields.
+        let r = PairingConfiguration {
+            action: ConfigurationAction::RemoveGpd,
+            send_pairing: true,
+            entry: SinkEntry::new(GpdId::SrcId(0x1234), CommunicationMode::FullUnicast, 0),
+            paired_endpoints: PairedEndpoints::None,
+            application_info: None,
+            reports: None,
+        };
+        let len = r.encode_to_slice(&mut buf).unwrap();
+        assert_eq!(len, 1 + 2 + 4 + 1 + 1 + 1);
+        assert_eq!(PairingConfiguration::decode_exact(&buf[..len]).unwrap(), r);
+        // Application description carries report descriptors.
+        let d = PairingConfiguration {
+            action: ConfigurationAction::ApplicationDescription,
+            send_pairing: false,
+            entry: SinkEntry::new(GpdId::SrcId(0x1234), CommunicationMode::FullUnicast, 0),
+            paired_endpoints: PairedEndpoints::Derived,
+            application_info: None,
+            reports: Some((2, 1, &[0x00, 0x03, 0xAA, 0xBB, 0xCC])),
+        };
+        let len = d.encode_to_slice(&mut buf).unwrap();
+        let back = PairingConfiguration::decode_exact(&buf[..len]).unwrap();
+        assert_eq!(back, d);
+        assert_eq!(back.paired_endpoints, PairedEndpoints::Derived);
+        // A reserved action is refused.
+        buf[0] = 0x06;
+        assert!(PairingConfiguration::decode_exact(&buf[..len]).is_err());
     }
 
     #[test]

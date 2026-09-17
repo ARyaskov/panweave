@@ -18,9 +18,10 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{CommandId, ExtendedAddress, Key128, PanId, ShortAddress};
 
 use crate::cluster::{
-    self, CommissioningNotification, CommunicationMode, GppGpdLink, Notification, Pairing,
-    ProxyCommissioningMode, Response, SinkAddress, SinkCommissioningMode, SinkSecurityLevel,
-    SinkTableRequest, SinkTableResponse, TableStatus, exit_mode,
+    self, CommissioningNotification, CommunicationMode, ConfigurationAction, GppGpdLink,
+    Notification, PairedEndpoints, Pairing, PairingConfiguration, ProxyCommissioningMode, Response,
+    SinkAddress, SinkCommissioningMode, SinkSecurityLevel, SinkTableRequest, SinkTableResponse,
+    TableStatus, exit_mode,
 };
 use crate::command;
 use crate::commissioning::{
@@ -207,6 +208,28 @@ pub enum SinkEvent {
     },
     /// A GPD command from a paired GPD, delivered once.
     Command(GpdCommand),
+    /// A GP Pairing Configuration named the local endpoints paired with
+    /// `gpd` (`None`: all of them / derived by the application).
+    LocalEndpoints {
+        /// GPD identity.
+        gpd: GpdId,
+        /// The endpoints.
+        endpoints: Option<Vec<u8, 8>>,
+    },
+}
+
+/// Why a GP Pairing Configuration was not applied (§A.3.5.2.4.1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ConfigurationError {
+    /// Security below gpsSecurityLevel, an unsupported communication
+    /// mode, a conflicting existing pairing, or the Sink Table is full:
+    /// FAILURE.
+    Failure,
+    /// The pairing to remove does not exist: NOT_FOUND.
+    NotFound,
+    /// Application description (Translation Table) is not supported.
+    Unsupported,
 }
 
 /// Why a GP Sink Commissioning Mode command was not honoured
@@ -475,6 +498,166 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
                 self.exit_commissioning_mode();
             }
             Ok(())
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // GP Pairing Configuration (§A.3.5.2.4.1)
+    // ---------------------------------------------------------------
+
+    /// GP Pairing Configuration received (`unicast` selects whether an
+    /// error is worth a Default Response).
+    pub fn on_pairing_configuration(
+        &mut self,
+        cfg: &PairingConfiguration<'_>,
+        _unicast: bool,
+    ) -> Result<(), ConfigurationError> {
+        let gpd = cfg.entry.gpd;
+        if !gpd.is_valid() {
+            return Err(ConfigurationError::Failure);
+        }
+        match cfg.action {
+            ConfigurationAction::NoAction => {
+                if cfg.send_pairing
+                    && let Some(e) = self.table.find(&gpd).cloned()
+                {
+                    let p = self.pairing_for(&e, true, false);
+                    self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+                }
+                Ok(())
+            }
+            ConfigurationAction::Extend | ConfigurationAction::Replace => {
+                let supplied = &cfg.entry;
+                if supplied.security_level().raw() < self.config.security_level.minimum {
+                    return Err(ConfigurationError::Failure);
+                }
+                if cfg.action == ConfigurationAction::Replace {
+                    self.table.remove(&gpd);
+                }
+                let existed = self.table.find(&gpd).is_some();
+                let stored = match self.table.find_mut(&gpd) {
+                    Some(existing) => {
+                        if existing.mode != supplied.mode {
+                            return Err(ConfigurationError::Failure);
+                        }
+                        for g in &supplied.groups {
+                            if !existing.groups.contains(g) {
+                                let _ = existing.groups.push(*g);
+                            }
+                        }
+                        if supplied.assigned_alias.is_some() {
+                            existing.assigned_alias = supplied.assigned_alias;
+                        }
+                        if supplied.security.is_some() {
+                            existing.security.clone_from(&supplied.security);
+                            existing.frame_counter = supplied.frame_counter;
+                        }
+                        existing.merge_radius(supplied.groupcast_radius);
+                        existing.sequence_number_capable |= supplied.sequence_number_capable;
+                        existing.rx_on_capable |= supplied.rx_on_capable;
+                        existing.fixed_location |= supplied.fixed_location;
+                        existing.clone()
+                    }
+                    None => {
+                        let entry = supplied.clone();
+                        match self.table.insert(entry) {
+                            Ok(i) => match self.table.at(i) {
+                                Some(e) => e.clone(),
+                                None => return Err(ConfigurationError::Failure),
+                            },
+                            Err(_) => return Err(ConfigurationError::Failure),
+                        }
+                    }
+                };
+                self.push_event(SinkEvent::TableChanged);
+                let endpoints = match cfg.paired_endpoints {
+                    PairedEndpoints::List(l) => Vec::from_slice(l).ok(),
+                    _ => None,
+                };
+                self.push_event(SinkEvent::LocalEndpoints { gpd, endpoints });
+                if cfg.send_pairing {
+                    let p = self.pairing_for(&stored, true, false);
+                    self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+                }
+                self.push_event(SinkEvent::Paired {
+                    gpd,
+                    device_id: stored.device_id,
+                    mode: stored.mode,
+                    alias: stored.alias(),
+                    group: pairing_group(&stored),
+                    announce: cfg.send_pairing
+                        && !existed
+                        && stored.mode != CommunicationMode::LightweightUnicast,
+                });
+                Ok(())
+            }
+            ConfigurationAction::RemovePairing => {
+                let wanted_group = cfg.entry.groups.first().map(|g| g.0);
+                let Some(existing) = self.table.find(&gpd).cloned() else {
+                    return Err(ConfigurationError::NotFound);
+                };
+                if existing.mode != cfg.entry.mode {
+                    return Err(ConfigurationError::NotFound);
+                }
+                let mut removed_group = pairing_group(&existing);
+                if existing.mode == CommunicationMode::CommissionedGroupcast
+                    && let Some(g) = wanted_group
+                {
+                    if !existing.groups.iter().any(|x| x.0 == g) {
+                        return Err(ConfigurationError::NotFound);
+                    }
+                    if let Some(e) = self.table.find_mut(&gpd) {
+                        e.groups.retain(|x| x.0 != g);
+                    }
+                    removed_group = Some(g);
+                    if self.table.find(&gpd).is_some_and(|e| !e.groups.is_empty()) {
+                        self.push_event(SinkEvent::TableChanged);
+                        if cfg.send_pairing {
+                            let mut p = self.pairing_for(&existing, false, false);
+                            p.sink = Some(SinkAddress::Group(g));
+                            self.push_frame(
+                                Destination::Broadcast,
+                                cluster::server_cmd::PAIRING,
+                                &p,
+                            );
+                        }
+                        self.push_event(SinkEvent::Decommissioned {
+                            gpd,
+                            group: Some(g),
+                        });
+                        return Ok(());
+                    }
+                }
+                self.table.remove(&gpd);
+                self.push_event(SinkEvent::TableChanged);
+                if cfg.send_pairing {
+                    let p = self.pairing_for(&existing, false, false);
+                    self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+                }
+                self.push_event(SinkEvent::Decommissioned {
+                    gpd,
+                    group: removed_group,
+                });
+                Ok(())
+            }
+            ConfigurationAction::RemoveGpd => {
+                let Some(existing) = self.table.find(&gpd).cloned() else {
+                    return Err(ConfigurationError::NotFound);
+                };
+                self.table.remove(&gpd);
+                self.candidates.retain(|c| !c.entry.matches(&gpd));
+                self.push_event(SinkEvent::TableChanged);
+                if cfg.send_pairing {
+                    let p = self.pairing_for(&existing, false, true);
+                    self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+                }
+                self.push_event(SinkEvent::Decommissioned {
+                    gpd,
+                    group: pairing_group(&existing),
+                });
+                Ok(())
+            }
+            ConfigurationAction::ApplicationDescription => Err(ConfigurationError::Unsupported),
         }
     }
 

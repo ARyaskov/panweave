@@ -13,8 +13,8 @@ use panweave_aps::layer::{DataRequest, Delivery, SecurityStatus, TxOptions};
 use panweave_codec::{Decode, Encode, Reader, Writer};
 use panweave_green_power::cluster::{
     self as gp_cluster, CommissioningNotification, CommunicationMode, GppGpdLink, Notification,
-    Pairing, ProxyCommissioningMode, ProxyTableRequest, Response, SinkCommissioningMode,
-    SinkSecurityLevel, SinkTableRequest,
+    Pairing, PairingConfiguration, ProxyCommissioningMode, ProxyTableRequest, Response,
+    SinkCommissioningMode, SinkSecurityLevel, SinkTableRequest,
 };
 use panweave_green_power::gpdf::{GpdId, Gpdf};
 use panweave_green_power::proxy::{
@@ -23,7 +23,7 @@ use panweave_green_power::proxy::{
 use panweave_green_power::proxy_table::{ProxyEntry, ProxyTable};
 use panweave_green_power::security::KeyType;
 use panweave_green_power::sink::{
-    GpdCommand, GpdfTx, ModeError, Refusal, Sink, SinkConfig, SinkEvent,
+    ConfigurationError, GpdCommand, GpdfTx, ModeError, Refusal, Sink, SinkConfig, SinkEvent,
 };
 use panweave_green_power::sink_table::{SinkEntry, SinkTable};
 use panweave_green_power::translation::{self, Translated};
@@ -108,6 +108,8 @@ pub struct GreenPower<C: BlockCipher> {
     gpdfs: Vec<GpdfTx, 2>,
     /// Local endpoints paired with the GPDs.
     endpoints: Vec<Endpoint, SINK_ENDPOINTS>,
+    /// Per-GPD endpoint lists set by GP Pairing Configuration.
+    pairings: Vec<(GpdId, Vec<u8, 8>), SINK_TABLE_ENTRIES>,
 }
 
 impl<C: BlockCipher> GreenPower<C> {
@@ -219,6 +221,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         gp_cluster::client_cmd::COMMISSIONING_NOTIFICATION,
                         gp_cluster::client_cmd::SINK_COMMISSIONING_MODE,
                         gp_cluster::client_cmd::SINK_TABLE_REQUEST,
+                        gp_cluster::client_cmd::PAIRING_CONFIGURATION,
                     ],
                     generated: &[
                         gp_cluster::server_cmd::PAIRING,
@@ -291,6 +294,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             pending: Vec::new(),
             gpdfs: Vec::new(),
             endpoints: Vec::new(),
+            pairings: Vec::new(),
         };
         if let Ok(table) = restore_proxy_table(&mut self.storage) {
             gp.proxy.table = table;
@@ -496,6 +500,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             Err(_) => ZclStatus::MalformedCommand,
                         }
                     }
+                    gp_cluster::client_cmd::PAIRING_CONFIGURATION => {
+                        match PairingConfiguration::decode_exact(payload) {
+                            Ok(c) => match sink.on_pairing_configuration(&c, unicast) {
+                                Ok(()) => ZclStatus::Success,
+                                Err(ConfigurationError::NotFound) => ZclStatus::NotFound,
+                                Err(
+                                    ConfigurationError::Failure | ConfigurationError::Unsupported,
+                                ) => ZclStatus::Failure,
+                            },
+                            Err(_) => ZclStatus::MalformedCommand,
+                        }
+                    }
                     _ => ZclStatus::UnsupportedClusterCommand,
                 }
             }
@@ -562,6 +578,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             });
                         }
                         SinkEvent::Decommissioned { gpd, group } => {
+                            gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
                             if let Some(g) = group
                                 && !s.table.iter().any(|e| {
                                     e.mode == CommunicationMode::DerivedGroupcast
@@ -580,6 +597,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         }
                         SinkEvent::Command(c) => {
                             let _ = commands.push(c);
+                        }
+                        SinkEvent::LocalEndpoints { gpd, endpoints } => {
+                            gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
+                            if let Some(list) = endpoints
+                                && gp.pairings.push((gpd, list)).is_err()
+                            {
+                                gp.pairings.remove(0);
+                            }
                         }
                     }
                 }
@@ -668,6 +693,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .and_then(|s| s.table.find(&c.gpd).map(SinkEntry::alias))
             .unwrap_or(ShortAddress(0xffff));
         let mut endpoints: Vec<Endpoint, SINK_ENDPOINTS> = gp.endpoints.clone();
+        if let Some((_, list)) = gp.pairings.iter().find(|(g, _)| g.same_device(&c.gpd)) {
+            endpoints.clear();
+            for e in list {
+                let _ = endpoints.push(Endpoint(*e));
+            }
+        }
         if endpoints.is_empty() {
             for e in self.zcl.endpoints() {
                 if e.endpoint != gp_cluster::ENDPOINT {

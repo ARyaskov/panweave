@@ -605,3 +605,173 @@ fn bidirectional_commissioning_through_a_proxy_delivers_the_key() {
         })
     }));
 }
+
+#[test]
+fn a_commissioning_tool_configures_a_pairing_on_the_sink() {
+    use panweave_aps::Destination;
+    use panweave_green_power::cluster::{
+        ConfigurationAction, PairedEndpoints, PairingConfiguration,
+    };
+    use panweave_green_power::proxy_table::SecurityOptions;
+    use panweave_green_power::sink_table::SinkEntry;
+    use panweave_zcl::frame::Direction;
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "sink",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 61),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "tool",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 62),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .enable_green_power_sink(SinkOptions::default())
+        .unwrap();
+    sim.stack(r).enable_green_power_proxy().unwrap();
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::Joined { .. }))
+    }));
+    sim.run_for(Duration::from_secs(3));
+    sim.take_events(c);
+    sim.take_events(r);
+    // The tool (the router) extends the sink with a derived groupcast
+    // pairing for the GPD, paired with endpoint 1, and asks for the GP
+    // Pairing to be sent.
+    let mut entry = SinkEntry::new(GPD, CommunicationMode::DerivedGroupcast, 0x02);
+    entry.sequence_number_capable = true;
+    entry.security = Some(SecurityOptions {
+        level: SecurityLevel::Mic,
+        key_type: KeyType::Individual,
+        key: Some(OOB_KEY.clone()),
+    });
+    entry.frame_counter = 0x20;
+    let cfg = PairingConfiguration {
+        action: ConfigurationAction::Extend,
+        send_pairing: true,
+        entry,
+        paired_endpoints: PairedEndpoints::List(&[1]),
+        application_info: None,
+        reports: None,
+    };
+    let mut buf = [0u8; 96];
+    let n = cfg.encode_to_slice(&mut buf).unwrap();
+    sim.stack(r)
+        .zcl
+        .send_command(
+            Destination::Short {
+                address: ShortAddress::COORDINATOR,
+                endpoint: Endpoint(242),
+            },
+            panweave_green_power::cluster::PROFILE,
+            panweave_green_power::cluster::ID,
+            Endpoint(242),
+            panweave_green_power::cluster::client_cmd::PAIRING_CONFIGURATION,
+            Direction::ToServer,
+            None,
+            &buf[..n],
+        )
+        .unwrap();
+    sim.stack(r).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c).iter().any(|e| {
+            matches!(
+                e,
+                StackEvent::GreenPowerPaired {
+                    gpd,
+                    mode: CommunicationMode::DerivedGroupcast,
+                    alias: ALIAS,
+                    ..
+                } if *gpd == GPD
+            )
+        })
+    }));
+    // The GP Pairing reached the tool's proxy side, the alias was
+    // announced and the sink joined the derived group.
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.stack_ref(r)
+            .green_power_proxy_ref()
+            .is_some_and(|p| p.table.find(&GPD).is_some_and(|e| e.derived_group))
+            && x.events(r).iter().any(|e| {
+                matches!(
+                    e,
+                    StackEvent::DeviceAnnounce { short, .. } if *short == ALIAS
+                )
+            })
+    }));
+    assert!(
+        sim.stack(c)
+            .aps
+            .groups
+            .contains(panweave_types::GroupAddress(ALIAS.0), Endpoint(242))
+    );
+    // The GPD's Toggle (protected with the configured key) runs on the
+    // paired endpoint 1.
+    sim.take_events(c);
+    sim.inject(&gpdf(
+        1,
+        SecurityLevel::Mic,
+        Some(0x21),
+        &[command::TOGGLE],
+        Some((&OOB_KEY, true)),
+    ));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.events(c).iter().any(|e| {
+            matches!(
+                e,
+                StackEvent::OnOff {
+                    endpoint: Endpoint(1),
+                    on: true
+                }
+            )
+        })
+    }));
+    // Removing the GPD through the tool drops the pairing on both sides.
+    let remove = PairingConfiguration {
+        action: ConfigurationAction::RemoveGpd,
+        send_pairing: true,
+        entry: SinkEntry::new(GPD, CommunicationMode::DerivedGroupcast, 0),
+        paired_endpoints: PairedEndpoints::None,
+        application_info: None,
+        reports: None,
+    };
+    let n = remove.encode_to_slice(&mut buf).unwrap();
+    sim.stack(r)
+        .zcl
+        .send_command(
+            Destination::Short {
+                address: ShortAddress::COORDINATOR,
+                endpoint: Endpoint(242),
+            },
+            panweave_green_power::cluster::PROFILE,
+            panweave_green_power::cluster::ID,
+            Endpoint(242),
+            panweave_green_power::cluster::client_cmd::PAIRING_CONFIGURATION,
+            Direction::ToServer,
+            None,
+            &buf[..n],
+        )
+        .unwrap();
+    sim.stack(r).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::GreenPowerDecommissioned { gpd } if *gpd == GPD))
+            && x.stack_ref(r)
+                .green_power_proxy_ref()
+                .is_some_and(|p| p.table.find(&GPD).is_none())
+    }));
+}

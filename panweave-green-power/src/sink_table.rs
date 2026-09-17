@@ -164,6 +164,13 @@ impl SinkEntry {
     /// Reads the over-the-air form.
     pub fn decode(r: &mut Reader<'_>) -> Result<Self, CodecError> {
         let o = r.u16_le()?;
+        Self::decode_body(o, r)
+    }
+
+    /// Reads the fields that follow the Options parameter (`o`, in the
+    /// Table 25 layout) — shared with the GP Pairing Configuration
+    /// command whose Options field has the same layout (§A.3.3.4.6.3).
+    pub fn decode_body(o: u16, r: &mut Reader<'_>) -> Result<Self, CodecError> {
         let app = ApplicationId::from_raw((o & 0x07) as u8).ok_or(CodecError::InvalidField {
             field: "application id",
             value: u32::from(o & 0x07),
