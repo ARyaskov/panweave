@@ -10,6 +10,7 @@
 //! UTC time comes from the Time cluster server on the driver's endpoint
 //! when there is one, otherwise from [`UtcClock`] set by the application.
 
+pub mod drlc;
 pub mod messaging;
 
 use panweave_aps::layer::{Destination, TxOptions};

@@ -81,10 +81,10 @@ id = "PW-SE-CL-001"
 section = "Annex D.2"
 summary = "Demand Response and Load Control cluster"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-smart-energy::clusters::drlc"
-tests = ["codecs_round_trip", "scheduler_accepts_supersedes_and_reports", "annex_e_overlap_rules", "server_store_answers_get_scheduled_events"]
-notes = "Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out, the cancellation rules of D.2.2.3.2 and the Annex E overlap rules, the 0–5 s report delay draw of D.2.3.3.1.2, and a server-side EventStore answering Get Scheduled Events per D.2.3.3.2.3 (completed events excluded, earliest end time and minimum issuer event id filters, id order or start-time order, count limit, per-client device class and enrollment group). The ECDSA signature (host's, ADR-0012) and binding the scheduler / store to a ZCL endpoint dispatcher are not done (TODO(PW-SE-DRLC-DISPATCH))."
+status = "implemented"
+module = "panweave-smart-energy::clusters::drlc,panweave::smart_energy_drivers::drlc"
+tests = ["codecs_round_trip", "scheduler_accepts_supersedes_and_reports", "annex_e_overlap_rules", "server_store_answers_get_scheduled_events", "load_control_events_are_scheduled_reported_and_cancelled"]
+notes = "Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out, the cancellation rules of D.2.2.3.2 and the Annex E overlap rules, the 0-5 s report delay draw of D.2.3.3.1.2, and a server-side EventStore answering Get Scheduled Events per D.2.3.3.2.3 (completed events excluded, earliest end time and minimum issuer event id filters, id order or start-time order, count limit, per-client device class and enrollment group). The facade drivers (feature smart-energy) bind them to a Stack: DrlcClient takes the events from the stack, syncs the writable client attributes into the scheduler, draws the randomization and report delays from the stack's RNG, sends every Report Event Status to the issuing ESI after its delay (opt-outs and poll-driven starts / completions included) and requests scheduled events; DrlcServer issues, cancels and answers Get Scheduled Events (one Load Control Event per match, NOT_FOUND otherwise) with per-client profiles, reporting the statuses received. All frames go APS link-key protected. The ECDSA signature of Report Event Status is the host's (ADR-0012): reports carry signature type 0."
 [[requirement]]
 id = "PW-SE-CL-002"
 section = "Annex D.3"

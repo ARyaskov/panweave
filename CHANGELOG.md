@@ -181,8 +181,12 @@ Keep a Changelog; versions follow SemVer.
   `messaging::{MessagingClient, MessagingServer}` (SE 1.4a Annex D.5)
   decode the cluster's commands from stack events, drive the Display /
   Server models, send the responses APS link-key protected and report
-  `MessagingEvent` / `MessagingServerEvent`; `UtcClock` and `utc_now`
-  supply UTC from the endpoint's Time server or the application.
+  `MessagingEvent` / `MessagingServerEvent`; `drlc::{DrlcClient,
+  DrlcServer}` (Annex D.2) schedule and issue load control events,
+  send the Report Event Status frames after their 0–5 s delay, answer
+  Get Scheduled Events and report `DrlcEvent` / `DrlcServerEvent`;
+  `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
+  or the application.
 * Green Power proxies act as SelectedSender (GP 1.1.2 §A.3.9.1 steps 8,
   9, 14): `Proxy::on_response` stores the GP Response's GPD command in
   the shared gpTxQueue (`tx_queue::{TxQueue, GpdfTx, build_data_gpdf,

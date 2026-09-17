@@ -59,5 +59,9 @@ required-features = ["smart-energy"]
 name = "se_messaging"
 required-features = ["smart-energy"]
 
+[[test]]
+name = "se_drlc"
+required-features = ["smart-energy"]
+
 [lints]
 workspace = true
