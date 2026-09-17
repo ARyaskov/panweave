@@ -60,6 +60,9 @@ pub struct ClusterInstance<const A: usize> {
     pub role: Role,
     /// Attributes.
     pub attributes: AttributeTable<A>,
+    /// Cluster-specific periodic timer (e.g. the Identify countdown),
+    /// serviced by the endpoint dispatcher.
+    pub tick: Option<Instant>,
 }
 
 impl<const A: usize> ClusterInstance<A> {
@@ -78,6 +81,7 @@ impl<const A: usize> ClusterInstance<A> {
             def,
             role,
             attributes,
+            tick: None,
         }
     }
 

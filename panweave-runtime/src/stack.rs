@@ -12,9 +12,9 @@ use panweave_security::trust_center::TrustCenterPolicy;
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ChannelMask, ClusterId, CryptoRng, ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber,
-    LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId, ShortAddress,
-    TransactionSequence,
+    ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
+    KeySequenceNumber, LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId,
+    ShortAddress, TransactionSequence,
 };
 use panweave_zcl::clusters::basic;
 use panweave_zcl::layer::{EndpointInstance, Origin, Zcl};
@@ -201,6 +201,8 @@ pub enum StackEvent {
         seq: TransactionSequence,
         /// Request cluster.
         cluster: ClusterId,
+        /// Destination the request was sent to.
+        dst: ShortAddress,
     },
     /// A cluster-specific ZCL command for the application.
     ZclCommand(ZclFrame),
@@ -210,6 +212,22 @@ pub enum StackEvent {
     ZclReport(ZclFrame),
     /// The Trust Center link key was updated (verified).
     LinkKeyUpdated,
+    /// Identify server state changed (`seconds` remaining, 0 = stopped).
+    Identify {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Remaining seconds.
+        seconds: u16,
+    },
+    /// Identify Trigger Effect received.
+    TriggerEffect {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Effect identifier.
+        effect: u8,
+        /// Effect variant.
+        variant: u8,
+    },
 }
 
 /// The endpoint could not be registered (duplicate number, endpoint 0 or
@@ -403,18 +421,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// router forming a distributed network). The key is installed as
     /// sequence 0.
     pub fn form_network_with_key(&mut self, key: Key128) -> Result<(), NwkStatus> {
+        let (channels, duration) = (self.config.channels, self.config.scan_duration);
+        self.form_network_with_key_on(key, channels, duration)
+    }
+
+    /// [`Stack::form_network_with_key`] over an explicit channel list.
+    pub fn form_network_with_key_on(
+        &mut self,
+        key: Key128,
+        channels: ChannelMask,
+        scan_duration: u8,
+    ) -> Result<(), NwkStatus> {
         if self.phase != Phase::Idle {
             return Err(NwkStatus::InvalidRequest);
         }
         self.network_key_sequence = KeySequenceNumber(0);
         self.nwk.set_network_key(KeySequenceNumber(0), key, true);
-        let (channels, duration, distributed) = (
-            self.config.channels,
-            self.config.scan_duration,
-            self.config.distributed,
-        );
+        let distributed = self.config.distributed;
         self.nwk
-            .network_formation(channels, duration, distributed)
+            .network_formation(channels, scan_duration, distributed)
             .map_err(|_| NwkStatus::InvalidRequest)?;
         self.phase = Phase::Forming;
         Ok(())
@@ -422,19 +447,45 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Forms a network with a freshly generated random network key.
     pub fn form_network(&mut self) -> Result<(), NwkStatus> {
+        let (channels, duration) = (self.config.channels, self.config.scan_duration);
+        self.form_network_on(channels, duration)
+    }
+
+    /// [`Stack::form_network`] over an explicit channel list.
+    pub fn form_network_on(
+        &mut self,
+        channels: ChannelMask,
+        scan_duration: u8,
+    ) -> Result<(), NwkStatus> {
         let mut k = [0u8; 16];
         self.nwk.rng().fill_bytes(&mut k);
-        self.form_network_with_key(Key128::from_bytes(k))
+        self.form_network_with_key_on(Key128::from_bytes(k), channels, scan_duration)
     }
 
     /// Starts joining: discovery followed by association or rejoin.
     pub fn join(&mut self, mode: JoinMode) -> Result<(), NwkStatus> {
+        let (channels, duration) = (self.config.channels, self.config.scan_duration);
+        self.join_on(mode, channels, duration)
+    }
+
+    /// [`Stack::join`] over an explicit channel list.
+    pub fn join_on(
+        &mut self,
+        mode: JoinMode,
+        channels: ChannelMask,
+        scan_duration: u8,
+    ) -> Result<(), NwkStatus> {
         if !matches!(self.phase, Phase::Idle) && mode == JoinMode::Association {
             return Err(NwkStatus::InvalidRequest);
         }
-        let (channels, duration) = (self.config.channels, self.config.scan_duration);
+        if matches!(
+            self.phase,
+            Phase::Discovering(_) | Phase::Joining(_) | Phase::Forming
+        ) {
+            return Err(NwkStatus::InvalidRequest);
+        }
         self.nwk
-            .network_discovery(channels, duration, mode == JoinMode::Association)
+            .network_discovery(channels, scan_duration, mode == JoinMode::Association)
             .map_err(|_| NwkStatus::InvalidRequest)?;
         self.phase = Phase::Discovering(mode);
         Ok(())

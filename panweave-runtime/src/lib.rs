@@ -28,6 +28,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+mod bdb;
 mod context;
 mod persist;
 mod pump;

@@ -39,3 +39,12 @@ Keep a Changelog; versions follow SemVer.
   frame counters continuing past the last persisted reservation;
   `Stack::erase_persisted` for factory reset. The APS counter is seeded
   from the RNG on boot (ADR-0006).
+* `panweave-bdb`: BDB 3.1 commissioning state machine — network
+  formation, off-/on-network steering with same-network retries and the
+  secondary channel list, the rejoin procedure, finding & binding as
+  target and initiator (unicast and group bindings) — driven through a
+  `Node` trait implemented by the runtime `Stack`; `BdbApp` in the
+  simulator and an end-to-end commissioning test.
+* `panweave-zcl`: Identify server behaviour (countdown, Identify Query
+  Response, Trigger Effect event) and the Groups cluster executed by the
+  endpoint dispatcher against the APS group table.

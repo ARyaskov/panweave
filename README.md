@@ -42,6 +42,12 @@ device and the coordinator from their persisted storage — addresses,
 keys and children survive, frame counters never roll back, the end device
 rejoins securely and the coordinator resumes (`docs/storage-model.md`).
 
+Commissioning: `panweave-runtime/tests/commissioning.rs` drives the BDB
+3.1 procedures of `panweave-bdb` — formation on the primary channel
+list, steering that falls back to the secondary list, the commissioning
+window, finding & binding with unicast and group bindings, and the
+rejoin procedure — over the simulator.
+
 ## Layout
 
 See `docs/architecture.md`. Quick tour:

@@ -2,7 +2,10 @@
 //! device types (ZCL8 chapter 3). Generated cluster definitions for the
 //! full library live in `panweave-device-library`.
 
+use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
+
+pub mod groups;
 
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
@@ -146,6 +149,107 @@ pub mod identify {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(IDENTIFY_TIME, &Value::Uint { width: 2, value: 0 })?;
         Ok(c)
+    }
+
+    /// Builds a client instance (no attributes; receives Identify Query
+    /// Responses, §3.5.3).
+    pub fn client<const A: usize>() -> ClusterInstance<A> {
+        ClusterInstance::new(DEF, Role::Client)
+    }
+
+    /// Remaining identification time of a server instance.
+    pub fn identify_time<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+        match c.attributes.value(IDENTIFY_TIME.id) {
+            Some(Value::Uint { value, .. }) => u16::try_from(value).unwrap_or(u16::MAX),
+            _ => 0,
+        }
+    }
+
+    /// Sets `IdentifyTime` and (re)arms the one-second countdown
+    /// (§3.5.2.2.1). Returns whether the value changed.
+    pub fn set_identify_time<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        seconds: u16,
+        now: Instant,
+    ) -> bool {
+        let changed = c
+            .attributes
+            .set(
+                IDENTIFY_TIME.id,
+                &Value::Uint {
+                    width: 2,
+                    value: u64::from(seconds),
+                },
+            )
+            .unwrap_or(false);
+        c.tick = (seconds > 0).then(|| now + Duration::from_secs(1));
+        changed
+    }
+
+    /// Advances the countdown: decrements `IdentifyTime` once per elapsed
+    /// second. Returns the new value when it changed.
+    pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u16> {
+        let due = c.tick?;
+        if !now.has_reached(due) {
+            return None;
+        }
+        let remaining = identify_time(c).saturating_sub(1);
+        set_identify_time(c, remaining, due);
+        if remaining > 0 && c.tick.is_some_and(|t| now.has_reached(t)) {
+            // Late poll: catch up without skipping the update.
+            c.tick = Some(now + Duration::from_secs(1));
+        }
+        Some(remaining)
+    }
+
+    /// Result of a received Identify server command.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Outcome {
+        /// Unicast an Identify Query Response with this timeout
+        /// (§3.5.2.4.1).
+        QueryResponse(u16),
+        /// `IdentifyTime` was set by an Identify command; a Default
+        /// Response applies.
+        Set(u16),
+        /// Trigger Effect: execute the effect (identifier, variant).
+        Effect(u8, u8),
+        /// Not identifying: an Identify Query takes no further action.
+        Silent,
+        /// Malformed or unsupported command.
+        Default(ZclStatus),
+    }
+
+    /// Processes a cluster-specific command received by the server
+    /// (§3.5.2.3).
+    pub fn handle<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        command: CommandId,
+        payload: &[u8],
+        now: Instant,
+    ) -> Outcome {
+        match command {
+            CMD_IDENTIFY => match payload {
+                [lo, hi, ..] => {
+                    let t = u16::from_le_bytes([*lo, *hi]);
+                    set_identify_time(c, t, now);
+                    Outcome::Set(t)
+                }
+                _ => Outcome::Default(ZclStatus::MalformedCommand),
+            },
+            CMD_IDENTIFY_QUERY => {
+                let t = identify_time(c);
+                if t > 0 {
+                    Outcome::QueryResponse(t)
+                } else {
+                    Outcome::Silent
+                }
+            }
+            CMD_TRIGGER_EFFECT => match payload {
+                [effect, variant, ..] => Outcome::Effect(*effect, *variant),
+                _ => Outcome::Default(ZclStatus::MalformedCommand),
+            },
+            _ => Outcome::Default(ZclStatus::UnsupportedClusterCommand),
+        }
     }
 }
 

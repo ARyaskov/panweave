@@ -17,6 +17,7 @@ panweave-storage = { workspace = true, features = ["std"] }
 panweave-runtime = { workspace = true, features = ["std"] }
 panweave-testkit = { workspace = true, features = ["std"] }
 panweave-zcl = { workspace = true, features = ["std"] }
+panweave-bdb = { workspace = true, features = ["std"] }
 panweave-pcap = { workspace = true }
 
 [lints]

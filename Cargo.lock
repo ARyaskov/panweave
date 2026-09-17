@@ -314,6 +314,8 @@ name = "panweave-bdb"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-aps",
  "panweave-types",
  "serde",
 ]
@@ -412,6 +414,7 @@ dependencies = [
  "defmt",
  "heapless",
  "panweave-aps",
+ "panweave-bdb",
  "panweave-codec",
  "panweave-mac",
  "panweave-nwk",
@@ -448,6 +451,7 @@ dependencies = [
 name = "panweave-sim"
 version = "0.1.0"
 dependencies = [
+ "panweave-bdb",
  "panweave-mac",
  "panweave-pcap",
  "panweave-runtime",

@@ -154,19 +154,19 @@ id = "PW-ZCL-GEN-003"
 section = "§3.5"
 summary = "Identify cluster: IdentifyTime attribute, Identify, Identify Query, Trigger Effect commands, Identify Query Response"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-zcl::clusters"
-tests = ["read_write_and_discover_attributes"]
-notes = "Attribute and command identifiers; the identify timer and Identify Query Response generation belong to the application/device library."
+status = "implemented"
+module = "panweave-zcl::clusters::identify"
+tests = ["identify_server_countdown_and_query", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Server executed by the endpoint dispatcher: one-second countdown, Identify Query answered only while identifying, Trigger Effect surfaced to the application as an event (effect execution is application-defined)."
 [[requirement]]
 id = "PW-ZCL-GEN-004"
 section = "§3.6"
 summary = "Groups cluster: NameSupport, Add/View/Get Membership/Remove/Remove All/Add If Identifying and responses"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::groups"
-tests = []
-
+tests = ["bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Server commands operate on apsGroupTable through GroupStore; group names are not supported (NameSupport bit 7 clear, View Group returns the null string); groupcast/broadcast deliveries generate no response (§3.6.2.3.1)."
 [[requirement]]
 id = "PW-ZCL-GEN-005"
 section = "§3.7"

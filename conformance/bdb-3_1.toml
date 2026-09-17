@@ -8,37 +8,37 @@ id = "PW-BDB-CFG-001"
 section = "§5.1–§5.7"
 summary = "BDB constants (primary/secondary channel masks, scan durations, TCLK exchange attempts, min commissioning time, touchlink constants) and attributes (bdbNodeIsOnANetwork, bdbCommissioningMode, bdbCommissioningStatus, bdbJoiningNodeEui64, bdbNodeJoinLinkKeyType, bdbTCLinkKeyExchangeMethod, bdbTrustCenterRequireKeyExchange, join policy, node configuration)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::config"
-tests = []
-
+status = "implemented"
+module = "panweave-bdb"
+tests = ["formation_falls_back_to_secondary_list", "steering_retries_then_secondary_then_opens_network"]
+notes = "Config (bdbcf* attributes, node policies) with the 2.4 GHz defaults of Tables 4–7 and 10; constants of Tables 1–3; bdbgNodeIsOnANetwork kept by the machine. Sub-GHz defaults are not provided."
 [[requirement]]
 id = "PW-BDB-POL-001"
 section = "§6.1, §6.2"
 summary = "Logical device types and centralized/distributed security models; coordinator forms centralized, router may form distributed"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::policy"
-tests = []
-
+status = "implemented"
+module = "panweave-bdb"
+tests = ["formation_falls_back_to_secondary_list", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Formation refused for end devices; coordinators form centralized and routers distributed networks through StackConfig::distributed."
 [[requirement]]
 id = "PW-BDB-POL-002"
 section = "§6.3"
 summary = "Commissioning mode bitmask (touchlink, steering, formation, finding & binding) processed in the specified order; commissioning status reporting"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::commissioning"
+status = "not-applicable"
+module = "panweave-bdb"
 tests = []
-
+notes = "BDB 3.1 no longer defines the bdbCommissioningMode bitmask / bdbCommissioningStatus attribute of BDB 3.0; procedures are invoked individually and report an Outcome."
 [[requirement]]
 id = "PW-BDB-POL-003"
 section = "§6.4"
 summary = "Minimum requirements: mandatory ZDO services, identify cluster, groups where required, APS ack usage, node descriptor fields, stack compliance revision"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::policy"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime"
+tests = ["bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Profile 0x0104, Identify client for initiators, Groups server with the group table, simple descriptors per endpoint, stack compliance revision 23 are supported; the Keep Alive server / Poll Control client required on a Trust Center are not implemented."
 [[requirement]]
 id = "PW-BDB-POL-004"
 section = "§6.5"
@@ -71,10 +71,10 @@ id = "PW-BDB-POL-007"
 section = "§6.10"
 summary = "APS acknowledgement and APS security usage rules for ZCL and ZDO traffic"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-aps"
-tests = []
-
+status = "implemented"
+module = "panweave-aps::layer"
+tests = ["trust_center_join_and_link_key_update", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Acknowledged and APS-secured requests are answered with matching ack request and security (ADR-0005); ZCL responses inherit the acknowledgement request of the command."
 [[requirement]]
 id = "PW-BDB-POL-008"
 section = "§6.11"
@@ -134,28 +134,28 @@ id = "PW-BDB-FORM-001"
 section = "§8.1"
 summary = "Network formation: coordinator forms centralized network on primary then secondary channels; router forms distributed network with random extended PAN ID and network key; set permit join off; update commissioning status"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-runtime::stack"
-tests = ["coordinator_and_end_device_full_stack"]
+status = "implemented"
+module = "panweave-bdb"
+tests = ["formation_falls_back_to_secondary_list", "bdb_formation_steering_finding_binding_and_rejoin"]
 notes = "Centralized formation on the configured mask with a supplied or CryptoRng-generated network key; secondary mask fallback and distributed formation by routers are not wired."
 [[requirement]]
 id = "PW-BDB-STEER-001"
 section = "§9.1"
 summary = "Network discovery procedure across primary then secondary channel masks with bdbScanDuration"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-runtime::stack"
-tests = ["coordinator_and_end_device_full_stack"]
-notes = "Discovery over the configured mask (primary); secondary mask fallback not implemented."
+status = "implemented"
+module = "panweave-bdb"
+tests = ["steering_retries_then_secondary_then_opens_network", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Discovery only considers networks permitting joins with end-device (or router) capacity; suitability beyond the NWK ranking is left to the application."
 [[requirement]]
 id = "PW-BDB-STEER-002"
 section = "§9.2, §9.3"
 summary = "Join using symmetric key exchange: select network with permit join, MAC associate, receive network key with preconfigured link key (global or install code), then TCLK update"
 level = "mandatory"
 status = "partially-implemented"
-module = "panweave-runtime::stack"
-tests = ["coordinator_and_end_device_full_stack"]
-notes = "Discovery, network selection, Network Commissioning / MAC association join and network key reception are implemented for the primary channel mask; the secondary mask fallback and per-network retry ordering of BDB 3.1 are not."
+module = "panweave-bdb"
+tests = ["steering_leaves_after_failed_key_exchange", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Join, network key delivery, Device_annce, Request Key / Verify Key TCLK exchange with bdbcfSecurityTimeoutPeriod and leave on failure are implemented. The Node_Desc_req to detect an r20 Trust Center (steps 5–7) and the CBKE branch are not."
 [[requirement]]
 id = "PW-BDB-STEER-003"
 section = "§9.4, §9.5"
@@ -179,19 +179,19 @@ id = "PW-BDB-STEER-005"
 section = "§9.7"
 summary = "On-network steering: broadcast Mgmt_Permit_Joining_req with bdbcMinCommissioningTime, local permit join; local disabling"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::steering::on_network"
-tests = []
+status = "implemented"
+module = "panweave-bdb"
+tests = ["bdb_formation_steering_finding_binding_and_rejoin"]
 
 [[requirement]]
 id = "PW-BDB-STEER-006"
 section = "§9.8"
 summary = "Off-network steering: discovery, join attempt per network, on success TCLK update, broadcast permit joining, device announce"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-runtime::pump"
-tests = ["coordinator_and_end_device_full_stack"]
-notes = "Join, TCLK update and Device_annce are performed; the broadcast Mgmt_Permit_Joining_req after joining is left to the application."
+status = "implemented"
+module = "panweave-bdb"
+tests = ["steering_retries_then_secondary_then_opens_network", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Same-network retries (bdbcRecSameNetworkRetryAttempts, capped at bdbcMaxSameNetworkRetryAttempts), primary then secondary lists, commissioning window broadcast + local permit join and bdbcMinFastPollDurationAfterJoin fast polling. The optional 0–5 s random start delay is left to the application."
 [[requirement]]
 id = "PW-BDB-STEER-007"
 section = "§9.9"
@@ -206,19 +206,19 @@ id = "PW-BDB-REJOIN-001"
 section = "§10.1"
 summary = "Rejoin procedure: secured rejoin on current channel, then all channels, then unsecured TC rejoin if allowed, with back-off and attempt limits; end devices choose parent by link quality"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-runtime::pump"
-tests = ["router_and_sleepy_end_device_with_router_failure"]
-notes = "Parent link failure (poll failures / keepalive expiry) triggers a secured NWK rejoin over the configured channel mask, keeping the network address; the channel escalation, back-off/attempt limits and the unsecured Trust Center rejoin fallback are not implemented."
+status = "implemented"
+module = "panweave-bdb"
+tests = ["rejoin_walks_the_channel_lists", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Secured rejoin on the current channel, TC rejoin on the current channel (centralized, verified key), then secured rejoins over the primary and secondary lists; the lost-TC entry point skips step 1."
 [[requirement]]
 id = "PW-BDB-FB-001"
 section = "§11"
 summary = "Finding & binding: target identifies for bdbcMinCommissioningTime; initiator sends Identify Query broadcast, discovers simple descriptors of responders, creates bindings for matching clusters, optionally groups"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::finding_binding"
-tests = []
-
+status = "implemented"
+module = "panweave-bdb"
+tests = ["finding_and_binding_initiator_binds_matching_clusters", "finding_and_binding_group_and_failures", "bdb_formation_steering_finding_binding_and_rejoin"]
+notes = "Utility clusters (ZCL8 chapter 3 classification) are never bound; unicast bindings resolve the IEEE address with IEEE_addr_req when unknown; group bindings send Add Group to the respondent."
 [[requirement]]
 id = "PW-BDB-TL-001"
 section = "§12"

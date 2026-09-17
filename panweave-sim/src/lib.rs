@@ -14,8 +14,10 @@
     )
 )]
 
+use std::any::Any;
 use std::io::Write;
 
+use panweave_bdb::{Bdb, Config as BdbConfig, Outcome};
 use panweave_mac::radio::{RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacServiceConfig};
 use panweave_pcap::PcapWriter;
@@ -32,9 +34,15 @@ use panweave_zcl::frame::ZclStatus;
 pub type SimStack = Stack<SoftwareAes, TestRng, MemoryStorage<64, 128>>;
 
 /// Application behaviour attached to a simulated node.
-pub trait App {
+pub trait App: Any {
     /// Called for every stack event before it is recorded.
     fn on_event(&mut self, stack: &mut SimStack, event: &StackEvent);
+    /// Called after the stack was polled at `now`.
+    fn on_poll(&mut self, _stack: &mut SimStack, _now: Instant) {}
+    /// Earliest time the application wants to be polled.
+    fn next_deadline(&self) -> Option<Instant> {
+        None
+    }
 }
 
 /// Default application: executes On/Off commands on any server endpoint
@@ -75,6 +83,52 @@ impl App for OnOffApp {
         };
         let _ = stack.zcl.default_response(&f.origin, status);
         stack.flush();
+    }
+}
+
+/// [`OnOffApp`] plus a BDB 3.1 commissioning machine: stack events are
+/// translated for the machine and every finished procedure is recorded
+/// in `outcomes`.
+pub struct BdbApp {
+    /// The On/Off behaviour.
+    pub on_off: OnOffApp,
+    /// The commissioning machine.
+    pub bdb: Bdb,
+    /// Finished procedures, in order.
+    pub outcomes: Vec<Outcome>,
+}
+
+impl BdbApp {
+    /// New application with `config`, not on a network.
+    pub fn new(config: BdbConfig) -> Self {
+        BdbApp {
+            on_off: OnOffApp::default(),
+            bdb: Bdb::new(config, false),
+            outcomes: Vec::new(),
+        }
+    }
+}
+
+impl App for BdbApp {
+    fn on_event(&mut self, stack: &mut SimStack, event: &StackEvent) {
+        self.on_off.on_event(stack, event);
+        if let Some(e) = SimStack::bdb_event(event)
+            && let Some(o) = self.bdb.on_event(stack, &e)
+        {
+            self.outcomes.push(o);
+        }
+        stack.flush();
+    }
+
+    fn on_poll(&mut self, stack: &mut SimStack, now: Instant) {
+        if let Some(o) = self.bdb.poll(stack, now) {
+            self.outcomes.push(o);
+        }
+        stack.flush();
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.bdb.next_deadline()
     }
 }
 
@@ -199,6 +253,20 @@ impl Simulator {
         &mut self.nodes[i].stack
     }
 
+    /// The application of node `i` as its concrete type.
+    pub fn app<T: App>(&self, i: usize) -> Option<&T> {
+        let any: &dyn Any = &*self.nodes[i].app;
+        any.downcast_ref::<T>()
+    }
+
+    /// The stack and application of node `i` (application as its
+    /// concrete type).
+    pub fn stack_and_app<T: App>(&mut self, i: usize) -> Option<(&mut SimStack, &mut T)> {
+        let node = &mut self.nodes[i];
+        let any: &mut dyn Any = &mut *node.app;
+        any.downcast_mut::<T>().map(|a| (&mut node.stack, a))
+    }
+
     /// Recorded events of node `i`.
     pub fn events(&self, i: usize) -> &[StackEvent] {
         &self.nodes[i].events
@@ -320,7 +388,8 @@ impl Simulator {
         let next = self
             .nodes
             .iter()
-            .filter_map(|n| n.stack.next_deadline())
+            .flat_map(|n| [n.stack.next_deadline(), n.app.next_deadline()])
+            .flatten()
             .min_by_key(|t| t.as_millis())
             .map_or(now.saturating_add(max), |t| {
                 if t.as_millis() <= now.as_millis() {
@@ -338,6 +407,7 @@ impl Simulator {
         self.clock.advance_to(target);
         for n in &mut self.nodes {
             n.stack.poll(target);
+            n.app.on_poll(&mut n.stack, target);
         }
         self.settle();
     }

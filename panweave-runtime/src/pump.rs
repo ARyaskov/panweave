@@ -22,7 +22,7 @@ use panweave_types::{
     ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyType, LogicalDeviceType, NwkStatus,
     ProfileId, ShortAddress,
 };
-use panweave_zcl::layer::{ZclAction, ZclIndication};
+use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
 use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
 
 use crate::context::{AddrView, ZdoCtx};
@@ -225,11 +225,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
             return;
         }
-        let groups = &self.aps.groups;
-        let out = match ind.delivery {
-            Delivery::Group(g) => self.zcl.on_data(&borrowed, |ep| groups.contains(g, ep)),
-            _ => self.zcl.on_data(&borrowed, |_| true),
-        };
+        let out = self.zcl.on_data(&borrowed, &mut self.aps.groups);
+        if ind.cluster == panweave_zcl::clusters::groups::ID {
+            // A Groups server command may have changed apsGroupTable.
+            let _ = self.persist_groups();
+        }
         let event = match out {
             Some(ZclIndication::Command { origin, payload }) => Vec::from_slice(payload)
                 .ok()
@@ -248,7 +248,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // MAC â†’ NWK
+    // MAC → NWK
     // ---------------------------------------------------------------
 
     fn pump_mac_events(&mut self) -> bool {
@@ -297,7 +297,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // NWK â†’ MAC / storage
+    // NWK → MAC / storage
     // ---------------------------------------------------------------
 
     fn pump_nwk_actions(&mut self) -> bool {
@@ -422,7 +422,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // NWK events â†’ stack logic
+    // NWK events → stack logic
     // ---------------------------------------------------------------
 
     fn pump_nwk_events(&mut self) -> bool {
@@ -710,7 +710,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // APS â†’ NWK / storage
+    // APS → NWK / storage
     // ---------------------------------------------------------------
 
     fn pump_aps_actions(&mut self) -> bool {
@@ -769,7 +769,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // APS events â†’ stack logic
+    // APS events → stack logic
     // ---------------------------------------------------------------
 
     fn pump_aps_events(&mut self) -> bool {
@@ -861,7 +861,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // ZDO / ZCL â†’ APS
+    // ZDO / ZCL → APS
     // ---------------------------------------------------------------
 
     fn send_aps(
@@ -927,8 +927,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         while let Some(e) = self.zdo.next_event() {
             any = true;
             match e {
-                ZdoEvent::Timeout { seq, cluster, .. } => {
-                    self.push_event(StackEvent::ZdpTimeout { seq, cluster });
+                ZdoEvent::Timeout { seq, cluster, dst } => {
+                    self.push_event(StackEvent::ZdpTimeout { seq, cluster, dst });
                 }
                 ZdoEvent::NwkUpdateRequest { src, seq, req, .. } => {
                     // TODO(PW-ZDP-014): run the energy scan / channel change.
@@ -960,6 +960,23 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 options,
             } = a;
             self.send_aps(destination, profile, cluster, src_endpoint, &frame, options);
+        }
+        while let Some(e) = self.zcl.next_event() {
+            any = true;
+            self.push_event(match e {
+                ZclEvent::Identify { endpoint, seconds } => {
+                    StackEvent::Identify { endpoint, seconds }
+                }
+                ZclEvent::TriggerEffect {
+                    endpoint,
+                    effect,
+                    variant,
+                } => StackEvent::TriggerEffect {
+                    endpoint,
+                    effect,
+                    variant,
+                },
+            });
         }
         any
     }

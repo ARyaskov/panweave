@@ -14,6 +14,8 @@ use panweave_types::{
 };
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
+use crate::clusters::groups::{self, GroupStore};
+use crate::clusters::identify;
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
 
@@ -106,6 +108,31 @@ pub enum ZclAction {
     },
 }
 
+/// Layer-generated notifications for the application.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ZclEvent {
+    /// `IdentifyTime` of the Identify server on `endpoint` changed
+    /// (command received or countdown elapsed); `seconds` is the new
+    /// value, 0 when identification stops (§3.5.2.2.1).
+    Identify {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Remaining seconds.
+        seconds: u16,
+    },
+    /// Trigger Effect received by the Identify server on `endpoint`
+    /// (§3.5.2.3.3).
+    TriggerEffect {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Effect identifier.
+        effect: u8,
+        /// Effect variant.
+        variant: u8,
+    },
+}
+
 /// Where a received command came from (for replies).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -175,8 +202,9 @@ pub struct Zcl<const E: usize, const C: usize, const A: usize> {
     endpoints: Vec<EndpointInstance<C, A>, E>,
     seq: TransactionSequence,
     actions: Deque<ZclAction, QUEUE_CAPACITY>,
+    events: Deque<ZclEvent, QUEUE_CAPACITY>,
     now: Instant,
-    /// Actions dropped on overflow.
+    /// Actions or events dropped on overflow.
     pub dropped: u32,
 }
 
@@ -193,6 +221,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             endpoints: Vec::new(),
             seq: TransactionSequence(0),
             actions: Deque::new(),
+            events: Deque::new(),
             now: Instant::from_millis(0),
             dropped: 0,
         }
@@ -251,6 +280,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
 
     fn push_action(&mut self, a: ZclAction) {
         if self.actions.push_back(a).is_err() {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+
+    /// Next layer event.
+    pub fn next_event(&mut self) -> Option<ZclEvent> {
+        self.events.pop_front()
+    }
+
+    fn push_event(&mut self, e: ZclEvent) {
+        if self.events.push_back(e).is_err() {
             self.dropped = self.dropped.saturating_add(1);
         }
     }
@@ -430,12 +470,12 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     }
 
     /// Processes an APSDE-DATA.indication for an application endpoint.
-    /// `is_member` tells, for group deliveries, whether an endpoint is a
-    /// member of the group.
+    /// `groups` is the node's group table: it decides which endpoints a
+    /// group delivery targets and executes Groups cluster commands.
     pub fn on_data<'a>(
         &mut self,
         ind: &DataIndication<'a>,
-        is_member: impl Fn(Endpoint) -> bool,
+        groups: &mut impl GroupStore,
     ) -> Option<ZclIndication<'a>> {
         let frame = Frame::decode_exact(ind.asdu).ok()?;
         let broadcast = ind.nwk_broadcast || !matches!(ind.delivery, Delivery::Endpoint(_));
@@ -445,7 +485,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             let target = match ind.delivery {
                 Delivery::Endpoint(e) => e == ep,
                 Delivery::AllEndpoints => true,
-                Delivery::Group(_) => is_member(ep),
+                Delivery::Group(g) => groups.contains(g, ep),
             };
             if !target {
                 continue;
@@ -544,6 +584,14 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     }
                 }
                 FrameType::ClusterSpecific => {
+                    if ind.cluster == identify::ID && role == Role::Server {
+                        self.handle_identify(i, &origin, frame.header.command, frame.payload);
+                        continue;
+                    }
+                    if ind.cluster == groups::ID && role == Role::Server {
+                        self.handle_groups(i, &origin, frame.header.command, frame.payload, groups);
+                        continue;
+                    }
                     result.get_or_insert(ZclIndication::Command {
                         origin,
                         payload: frame.payload,
@@ -557,10 +605,145 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         result
     }
 
+    /// Identify server commands are executed by the layer (§3.5.2.3):
+    /// the application observes them through [`ZclEvent`].
+    fn handle_identify(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let now = self.now;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(identify::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        match identify::handle(c, cmd, payload, now) {
+            identify::Outcome::QueryResponse(t) => {
+                let header = origin.header.response(
+                    identify::CMD_IDENTIFY_QUERY_RESPONSE,
+                    FrameType::ClusterSpecific,
+                );
+                if let Ok(fr) = Self::build(&header, &t.to_le_bytes()) {
+                    self.push_action(ZclAction::Send {
+                        destination: Destination::Short {
+                            address: origin.src,
+                            endpoint: origin.src_endpoint,
+                        },
+                        profile: origin.profile,
+                        cluster: identify::ID,
+                        src_endpoint: endpoint,
+                        frame: fr,
+                        options: TxOptions::ACKED,
+                    });
+                }
+            }
+            identify::Outcome::Set(seconds) => {
+                self.push_event(ZclEvent::Identify { endpoint, seconds });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            identify::Outcome::Effect(effect, variant) => {
+                self.push_event(ZclEvent::TriggerEffect {
+                    endpoint,
+                    effect,
+                    variant,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            identify::Outcome::Silent => {}
+            identify::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// Groups server commands are executed by the layer against the
+    /// node's group table (§3.6.2.3).
+    fn handle_groups(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+        store: &mut impl GroupStore,
+    ) {
+        let endpoint = origin.endpoint;
+        let identifying = self
+            .endpoints
+            .get(ep_index)
+            .and_then(|e| e.cluster(identify::ID, Role::Server))
+            .is_some_and(|c| identify::identify_time(c) > 0);
+        let mut out = [0u8; MAX_ZCL];
+        let mut w = Writer::new(&mut out);
+        let outcome = groups::handle(
+            store,
+            endpoint,
+            cmd,
+            payload,
+            !origin.broadcast,
+            identifying,
+            &mut w,
+        );
+        let n = w.position();
+        match outcome {
+            groups::Outcome::Response(rsp) => {
+                let header = origin.header.response(rsp, FrameType::ClusterSpecific);
+                if let Some(payload) = out.get(..n)
+                    && let Ok(fr) = Self::build(&header, payload)
+                {
+                    self.push_action(ZclAction::Send {
+                        destination: Destination::Short {
+                            address: origin.src,
+                            endpoint: origin.src_endpoint,
+                        },
+                        profile: origin.profile,
+                        cluster: groups::ID,
+                        src_endpoint: endpoint,
+                        frame: fr,
+                        options: TxOptions::ACKED,
+                    });
+                }
+            }
+            groups::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+            groups::Outcome::None => {}
+        }
+    }
+
+    /// Starts (or stops, with 0) identification on an endpoint's Identify
+    /// server; used by finding & binding targets (BDB 3.1 §11.1).
+    pub fn set_identify_time(&mut self, endpoint: Endpoint, seconds: u16) -> Result<(), ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, identify::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        identify::set_identify_time(c, seconds, now);
+        self.push_event(ZclEvent::Identify { endpoint, seconds });
+        Ok(())
+    }
+
     /// Advances time and emits Report Attributes frames for due
     /// attributes towards bound destinations (§2.5.11, Table 2-4).
     pub fn poll_timers(&mut self, now: Instant) {
         self.now = now;
+        // Identify countdowns (§3.5.2.2.1).
+        for i in 0..self.endpoints.len() {
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            let endpoint = ep.endpoint;
+            if let Some(c) = ep.cluster_mut(identify::ID, Role::Server)
+                && let Some(seconds) = identify::tick(c, now)
+            {
+                self.push_event(ZclEvent::Identify { endpoint, seconds });
+            }
+        }
         let n_eps = self.endpoints.len();
         for i in 0..n_eps {
             let n_clusters = self.endpoints.get(i).map_or(0, |e| e.clusters.len());
@@ -602,12 +785,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         }
     }
 
-    /// Earliest scheduled report.
+    /// Earliest scheduled report or cluster tick.
     pub fn next_deadline(&self) -> Option<Instant> {
         self.endpoints
             .iter()
             .flat_map(|e| e.clusters.iter())
-            .filter_map(ClusterInstance::next_report)
+            .flat_map(|c| [c.next_report(), c.tick])
+            .flatten()
             .min_by_key(|t| t.as_millis())
     }
 }
