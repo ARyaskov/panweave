@@ -298,10 +298,10 @@ id = "PW-ZCL-OTA-001"
 section = "§11"
 summary = "OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::ota"
-tests = []
-
+tests = ["header_and_sub_elements_round_trip", "download_flow_between_client_and_server", "client_downloads_verifies_and_is_told_when_to_upgrade"]
+notes = "OTA file header (mandatory and optional fields, suitability checks) and sub-element iteration, the client attributes, codecs for Image Notify, Query Next Image Request / Response, Image Block Request, Image Page Request, Image Block Response (SUCCESS / WAIT_FOR_DATA / ABORT), Upgrade End Request / Response, the Table 11-15 time interpretation, a client download machine (notify jitter and matching rules, query, block requests with rate limiting and waits, out-of-order block re-requests, verify hand-off, Upgrade End, activation policy) and server helpers answering from an ImageSource; the simulator test downloads a 300-octet image over the air. Not done: Image Page Request service on the server, Query Device Specific File codecs beyond identifiers, ECDSA signature / integrity verification (host's, ADR-0012), the §11.16 retry timing and the server discovery of §11.8 (TODO(PW-ZCL-OTA-DISCOVERY))."
 [[requirement]]
 id = "PW-ZCL-COMM-001"
 section = "§13.2"

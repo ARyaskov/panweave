@@ -170,6 +170,12 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
+  and sub-elements, all §11.13 command codecs, a client download machine
+  (notify jitter, query, block requests with waits and rate limiting,
+  verify hand-off, Upgrade End, activation policy) and server helpers
+  over an `ImageSource`; a simulator test downloads an image over the
+  air.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

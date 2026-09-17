@@ -13,9 +13,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 8 | 9 | 0 | 0 | 1 |
-| ZCL8 | 36 | 21 | 7 | 8 | 0 | 0 | 0 |
+| ZCL8 | 36 | 21 | 8 | 7 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 150 | 51 | 32 | 3 | 0 | 1 |
+| **All** | 237 | 150 | 52 | 31 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -146,7 +146,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-ZCL-CLOS-001 | §7.3, §7.4 | optional | not-implemented | `panweave-zcl::clusters::closures` | Door Lock and Window Covering clusters | — |  |
 | PW-ZCL-IAS-001 | §8.2 | optional | implemented | `panweave-zcl::clusters::ias_zone` | IAS Zone cluster: enrolment (auto/trip-to-pair), zone status change notification, enroll request/response | `auto_enroll_request_flow_and_notifications`, `trip_to_pair_requests_on_status_change`, `ias_zone_auto_enroll_request_and_status_notification` | Zone information / settings attributes, the three enrolment procedures (Trip-to-Pair via Zcl::request_zone_enrollment or a status change while unenrolled, Auto-Enroll-Response, Auto-Enroll-Request on the IAS_CIE_Address write), Zone Status Change Notification with the Delay field, Zone Enroll Request / Response, Initiate Normal Operation / Test Mode with the Test bit and sensitivity level, all executed by the dispatcher (ZclEvent::ZoneEnrolled / ZoneTestMode). Sender authentication uses the network address of the node that wrote IAS_CIE_Address (the dispatcher has no IEEE resolution); the NOT_AUTHORIZED rejection of ZDO bind requests from other nodes (§8.2.2.1.3) is not implemented. |
 | PW-ZCL-IAS-002 | §8.3, §8.4 | optional | not-implemented | `panweave-zcl::clusters::ias` | IAS ACE and IAS WD clusters | — |  |
-| PW-ZCL-OTA-001 | §11 | optional | not-implemented | `panweave-zcl::clusters::ota` | OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification | — |  |
+| PW-ZCL-OTA-001 | §11 | optional | partially-implemented | `panweave-zcl::clusters::ota` | OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification | `header_and_sub_elements_round_trip`, `download_flow_between_client_and_server`, `client_downloads_verifies_and_is_told_when_to_upgrade` | OTA file header (mandatory and optional fields, suitability checks) and sub-element iteration, the client attributes, codecs for Image Notify, Query Next Image Request / Response, Image Block Request, Image Page Request, Image Block Response (SUCCESS / WAIT_FOR_DATA / ABORT), Upgrade End Request / Response, the Table 11-15 time interpretation, a client download machine (notify jitter and matching rules, query, block requests with rate limiting and waits, out-of-order block re-requests, verify hand-off, Upgrade End, activation policy) and server helpers answering from an ImageSource; the simulator test downloads a 300-octet image over the air. Not done: Image Page Request service on the server, Query Device Specific File codecs beyond identifiers, ECDSA signature / integrity verification (host's, ADR-0012), the §11.16 retry timing and the server discovery of §11.8 (TODO(PW-ZCL-OTA-DISCOVERY)). |
 | PW-ZCL-COMM-001 | §13.2 | optional | not-implemented | `panweave-zcl::clusters::commissioning` | Commissioning cluster (startup attribute set) | — |  |
 | PW-ZCL-COMM-002 | §13.3 | optional | not-implemented | `panweave-zcl::clusters::touchlink` | Touchlink commissioning cluster (inter-PAN commands, utility commands) | — |  |
 | PW-ZCL-MISC-001 | §9, §12, §14, §15 | optional | not-implemented | `panweave-zcl::clusters` | Protocol interface, telecommunications, retail and appliance clusters | — | Low priority; metadata entries only. |

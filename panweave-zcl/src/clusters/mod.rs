@@ -15,6 +15,7 @@ pub mod keep_alive;
 pub mod level;
 pub mod measurement;
 pub mod on_off;
+pub mod ota;
 pub mod poll_control;
 pub mod power_configuration;
 pub mod scenes;
