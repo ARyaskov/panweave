@@ -1267,7 +1267,7 @@ impl MacService {
                             handle,
                             status: TxStatus::TransactionExpired,
                             frame_pending: false,
-                        })
+                        });
                     }
                     InFlightKind::IndirectAssocResponse { device } => {
                         self.push_event(MacEvent::CommStatus {

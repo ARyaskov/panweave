@@ -5,21 +5,37 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: security"
+description = "Panweave Zigbee stack: CCM*, AES-MMO, key hierarchy, frame security and Trust Center policy"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
-alloc = ["panweave-types/alloc"]
+std = ["alloc", "panweave-types/std", "panweave-codec/std"]
+alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt"]
+# RustCrypto software AES back-end.
+crypto-software = ["dep:aes", "dep:cipher"]
+# Curve25519 ECDHE/SPEKE for R23 dynamic link keys and Zigbee Direct.
+dlk = ["dep:x25519-dalek", "dep:curve25519-dalek"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+heapless = { workspace = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+aes = { workspace = true, optional = true }
+cipher = { workspace = true, optional = true }
+x25519-dalek = { workspace = true, optional = true }
+curve25519-dalek = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+panweave-security = { path = ".", features = ["crypto-software", "dlk"] }
 
 [lints]
 workspace = true

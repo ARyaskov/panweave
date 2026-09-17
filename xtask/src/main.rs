@@ -160,15 +160,15 @@ fn collect_test_names(root: &Path) -> Vec<String> {
                         }
                     }
                     // proptest! blocks: `fn name(` inside macro
-                    if t.starts_with("fn ") && text.contains("proptest!") {
-                        if let Some(rest) = t.strip_prefix("fn ") {
-                            let name: String = rest
-                                .chars()
-                                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                .collect();
-                            names.push(format!("{crate_name}::{name}"));
-                            names.push(name);
-                        }
+                    if text.contains("proptest!")
+                        && let Some(rest) = t.strip_prefix("fn ")
+                    {
+                        let name: String = rest
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        names.push(format!("{crate_name}::{name}"));
+                        names.push(name);
                     }
                 }
             }

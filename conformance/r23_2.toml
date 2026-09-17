@@ -23,9 +23,9 @@ id = "PW-R23-GEN-002"
 section = "§1.2.6, Annex I.1–I.2"
 summary = "TLV encoding: tag, length-minus-one, value; unknown tags skipped; malformed TLVs invalidate the message; global tag range 64–255"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-codec::tlv"
-tests = []
+tests = ["iterates_well_formed_tlvs", "truncated_header_or_value_is_rejected", "duplicate_tags_rejected_except_manufacturer_specific", "nested_encapsulation_rejected"]
 
 [[requirement]]
 id = "PW-R23-GEN-003"
@@ -508,9 +508,9 @@ id = "PW-R23-NWK-067"
 section = "§3.7"
 summary = "NWK status values"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-types::status::NwkStatus"
-tests = []
+tests = ["nwk_status_round_trip_and_unknown_preservation"]
 
 # ---------------------------------------------------------------- APS
 
@@ -591,9 +591,9 @@ id = "PW-R23-APS-009"
 section = "§2.2.9"
 summary = "APS status values"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-types::status::ApsStatus"
-tests = []
+tests = ["nwk_status_round_trip_and_unknown_preservation"]
 
 [[requirement]]
 id = "PW-R23-APS-010"
@@ -860,72 +860,74 @@ id = "PW-R23-SEC-001"
 section = "§4.5.1"
 summary = "Auxiliary security header: security control (level, key identifier, extended nonce), frame counter, optional source address, optional key sequence number"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::aux_header"
-tests = []
+tests = ["nwk_aux_header_round_trip_and_nonce", "aps_aux_header_without_extended_nonce", "security_level_properties"]
 
 [[requirement]]
 id = "PW-R23-SEC-002"
 section = "Annex A"
 summary = "CCM* with 13-octet nonce (source address, frame counter, security control), security levels 0–7, M in {0,4,8,16}, L = 2"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::ccm"
-tests = []
+tests = ["annex_c3_encryption_vector", "annex_c4_decryption_vector_and_tamper_detection", "mic_only_and_enc_only_round_trip", "parameter_validation", "multi_block_aad_and_message"]
 
 [[requirement]]
 id = "PW-R23-SEC-003"
 section = "Annex B.6, Annex C.5"
 summary = "AES-MMO (Matyas-Meyer-Oseas) 128-bit hash with specified padding; verified with Annex C vectors"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::mmo"
-tests = []
+tests = ["annex_c5_1_single_octet", "annex_c5_2_sixteen_octets", "annex_c5_3_to_6_long_messages"]
 
 [[requirement]]
 id = "PW-R23-SEC-004"
 section = "Annex B.1.4, Annex C.6"
 summary = "Keyed hash (HMAC construction over AES-MMO) used for key hashing and key verification"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::mmo::hmac"
-tests = []
+tests = ["annex_c6_hmac_vectors"]
 
 [[requirement]]
 id = "PW-R23-SEC-005"
 section = "§4.5.3"
 summary = "Key hierarchy: key-transport key and key-load key derived from link key by hashing with 0x00 and 0x02; hashed link key in transport-key protection"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::key_hierarchy"
-tests = []
+tests = ["derived_keys_differ_and_are_deterministic", "install_code_known_answer_from_bdb"]
 
 [[requirement]]
 id = "PW-R23-SEC-006"
 section = "§4.3.1"
 summary = "NWK frame security: outgoing frames secured with active key and nwkSecurityLevel, incoming frames decrypted with key matching sequence number, incoming frame counter freshness per source, security failure causes drop"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::nwk"
-tests = []
+status = "partially-implemented"
+module = "panweave-security::frame"
+tests = ["nwk_frame_protect_unprotect_round_trip", "mic_only_level_authenticates_payload_in_clear"]
+notes = "Cryptographic transform done; key selection and NIB integration follow in panweave-nwk."
 
 [[requirement]]
 id = "PW-R23-SEC-007"
 section = "§4.3.4"
 summary = "Network frame counter requirements: monotonic outgoing counter persisted across resets, reset to zero only on key switch, incoming counters reset on key switch, request key update near exhaustion"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::frame_counter"
-tests = []
+tests = ["outgoing_counter_never_decreases_across_restart", "reservation_requested_ahead_of_need_and_window_is_hard_limit", "exhaustion_and_switch_reset_rule", "incoming_freshness"]
 
 [[requirement]]
 id = "PW-R23-SEC-008"
 section = "§4.4.1"
 summary = "APS frame security using link keys (data and command frames), key-transport/key-load key selection for transport key commands"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::aps"
-tests = []
+status = "partially-implemented"
+module = "panweave-security::frame"
+tests = ["aps_frame_without_extended_nonce_uses_supplied_source"]
+notes = "Transform implemented; APS command key selection lands with panweave-aps."
 
 [[requirement]]
 id = "PW-R23-SEC-009"
@@ -1004,9 +1006,9 @@ id = "PW-R23-SEC-017"
 section = "§4.4.12, §4.4.13"
 summary = "Security AIB: device key pair set (apsDeviceKeyPairSet) with key attributes, incoming/outgoing frame counters, passphrase, TC address, trust center policies"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security::material"
-tests = []
+tests = ["network_keys_two_slots_and_switch", "link_key_table_bounded", "debug_output_redacts_keys"]
 
 [[requirement]]
 id = "PW-R23-SEC-018"
@@ -1058,9 +1060,9 @@ id = "PW-R23-SEC-023"
 section = "§4.7.1, §4.7.3"
 summary = "Trust Center policies: allowJoins, allowRejoins, allowTrustCenterLinkKeyRequests, allowApplicationKeyRequests, useWhiteList/joining list, requireInstallCodesOrPresetPassphrase, allowRemoteTcPolicyChange, network key update method/period, allowVirtualDevices"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::trust_center::policy"
-tests = []
+status = "implemented"
+module = "panweave-security::trust_center"
+tests = ["unsecured_join_policy", "key_negotiation_join_policy", "rejoin_policy", "tclk_request_policy", "app_key_and_remote_policy"]
 
 [[requirement]]
 id = "PW-R23-SEC-024"
@@ -1076,9 +1078,10 @@ id = "PW-R23-SEC-025"
 section = "§4.4.9, §4.9.6, Annex J"
 summary = "Dynamic Link Key negotiation: ECDHE (Curve25519) with SPEKE using passphrase or well-known passphrase, AES-MMO based KDF, key confirmation; results in unverified TCLK"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-security::dlk"
-tests = []
+tests = ["annex_c7_1_1_well_known_psk_vector", "annex_c7_1_2_passphrase_vector_generator", "non_contributory_points_are_rejected", "random_ephemerals_agree"]
+notes = "SPEKE/Curve25519/AES-MMO derivation done; ZDO message exchange and TC state machine pending."
 
 [[requirement]]
 id = "PW-R23-SEC-026"
@@ -1121,9 +1124,9 @@ id = "PW-R23-SEC-030"
 section = "Annex C"
 summary = "Cryptographic test vectors for AES-MMO, HMAC, CCM* and key agreement are used as known-answer tests"
 level = "informative"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-security tests"
-tests = []
+tests = ["annex_c3_encryption_vector", "annex_c5_1_single_octet", "annex_c6_hmac_vectors", "annex_c7_1_1_well_known_psk_vector"]
 
 [[requirement]]
 id = "PW-R23-SEC-031"
@@ -1141,9 +1144,10 @@ id = "PW-R23-MAC-001"
 section = "Annex D.2–D.9"
 summary = "MAC usage: beacon-order 15 non-beacon operation, association capability information, frame version, beacon payload placement, CSMA backoff exponent defaults, recommended scan duration"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-mac"
-tests = []
+tests = ["intra_pan_data_header_compresses_source_pan", "beacon_round_trip", "mac_commands_round_trip", "association_handshake_joiner_side", "association_indication_and_indirect_response_parent_side", "active_scan_sends_beacon_requests_per_channel_and_confirms"]
+notes = "Frame version 0 on transmit (D.6), association addressing (D.4), backoff defaults (D.8) and scan duration (D.9) implemented; Annex D.11 enhanced beacons tracked separately."
 
 [[requirement]]
 id = "PW-R23-MAC-002"
