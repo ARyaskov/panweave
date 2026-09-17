@@ -63,5 +63,9 @@ required-features = ["smart-energy"]
 name = "se_drlc"
 required-features = ["smart-energy"]
 
+[[test]]
+name = "se_price"
+required-features = ["smart-energy"]
+
 [lints]
 workspace = true

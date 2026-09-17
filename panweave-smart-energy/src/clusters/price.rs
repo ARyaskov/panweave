@@ -532,9 +532,217 @@ const fn overlaps(a_start: u32, a_end: Option<u32>, b_start: u32, b_end: Option<
     a_before_b_ends && b_before_a_ends
 }
 
+/// A price published by a server, owning its rate label.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PublishedPrice {
+    /// The price with the start time resolved and an empty label; the
+    /// label is put back by [`Self::publish`].
+    pub price: PublishPrice<'static>,
+    /// Rate label.
+    pub rate_label: Vec<u8, MAX_RATE_LABEL_LEN>,
+    /// Acknowledgements received (client short address, time).
+    pub acknowledgements: Vec<(u16, u32), 8>,
+}
+
+impl PublishedPrice {
+    /// The Publish Price payload of this price.
+    pub fn publish(&self) -> PublishPrice<'_> {
+        PublishPrice {
+            rate_label: &self.rate_label,
+            ..self.price
+        }
+    }
+
+    /// End time, `None` for "until changed".
+    pub fn end_time(&self) -> Option<u32> {
+        self.price.end_time(self.price.start_time)
+    }
+}
+
+/// Server-side (ESI) price schedule (D.4.2.3.2, D.4.2.3.3): the
+/// published prices answering Get Current Price and Get Scheduled
+/// Prices; a server holds at least five.
+#[derive(Clone, Debug, Default)]
+pub struct PriceSchedule<const N: usize> {
+    prices: Vec<PublishedPrice, N>,
+}
+
+impl<const N: usize> PriceSchedule<N> {
+    /// An empty schedule.
+    pub const fn new() -> Self {
+        PriceSchedule { prices: Vec::new() }
+    }
+
+    /// The prices held, in start-time order.
+    pub fn prices(&self) -> &[PublishedPrice] {
+        &self.prices
+    }
+
+    /// Publishes (or re-publishes under the same Issuer Event ID) a
+    /// price; a start time of 0 is resolved to `now` and the current
+    /// time is stamped. `false` when the label is too long or the
+    /// schedule is full.
+    pub fn publish(&mut self, p: &PublishPrice<'_>, now: u32) -> bool {
+        let Ok(rate_label) = Vec::from_slice(p.rate_label) else {
+            return false;
+        };
+        let price = PublishPrice {
+            rate_label: &[],
+            current_time: now,
+            start_time: if p.start_time == 0 { now } else { p.start_time },
+            ..*p
+        };
+        self.prices
+            .retain(|s| s.price.issuer_event_id != price.issuer_event_id);
+        let entry = PublishedPrice {
+            price,
+            rate_label,
+            acknowledgements: Vec::new(),
+        };
+        let pos = self
+            .prices
+            .iter()
+            .position(|s| s.price.start_time > entry.price.start_time)
+            .unwrap_or(self.prices.len());
+        self.prices.insert(pos, entry).is_ok()
+    }
+
+    /// Drops expired prices.
+    pub fn expire(&mut self, now: u32) {
+        self.prices.retain(|s| s.end_time().is_none_or(|e| now < e));
+    }
+
+    /// Answers Get Current Price: the price in effect at `now`, or
+    /// `None` for NOT_FOUND.
+    pub fn current(&self, now: u32) -> Option<&PublishedPrice> {
+        self.prices
+            .iter()
+            .filter(|s| s.price.start_time <= now && s.end_time().is_none_or(|e| now < e))
+            .max_by_key(|s| (s.price.start_time, s.price.issuer_event_id))
+    }
+
+    /// Answers Get Scheduled Prices (D.4.2.3.3.1): the prices whose end
+    /// time is at or after `req.start_time` (0: `now`), in start order,
+    /// at most `req.number_of_events` (0: all). Empty means NOT_FOUND.
+    pub fn scheduled<'a>(
+        &'a self,
+        req: &GetScheduledPrices,
+        now: u32,
+        out: &mut Vec<&'a PublishedPrice, N>,
+    ) {
+        let start = if req.start_time == 0 {
+            now
+        } else {
+            req.start_time
+        };
+        let limit = if req.number_of_events == 0 {
+            usize::MAX
+        } else {
+            usize::from(req.number_of_events)
+        };
+        for s in self
+            .prices
+            .iter()
+            .filter(|s| s.end_time().is_none_or(|e| e >= start))
+            .take(limit)
+        {
+            let _ = out.push(s);
+        }
+    }
+
+    /// Records a Price Acknowledgement from `client`; `false` when it
+    /// names an unknown price.
+    pub fn on_acknowledgement(&mut self, client: u16, ack: &PriceAcknowledgement) -> bool {
+        let Some(s) = self.prices.iter_mut().find(|s| {
+            s.price.issuer_event_id == ack.issuer_event_id && s.price.provider_id == ack.provider_id
+        }) else {
+            return false;
+        };
+        if let Some(e) = s.acknowledgements.iter_mut().find(|(a, _)| *a == client) {
+            e.1 = ack.price_ack_time;
+        } else {
+            if s.acknowledgements.is_full() {
+                s.acknowledgements.remove(0);
+            }
+            let _ = s.acknowledgements.push((client, ack.price_ack_time));
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_schedule_answers_current_and_scheduled() {
+        let mut s: PriceSchedule<5> = PriceSchedule::new();
+        // Three prices: one active now, one later, one until changed.
+        assert!(s.publish(&PublishPrice::new(1, b"Now", 10, 0, 0, 60, 100), 1000));
+        assert!(s.publish(&PublishPrice::new(1, b"Later", 11, 0, 5000, 30, 200), 1000));
+        assert!(s.publish(
+            &PublishPrice::new(1, b"Flat", 12, 0, 9000, DURATION_UNTIL_CHANGED, 300),
+            1000
+        ));
+        assert_eq!(s.prices().len(), 3);
+        assert_eq!(s.current(1000).unwrap().price.issuer_event_id, 10);
+        assert_eq!(s.current(1000).unwrap().price.start_time, 1000);
+        assert_eq!(s.current(1000).unwrap().publish().rate_label, b"Now");
+        assert!(s.current(4700).is_none());
+        assert_eq!(s.current(9999).unwrap().price.issuer_event_id, 12);
+        let mut out: Vec<&PublishedPrice, 5> = Vec::new();
+        s.scheduled(
+            &GetScheduledPrices {
+                start_time: 0,
+                number_of_events: 0,
+            },
+            1000,
+            &mut out,
+        );
+        assert_eq!(out.len(), 3);
+        out.clear();
+        s.scheduled(
+            &GetScheduledPrices {
+                start_time: 6000,
+                number_of_events: 1,
+            },
+            1000,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].price.issuer_event_id, 11);
+        drop(out);
+        // A re-publish replaces; an acknowledgement is recorded once per
+        // client; expiry drops the active price after its end.
+        assert!(s.publish(&PublishPrice::new(1, b"Now2", 10, 0, 1000, 60, 150), 1000));
+        assert_eq!(s.prices().len(), 3);
+        assert!(s.on_acknowledgement(
+            0x1234,
+            &PriceAcknowledgement {
+                provider_id: 1,
+                issuer_event_id: 10,
+                price_ack_time: 1001,
+                control: 0
+            }
+        ));
+        assert!(!s.on_acknowledgement(
+            0x1234,
+            &PriceAcknowledgement {
+                provider_id: 1,
+                issuer_event_id: 99,
+                price_ack_time: 1001,
+                control: 0
+            }
+        ));
+        assert_eq!(s.current(1000).unwrap().acknowledgements.len(), 1);
+        s.expire(4601);
+        assert_eq!(s.prices().len(), 2);
+        // Full: refused; an over-long label too.
+        let mut small: PriceSchedule<1> = PriceSchedule::new();
+        assert!(small.publish(&PublishPrice::new(1, b"a", 1, 0, 5000, 1, 1), 0));
+        assert!(!small.publish(&PublishPrice::new(1, b"b", 2, 0, 6000, 1, 1), 0));
+        assert!(!small.publish(&PublishPrice::new(1, b"toolonglabel!", 3, 0, 6000, 1, 1), 0));
+    }
 
     #[test]
     fn publish_price_codec_and_table() {

@@ -185,6 +185,10 @@ Keep a Changelog; versions follow SemVer.
   DrlcServer}` (Annex D.2) schedule and issue load control events,
   send the Report Event Status frames after their 0–5 s delay, answer
   Get Scheduled Events and report `DrlcEvent` / `DrlcServerEvent`;
+  `price::{PriceClient, PriceServer}` (Annex D.4 core) store and
+  acknowledge published prices and answer Get Current Price / Get
+  Scheduled Prices from the new server-side
+  `clusters::price::PriceSchedule`;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
 * Green Power proxies act as SelectedSender (GP 1.1.2 §A.3.9.1 steps 8,
