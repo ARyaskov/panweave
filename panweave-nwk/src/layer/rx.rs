@@ -362,6 +362,21 @@ impl<
         let aps_fc = buf.get(header_len).copied().unwrap_or(0);
         let aps_command = aps_fc & 0x03 == 0x01;
         let aps_secured = aps_fc & 0x20 != 0;
+        // A Trust Center rejoin started from an operating network keeps
+        // the old key until the new one arrives: the unsecured response to
+        // the device's own request must still get through (§4.6.3.3.2,
+        // §4.7.4.1.2.6 step 5).
+        let unsecured_rejoin_in_progress = self.join.as_ref().is_some_and(|j| !j.secure);
+        if is_command
+            && unsecured_rejoin_in_progress
+            && for_me
+            && matches!(
+                cmd_id,
+                Some(NwkCommandId::RejoinResponse | NwkCommandId::CommissioningResponse)
+            )
+        {
+            return true;
+        }
         if self.nib.joined && self.nib.authenticated {
             if is_command {
                 // Joined: only rejoin/commissioning requests destined to us.

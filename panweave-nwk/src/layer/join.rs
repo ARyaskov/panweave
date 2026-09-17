@@ -1064,8 +1064,15 @@ impl<
             e.security_timer_secs =
                 u16::try_from(constants::SECURITY_TIMEOUT.as_secs()).unwrap_or(10);
         }
-        self.neighbors
-            .retain(|n| n.relationship != Relationship::Parent);
+        // The previous parent entry goes; so does a stale entry for
+        // another device that held the parent's short address (a
+        // replacement Trust Center at 0x0000 after a swap-out, §4.7.4).
+        self.neighbors.retain(|n| {
+            n.relationship != Relationship::Parent
+                && (parent_ext == ExtendedAddress::ZERO
+                    || n.short != p.short
+                    || n.extended == parent_ext)
+        });
         let _ = self.ensure_neighbor(e);
         self.push_action(NwkAction::MacSetPanId(p.pan_id));
         self.push_action(NwkAction::MacSetShortAddress(short));

@@ -58,7 +58,7 @@ clusters referenced by BDB), BDB3.1 (device behaviour on top of the stack).
 | §4.4 APS security | Transport key, update device, remove device, request key, switch key, verify key, confirm key, key negotiation (DLK), secured APDU, security AIB | `panweave-security::aps`, `panweave-aps::security_commands` |
 | §4.5 Common elements | Auxiliary frame header, security parameters, key hierarchy (hashed keys, key-load / key-transport keys) | `panweave-security::{aux_header, key_hierarchy}` |
 | §4.6 Functional description | Security initialisation, Trust Center application, joining/authentication procedures, key update/switch, device leaving | `panweave-security::procedures`, `panweave-bdb` |
-| §4.7 Centralized networks | Trust Center policies (§4.7.1), TC link keys, policy values (§4.7.3), TC swap-out (§4.7.4) | `panweave-security::trust_center` |
+| §4.7 Centralized networks | Trust Center policies (§4.7.1), TC link keys, policy values (§4.7.3), TC swap-out (§4.7.4) | `panweave-security::trust_center`; `panweave-runtime::swap_out` (backup / restore) with `panweave-aps::security::ApsSecurity::unsecure_swap_out` (node side) |
 | §4.8 Distributed networks | Distributed TC address, network key updates, link keys | `panweave-security::distributed` |
 | §4.9 Device operations | Joining device policies, TC address handling, receiving/negotiating link keys, passphrase update | `panweave-security::device` |
 | Annex A, B, C | CCM*, AES-MMO hash, keyed hash (HMAC-AES-MMO), test vectors | `panweave-security::{ccm, mmo, kdf}` |

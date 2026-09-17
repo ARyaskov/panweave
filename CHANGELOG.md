@@ -374,6 +374,17 @@ Keep a Changelog; versions follow SemVer.
 * `panweave-bdb::setup_code`: short device setup codes (BDB 3.1
   §6.12) — the modified base32 alphabet, decoding to the padded pass
   code used by SPEKE, and display encoding.
+* Trust Center swap-out (R23.2 §4.7.4): `Stack::trust_center_backup`
+  (the device key-pair set with the AES-MMO hashed
+  `TrustCenterSwapOutLinkKey`, never the live key) and
+  `Stack::restore_trust_center_backup` on a replacement Trust Center;
+  on the node, an APS command that fails during a Trust Center rejoin is
+  retried under the hashed key (`ApsSecurity::unsecure_swap_out`), the
+  entry moves to the new Trust Center, `StackEvent::TrustCenterSwapped`
+  is reported and the link key is renewed before APS-secured messaging.
+  A rejoin also drops a stale neighbour that held the new parent's short
+  address, and an unsecured Rejoin / Commissioning Response to an
+  unsecured rejoin started from an operating network is accepted.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

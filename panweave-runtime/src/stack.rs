@@ -445,6 +445,17 @@ pub enum StackEvent {
     /// A Mgmt_NWK_IEEE_Joining_List_rsp updated the joining policy or
     /// IEEE joining list (§2.4.4.3.11.2).
     JoiningListUpdated,
+    /// A Trust Center swap-out was detected during a Trust Center rejoin
+    /// (§4.7.4.1.2.9): the network key came from `new` under the hashed
+    /// link key. `apsTrustCenterAddress` already names the new Trust
+    /// Center and a link key update has been requested; the application
+    /// should refresh bindings to the old Trust Center.
+    TrustCenterSwapped {
+        /// The previous Trust Center.
+        old: ExtendedAddress,
+        /// The replacement.
+        new: ExtendedAddress,
+    },
     /// The Trust Center delivered an application link key shared with
     /// `partner` (§4.7.3.9); `initiator` says whether this device asked
     /// for it.
@@ -554,6 +565,11 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) energy_scan: Option<EnergyScanRequest>,
     /// A beacon survey in progress.
     pub(crate) beacon_survey: Option<BeaconSurveyRequest>,
+    /// A Trust Center swap-out was detected in the rejoin in progress:
+    /// request a link key update once joined (§4.7.4.1.2.6 step 8).
+    pub(crate) swap_out_pending: bool,
+    /// The key being awaited completes a rejoin (not an initial join).
+    pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
     /// application link key may be issued to under the ListedOnly
     /// policy.
@@ -659,6 +675,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             challenge: None,
             energy_scan: None,
             beacon_survey: None,
+            swap_out_pending: false,
+            awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
             next_scan: None,

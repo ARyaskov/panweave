@@ -265,6 +265,63 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
         s.as_ref().map(|(_, _, c)| c)
     }
 
+    /// `TrustCenterSwapOutLinkKey` of the entry for `partner`: the AES-MMO
+    /// hash of its link key (§4.7.4.1.2.4, Table 4-44).
+    pub fn swap_out_key(&self, partner: ExtendedAddress) -> Option<Key128> {
+        let e = self.keys.get(partner)?;
+        Some(Key128::from_bytes(panweave_security::mmo::hash::<C>(
+            e.key.as_bytes(),
+        )))
+    }
+
+    /// Second security processing of an APS command during a Trust Center
+    /// rejoin (§4.7.4.1.2.7 step 2): unprotects `buf` with the
+    /// `TrustCenterSwapOutLinkKey` of the current Trust Center entry,
+    /// skipping the frame counter check. The auxiliary header must carry
+    /// the extended nonce (the new Trust Center's address). On success
+    /// the entry is moved to the new Trust Center address with the hashed
+    /// key as its provisional link key (§4.7.4.1.2.8) and the new address
+    /// is returned with the payload range.
+    pub fn unsecure_swap_out(
+        &mut self,
+        buf: &mut [u8],
+        header_len: usize,
+        level: SecurityLevel,
+        trust_center: ExtendedAddress,
+    ) -> Result<(ExtendedAddress, KeyIdentifier, usize, usize), SecurityError> {
+        let aux = frame::peek_aux(buf, header_len)?;
+        let source = aux.source.ok_or(SecurityError::NoKey)?;
+        if aux.control.key_id == KeyIdentifier::Network || source == trust_center {
+            return Err(SecurityError::PolicyRejected);
+        }
+        let hashed = self
+            .swap_out_key(trust_center)
+            .ok_or(SecurityError::NoKey)?;
+        let derived = match aux.control.key_id {
+            KeyIdentifier::Data => hashed.clone(),
+            KeyIdentifier::KeyTransport => key_hierarchy::key_transport_key::<C>(&hashed),
+            KeyIdentifier::KeyLoad => key_hierarchy::key_load_key::<C>(&hashed),
+            KeyIdentifier::Network => return Err(SecurityError::PolicyRejected),
+        };
+        let cipher = C::new(&derived);
+        let u = frame::unprotect_in_place(&cipher, level, source, buf, header_len)?;
+        // A swap-out happened: the hashed key becomes the provisional link
+        // key of the new Trust Center. The counter of the frame just
+        // authenticated is the new Trust Center's current one, so the
+        // renewal that follows (§4.7.4.1.2.6 step 8) is not held up by a
+        // frame counter challenge.
+        self.ciphers = [None, None];
+        self.keys.remove(source);
+        if let Some(e) = self.keys.get_mut(trust_center) {
+            e.partner = source;
+            e.key = hashed;
+            e.attributes = KeyAttributes::ProvisionalKey;
+            e.incoming = aux.frame_counter.0.saturating_add(1);
+            e.verified_frame_counter = true;
+        }
+        Ok((source, aux.control.key_id, u.payload_start, u.payload_end))
+    }
+
     /// Length of the auxiliary header for the given nonce choice.
     #[inline]
     pub const fn aux_header_len(extended_nonce: bool) -> usize {

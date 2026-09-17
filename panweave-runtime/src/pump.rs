@@ -580,6 +580,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             self.complete_join(rejoin);
                         } else {
                             self.phase = Phase::AwaitingKey;
+                            self.awaiting_key_rejoin = rejoin;
                             // A sleepy joiner polls its parent for the
                             // tunnelled network key (§4.6.3.2.3).
                             self.next_poll = Some(self.now);
@@ -735,7 +736,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .security
             .entry(tc)
             .is_some_and(|e| e.kind == LinkKeyKind::Global);
-        if !rejoin && !self.aps.aib.is_distributed() && global {
+        // §4.7.4.1.2.6 step 8: after a swap-out the hashed key must be
+        // replaced before any APS-secured messaging.
+        let swapped = core::mem::take(&mut self.swap_out_pending);
+        if (!rejoin && !self.aps.aib.is_distributed() && global) || swapped {
             let tc_short = AddrView(&self.nwk)
                 .short_of(tc)
                 .unwrap_or(ShortAddress::COORDINATOR);
@@ -1482,7 +1486,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         if authorizes {
                             self.network_key_sequence = sequence;
                             self.nwk.set_network_key(sequence, key, true);
-                            let rejoin = matches!(self.phase, Phase::Joining(m) if m != crate::JoinMode::Association);
+                            let rejoin = matches!(self.phase, Phase::Joining(m) if m != crate::JoinMode::Association)
+                                || (self.phase == Phase::AwaitingKey && self.awaiting_key_rejoin);
+                            self.awaiting_key_rejoin = false;
                             self.complete_join(rejoin);
                         } else {
                             self.nwk.set_network_key(sequence, key, false);
@@ -1557,6 +1563,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
                 ApsEvent::FrameCounterUnverified { partner } => {
                     self.issue_challenge(partner);
+                }
+                ApsEvent::TrustCenterSwapped { old, new } => {
+                    // The new Trust Center answers at the coordinator
+                    // address; the old identity is forgotten.
+                    self.nwk.address_map.remove_extended(old);
+                    let _ = self.nwk.address_map.record(new, ShortAddress::COORDINATOR);
+                    self.swap_out_pending = true;
+                    self.push_event(StackEvent::TrustCenterSwapped { old, new });
                 }
                 ApsEvent::KeyVerified {
                     partner, relayed, ..

@@ -341,6 +341,16 @@ pub enum TransportedKey {
 /// Management indications and confirms.
 #[derive(Clone, Debug)]
 pub enum ApsEvent {
+    /// A Trust Center swap-out was detected during a Trust Center rejoin
+    /// (§4.7.4.1.2.7): the network key that follows came from `new`
+    /// under the hashed link key; `apsTrustCenterAddress` now names it
+    /// and the link key must be updated before APS-secured messaging.
+    TrustCenterSwapped {
+        /// The previous Trust Center.
+        old: ExtendedAddress,
+        /// The replacement Trust Center.
+        new: ExtendedAddress,
+    },
     /// APSDE-DATA.confirm.
     DataConfirm {
         /// The request.

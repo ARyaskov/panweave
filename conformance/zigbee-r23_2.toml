@@ -1146,10 +1146,10 @@ id = "PW-R23-SEC-028"
 section = "§4.7.4"
 summary = "Trust Center swap-out procedure"
 level = "optional"
-status = "not-implemented"
-module = "panweave-security::trust_center::swap_out"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::swap_out"
+tests = ["replacement_trust_center_takes_over_from_a_hashed_backup"]
+notes = "Backup of the device key-pair set with the AES-MMO hashed TrustCenterSwapOutLinkKey (Table 4-43/4-44) and its restoration on a replacement Trust Center; on the node the APS layer retries a failed command during a Trust Center rejoin under the hashed key (§4.7.4.1.2.7), moves the entry to the new Trust Center address, reports TrustCenterSwapped and the runtime requests a fresh link key before APS-secured messaging (step 8). The application drives the rejoin after the keep-alive fails."
 [[requirement]]
 id = "PW-R23-SEC-029"
 section = "§4.9.1"

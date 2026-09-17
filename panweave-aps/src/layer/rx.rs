@@ -8,7 +8,7 @@ use panweave_security::frame::SecurityError;
 use panweave_types::time::Instant;
 use panweave_types::{ClusterId, Endpoint, ExtendedAddress, GroupAddress, ProfileId, ShortAddress};
 
-use super::{Aps, ApsAction, ApsEvent, AsduBuf, DeviceState, NwkView};
+use super::{Aps, ApsAction, ApsEvent, AsduBuf, DeviceState, NwkView, PersistItem};
 use crate::aib::constants;
 use crate::frame::{Addressing, DeliveryMode, ExtendedHeader, Fragmentation, FrameType, Header};
 
@@ -206,8 +206,42 @@ impl<
                     return None;
                 }
                 Err(_) => {
-                    self.stats.security_dropped = self.stats.security_dropped.saturating_add(1);
-                    return None;
+                    // §4.7.4.1.2.7: during a Trust Center rejoin an APS
+                    // command that fails may come from a replacement
+                    // Trust Center under the hashed link key.
+                    let old_tc = self.aib.trust_center_address;
+                    let retry = header.control.frame_type == FrameType::Command
+                        && self.state == DeviceState::JoinedUnauthorized
+                        && !self.aib.is_distributed();
+                    match retry
+                        .then(|| {
+                            self.security
+                                .unsecure_swap_out(buf, header_len, level, old_tc)
+                        })
+                        .transpose()
+                    {
+                        Ok(Some((new_tc, key_id, start, end))) => {
+                            self.aib.trust_center_address = new_tc;
+                            self.push_action(ApsAction::Persist(PersistItem::Aib));
+                            self.push_action(ApsAction::Persist(PersistItem::LinkKeys));
+                            self.push_event(ApsEvent::TrustCenterSwapped {
+                                old: old_tc,
+                                new: new_tc,
+                            });
+                            payload_range = start..end;
+                            sec = FrameSecurity {
+                                status: SecurityStatus::LinkKey,
+                                partner: Some(new_tc),
+                                key_id,
+                                extended_nonce: true,
+                            };
+                        }
+                        _ => {
+                            self.stats.security_dropped =
+                                self.stats.security_dropped.saturating_add(1);
+                            return None;
+                        }
+                    }
                 }
             }
         }
