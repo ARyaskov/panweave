@@ -5,21 +5,26 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: mac"
+description = "Panweave Zigbee stack: IEEE 802.15.4 frame codec, radio abstraction and MAC service"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
-alloc = ["panweave-types/alloc"]
+std = ["alloc", "panweave-types/std", "panweave-codec/std"]
+alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+heapless = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
 
 [lints]
 workspace = true

@@ -45,6 +45,8 @@ impl Channel {
     pub const MIN_2_4GHZ: u8 = 11;
     /// Highest 2.4 GHz channel.
     pub const MAX_2_4GHZ: u8 = 26;
+    /// Channel 11, the lowest 2.4 GHz channel; used as a safe default.
+    pub const DEFAULT_2_4GHZ: Channel = Channel(11);
 
     /// Builds a channel, accepting any value `0..=31` (the range a 32-bit
     /// channel mask can express). Returns `None` otherwise.
