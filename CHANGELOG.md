@@ -176,6 +176,11 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* ZCL data types (ZCL8 §2.6.2): semi-precision floats convert both ways
+  (`types::{semi_to_f32, f32_to_semi}`, `Value::as_f64`) and take part
+  in reportable-change comparisons; composite values iterate their
+  elements (`Value::elements`) and are built with `write_array` /
+  `write_struct`.
 * Manufacturer-specific clusters (ZCL8 §2.3.3):
   `ClusterInstance::manufacturer_specific(code)` registers a cluster
   that only frames carrying its manufacturer code reach (UNSUPPORTED_CLUSTER

@@ -820,6 +820,7 @@ impl<const A: usize> ClusterInstance<A> {
                 let change = match change {
                     Some(Value::Single(f)) => f64::from(f).to_bits(),
                     Some(Value::Double(f)) => f.to_bits(),
+                    Some(Value::Semi(bits)) => f64::from(crate::types::semi_to_f32(bits)).to_bits(),
                     other => other.as_ref().and_then(Value::as_u64).unwrap_or(0),
                 };
                 a.configure_reporting(min, max, change, now);
@@ -984,7 +985,7 @@ fn change_value(ty: DataType, change: u64) -> Value<'static> {
         DataType::Single => Value::Single(f64::from_bits(change) as f32),
         DataType::Double => Value::Double(f64::from_bits(change)),
         #[allow(clippy::cast_possible_truncation)]
-        DataType::Semi => Value::Semi(change as u16),
+        DataType::Semi => Value::Semi(crate::types::f32_to_semi(f64::from_bits(change) as f32)),
         #[allow(clippy::cast_possible_truncation)]
         DataType::TimeOfDay | DataType::Date | DataType::UtcTime => Value::Time {
             ty,

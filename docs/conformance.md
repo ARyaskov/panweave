@@ -13,9 +13,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | ZD1.1 | 11 | 5 | 5 | 1 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
-| ZCL8 | 46 | 40 | 3 | 3 | 0 | 0 | 0 |
+| ZCL8 | 46 | 41 | 2 | 3 | 0 | 0 | 0 |
 | R23.2 | 133 | 128 | 2 | 1 | 2 | 0 | 0 |
-| **All** | 247 | 206 | 31 | 6 | 3 | 1 | 0 |
+| **All** | 247 | 207 | 30 | 6 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -115,7 +115,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | Id | Section | Level | Status | Module | Summary | Tests | Notes |
 |---|---|---|---|---|---|---|---|
 | PW-ZCL-FND-001 | §2.4.1 | mandatory | implemented | `panweave-zcl::frame` | ZCL frame header: frame control (frame type, manufacturer specific, direction, disable default response), optional manufacturer code, transaction sequence number, command identifier | `header_round_trip` |  |
-| PW-ZCL-FND-002 | §2.6.2 | mandatory | partially-implemented | `panweave-zcl::types` | Data types: null, general data, boolean, bitmaps, unsigned/signed integers 8–64 bit, enums, floats, strings (octet/character, long variants), arrays/structures/sets/bags, time/date/UTC, cluster/attribute/BACnet OID, IEEE address, 128-bit security key; invalid/unknown values | `type_ids_round_trip`, `value_round_trips` | All type identifiers, fixed-size types, strings and composite length walking are implemented; array/structure/set/bag values are carried as raw encodings (no element-level access) and semi-precision floats are raw 16-bit values. |
+| PW-ZCL-FND-002 | §2.6.2 | mandatory | implemented | `panweave-zcl::types` | Data types: null, general data, boolean, bitmaps, unsigned/signed integers 8–64 bit, enums, floats, strings (octet/character, long variants), arrays/structures/sets/bags, time/date/UTC, cluster/attribute/BACnet OID, IEEE address, 128-bit security key; invalid/unknown values | `type_ids_round_trip`, `value_round_trips`, `semi_precision_converts_both_ways`, `composite_elements_iterate_and_build` | All type identifiers, fixed-size types, strings and composite length walking; array / structure / set / bag values carry their raw encoding with element iteration (Value::elements), builders (write_array / write_struct) and the element selectors of the structured commands; semi-precision floats convert to and from single precision (IEEE 754 binary16, round to nearest even) and compare as magnitudes for reporting. |
 | PW-ZCL-FND-003 | §2.5.1, §2.5.2 | mandatory | implemented | `panweave-zcl::cluster` | Read Attributes / Read Attributes Response with per-attribute status | `read_and_write_records`, `read_write_and_discover_attributes` |  |
 | PW-ZCL-FND-004 | §2.5.3–§2.5.6 | mandatory | implemented | `panweave-zcl::cluster` | Write Attributes, Write Attributes Undivided, Write Attributes Response, Write Attributes No Response; type checking, read-only, invalid value semantics | `read_and_write_records`, `read_write_and_discover_attributes` | Range checks beyond the data type (step 5 of §2.5.3.3) are cluster-specific and left to the application. |
 | PW-ZCL-FND-005 | §2.5.7, §2.5.8 | mandatory | implemented | `panweave-zcl::cluster` | Configure Reporting / Response with min/max intervals, reportable change, timeout; direction semantics | `reporting_records`, `reporting_configuration_and_reports` |  |

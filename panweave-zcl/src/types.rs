@@ -546,6 +546,180 @@ impl<'a> Value<'a> {
             _ => None,
         }
     }
+
+    /// The value as a floating-point number: the three floating-point
+    /// types (semi-precision converted), or an integral value.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Semi(bits) => Some(f64::from(semi_to_f32(*bits))),
+            Value::Single(v) => Some(f64::from(*v)),
+            Value::Double(v) => Some(*v),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int { value, .. } => Some(*value as f64),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Uint { value, .. } => Some(*value as f64),
+            _ => None,
+        }
+    }
+
+    /// The elements of an array, structure, set or bag (§2.6.2.13–16),
+    /// or `None` for other values and invalid composites.
+    pub fn elements(&self) -> Option<Elements<'a>> {
+        let Value::Composite { ty, bytes } = self else {
+            return None;
+        };
+        let (elem, count, body) = match ty {
+            DataType::Array | DataType::Set | DataType::Bag => (
+                Some(DataType::from_id(*bytes.first()?)),
+                u16::from_le_bytes([*bytes.get(1)?, *bytes.get(2)?]),
+                bytes.get(3..)?,
+            ),
+            DataType::Struct => (
+                None,
+                u16::from_le_bytes([*bytes.first()?, *bytes.get(1)?]),
+                bytes.get(2..)?,
+            ),
+            _ => return None,
+        };
+        Some(Elements {
+            elem,
+            remaining: if count == 0xffff { 0 } else { count },
+            body,
+        })
+    }
+}
+
+/// Iterator over the elements of a composite value, in order; a
+/// structure yields each member with its own type.
+#[derive(Clone, Debug)]
+pub struct Elements<'a> {
+    /// Element type of an array, set or bag (`None` for a structure).
+    elem: Option<DataType>,
+    remaining: u16,
+    body: &'a [u8],
+}
+
+impl<'a> Iterator for Elements<'a> {
+    type Item = Value<'a>;
+
+    fn next(&mut self) -> Option<Value<'a>> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let (ty, head) = match self.elem {
+            Some(t) => (t, 0),
+            None => (DataType::from_id(*self.body.first()?), 1),
+        };
+        let raw = self.body.get(head..)?;
+        let n = ty.value_len(raw)?;
+        let mut r = Reader::new(raw.get(..n)?);
+        let v = Value::decode(&mut r, ty).ok()?;
+        self.body = self.body.get(head + n..)?;
+        self.remaining -= 1;
+        Some(v)
+    }
+}
+
+/// Writes an array, set or bag of `elem`-typed `values` (§2.6.2.13,
+/// §2.6.2.15–16): the element type, the count and the elements.
+pub fn write_array(
+    w: &mut Writer<'_>,
+    elem: DataType,
+    values: &[Value<'_>],
+) -> Result<(), CodecError> {
+    w.u8(elem.id())?;
+    w.u16_le(
+        u16::try_from(values.len()).map_err(|_| CodecError::Unrepresentable {
+            field: "array length",
+        })?,
+    )?;
+    for v in values {
+        if v.data_type() != elem {
+            return Err(CodecError::InvalidField {
+                field: "array element type",
+                value: u32::from(v.data_type().id()),
+            });
+        }
+        v.encode(w)?;
+    }
+    Ok(())
+}
+
+/// Writes a structure of `values` (§2.6.2.14): the count, then each
+/// member's type and value.
+pub fn write_struct(w: &mut Writer<'_>, values: &[Value<'_>]) -> Result<(), CodecError> {
+    w.u16_le(
+        u16::try_from(values.len()).map_err(|_| CodecError::Unrepresentable {
+            field: "structure length",
+        })?,
+    )?;
+    for v in values {
+        w.u8(v.data_type().id())?;
+        v.encode(w)?;
+    }
+    Ok(())
+}
+
+/// Converts a semi-precision float (IEEE 754 binary16, §2.6.2.9) to
+/// single precision.
+pub fn semi_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15) << 31;
+    let exp = u32::from((bits >> 10) & 0x1f);
+    let frac = u32::from(bits & 0x03ff);
+    let value = match exp {
+        0 if frac == 0 => sign,
+        0 => {
+            // Subnormal: renormalise.
+            let mut e: u32 = 127 - 15 + 1;
+            let mut f = frac;
+            while f & 0x0400 == 0 {
+                f <<= 1;
+                e -= 1;
+            }
+            sign | (e << 23) | ((f & 0x03ff) << 13)
+        }
+        0x1f => sign | 0x7f80_0000 | (frac << 13),
+        _ => sign | ((exp + 127 - 15) << 23) | (frac << 13),
+    };
+    f32::from_bits(value)
+}
+
+/// Converts a single-precision float to semi-precision (round to
+/// nearest even, overflow to infinity).
+pub fn f32_to_semi(v: f32) -> u16 {
+    let bits = v.to_bits();
+    let sign = u16::try_from((bits >> 16) & 0x8000).unwrap_or(0);
+    let exp = i32::try_from((bits >> 23) & 0xff).unwrap_or(0);
+    let frac = bits & 0x007f_ffff;
+    if exp == 0xff {
+        // Infinity or NaN.
+        let payload = if frac == 0 { 0 } else { 0x0200 };
+        return sign | 0x7c00 | payload;
+    }
+    let e = exp - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if e <= 0 {
+        if e < -10 {
+            return sign;
+        }
+        // Subnormal result.
+        let m = (frac | 0x0080_0000) >> (14 - e);
+        let round = (frac | 0x0080_0000) & ((1u32 << (14 - e)) - 1);
+        let half = 1u32 << (13 - e);
+        let mut out = m;
+        if round > half || (round == half && out & 1 == 1) {
+            out += 1;
+        }
+        return sign | u16::try_from(out).unwrap_or(0x03ff);
+    }
+    let mut out = (u32::try_from(e).unwrap_or(0) << 10) | (frac >> 13);
+    let round = frac & 0x1fff;
+    if round > 0x1000 || (round == 0x1000 && out & 1 == 1) {
+        out += 1;
+    }
+    sign | u16::try_from(out.min(0x7c00)).unwrap_or(0x7c00)
 }
 
 /// Absolute difference between two analog values of the same type
@@ -557,6 +731,11 @@ pub fn analog_delta(a: &Value<'_>, b: &Value<'_>) -> Option<u64> {
         {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Some((x - y).abs() as u64)
+        }
+        (Value::Semi(x), Value::Semi(y)) =>
+        {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some((semi_to_f32(*x) - semi_to_f32(*y)).abs() as u64)
         }
         (Value::Double(x), Value::Double(y)) =>
         {
@@ -659,5 +838,115 @@ mod tests {
             Some(2)
         );
         assert_eq!(analog_delta(&Value::NoData, &Value::NoData), None);
+    }
+
+    #[test]
+    fn semi_precision_converts_both_ways() {
+        for (bits, value) in [
+            (0x3c00u16, 1.0f32),
+            (0xc000, -2.0),
+            (0x3555, 0.333_251_95),
+            (0x7bff, 65504.0),
+            (0x0001, 5.960_464_5e-8),
+            (0x0400, 6.103_515_6e-5),
+            (0x0000, 0.0),
+        ] {
+            assert_eq!(semi_to_f32(bits).to_bits(), value.to_bits(), "{bits:#06x}");
+            assert_eq!(f32_to_semi(value), bits, "{value}");
+        }
+        assert_eq!(f32_to_semi(1e6), 0x7c00);
+        assert!(semi_to_f32(0x7c00).is_infinite());
+        assert!(semi_to_f32(0x7e00).is_nan());
+        assert!(f32_to_semi(f32::NAN) & 0x7c00 == 0x7c00);
+        assert_eq!(f32_to_semi(1.0 + 1.0 / 2048.0), 0x3c00);
+        assert_eq!(f32_to_semi(1.0 + 3.0 / 2048.0), 0x3c02);
+        assert_eq!(
+            Value::Semi(0x3c00).as_f64().map(f64::to_bits),
+            Some(1.0f64.to_bits())
+        );
+        assert_eq!(
+            analog_delta(&Value::Semi(0x4500), &Value::Semi(0x3c00)),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn composite_elements_iterate_and_build() {
+        let mut buf = [0u8; 64];
+        let mut w = Writer::new(&mut buf);
+        write_array(
+            &mut w,
+            DataType::Uint(2),
+            &[
+                Value::Uint { width: 2, value: 1 },
+                Value::Uint {
+                    width: 2,
+                    value: 300,
+                },
+            ],
+        )
+        .unwrap();
+        let n = w.position();
+        assert_eq!(&buf[..n], &[0x21, 2, 0, 1, 0, 0x2c, 0x01]);
+        let array = Value::Composite {
+            ty: DataType::Array,
+            bytes: &buf[..n],
+        };
+        let items: heapless::Vec<Value<'_>, 4> = array.elements().unwrap().collect();
+        assert_eq!(
+            items.as_slice(),
+            &[
+                Value::Uint { width: 2, value: 1 },
+                Value::Uint {
+                    width: 2,
+                    value: 300
+                }
+            ]
+        );
+        let mut other = [0u8; 8];
+        assert!(
+            write_array(
+                &mut Writer::new(&mut other),
+                DataType::Uint(2),
+                &[Value::Enum8(1)]
+            )
+            .is_err()
+        );
+        let mut buf = [0u8; 64];
+        let mut w = Writer::new(&mut buf);
+        write_struct(
+            &mut w,
+            &[
+                Value::Bool(Some(true)),
+                Value::String {
+                    ty: DataType::CharString,
+                    bytes: Some(b"ab"),
+                },
+            ],
+        )
+        .unwrap();
+        let n = w.position();
+        assert_eq!(&buf[..n], &[2, 0, 0x10, 1, 0x42, 2, b'a', b'b']);
+        let s = Value::Composite {
+            ty: DataType::Struct,
+            bytes: &buf[..n],
+        };
+        let items: heapless::Vec<Value<'_>, 4> = s.elements().unwrap().collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], Value::Bool(Some(true)));
+        assert!(matches!(
+            items[1],
+            Value::String {
+                bytes: Some(b"ab"),
+                ..
+            }
+        ));
+        assert!(Value::Enum8(1).elements().is_none());
+        // An invalid array has no elements.
+        let invalid = Value::Composite {
+            ty: DataType::Array,
+            bytes: &[0x21, 0xff, 0xff],
+        };
+        assert_eq!(invalid.elements().unwrap().count(), 0);
     }
 }

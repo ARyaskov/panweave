@@ -10,7 +10,7 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ManufacturerCode};
 
 use crate::frame::ZclStatus;
-use crate::types::{DataType, Value, analog_delta};
+use crate::types::{DataType, Value, analog_delta, semi_to_f32};
 
 /// Largest stored attribute value in octets (long strings and composites
 /// beyond this are rejected with INSUFFICIENT_SPACE).
@@ -264,6 +264,10 @@ impl Attribute {
                 }
                 (Some(Value::Double(a)), Some(Value::Double(b))) => {
                     let delta = (a - b).abs();
+                    delta > 0.0 && delta >= f64::from_bits(rep.change)
+                }
+                (Some(Value::Semi(a)), Some(Value::Semi(b))) => {
+                    let delta = f64::from((semi_to_f32(a) - semi_to_f32(b)).abs());
                     delta > 0.0 && delta >= f64::from_bits(rep.change)
                 }
                 (Some(a), Some(b)) => analog_delta(&a, &b).unwrap_or(u64::MAX) >= rep.change.max(1),

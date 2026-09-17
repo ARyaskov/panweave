@@ -17,10 +17,10 @@ id = "PW-ZCL-FND-002"
 section = "§2.6.2"
 summary = "Data types: null, general data, boolean, bitmaps, unsigned/signed integers 8–64 bit, enums, floats, strings (octet/character, long variants), arrays/structures/sets/bags, time/date/UTC, cluster/attribute/BACnet OID, IEEE address, 128-bit security key; invalid/unknown values"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zcl::types"
-tests = ["type_ids_round_trip", "value_round_trips"]
-notes = "All type identifiers, fixed-size types, strings and composite length walking are implemented; array/structure/set/bag values are carried as raw encodings (no element-level access) and semi-precision floats are raw 16-bit values."
+tests = ["type_ids_round_trip", "value_round_trips", "semi_precision_converts_both_ways", "composite_elements_iterate_and_build"]
+notes = "All type identifiers, fixed-size types, strings and composite length walking; array / structure / set / bag values carry their raw encoding with element iteration (Value::elements), builders (write_array / write_struct) and the element selectors of the structured commands; semi-precision floats convert to and from single precision (IEEE 754 binary16, round to nearest even) and compare as magnitudes for reporting."
 [[requirement]]
 id = "PW-ZCL-FND-003"
 section = "§2.5.1, §2.5.2"
