@@ -591,9 +591,26 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> TouchlinkNode for Stack<C, R, S> 
     }
 
     fn factory_reset(&mut self) {
-        if self.phase != Phase::Idle {
-            let _ = self.leave_with(false, false);
+        if self.phase != Phase::Idle && self.leave_with(false, false).is_ok() {
+            // Persistent data is cleared once the leave has completed
+            // (BDB 3.1 §13.2), so its own persistence does not undo it.
+            self.factory_reset_pending = true;
+            return;
         }
+        self.finish_factory_reset_now();
+    }
+}
+
+impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+    /// Clears persistent data after the leave of a pending factory
+    /// reset completed.
+    pub(crate) fn finish_factory_reset(&mut self) {
+        if core::mem::take(&mut self.factory_reset_pending) {
+            self.finish_factory_reset_now();
+        }
+    }
+
+    fn finish_factory_reset_now(&mut self) {
         let _ = self.erase_persisted();
         self.push_event(StackEvent::FactoryReset);
     }

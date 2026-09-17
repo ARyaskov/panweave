@@ -272,4 +272,35 @@ fn factory_new_remote_starts_a_network_through_a_lamp_and_adds_another() {
     );
     sim.take_events(remote);
     assert_eq!(read_identify_time(&mut sim, remote, lamp2), Some(0));
+
+    // Reset lamp2 to factory new (BDB 3.1 §13.2): the remote scans with
+    // the reset option, selects lamp2, the Reset To Factory New Request
+    // makes it leave and clear its persistent data, keeping only the
+    // outgoing NWK frame counter.
+    sim.block(remote, lamp);
+    let counter_before = sim.stack(lamp2).nwk.security.keys.outgoing.peek();
+    sim.take_events(remote);
+    sim.take_events(lamp2);
+    sim.stack(remote).touchlink_start(false, true).unwrap();
+    assert!(sim.run_until(Duration::from_secs(10), |x| discovered(x.events(remote))));
+    let c3 = *sim
+        .stack(remote)
+        .touchlink_candidates()
+        .iter()
+        .find(|c| c.ieee == LAMP2_IEEE)
+        .expect("lamp2 discovered");
+    assert!(!c3.response.touchlink.factory_new);
+    sim.stack(remote).touchlink_select(&c3).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(lamp2)
+            .iter()
+            .any(|e| matches!(e, StackEvent::FactoryReset))
+    }));
+    assert!(touchlink(sim.events(remote), |t| matches!(
+        t,
+        TouchlinkEvent::ResetSent
+    )));
+    assert!(!sim.stack(lamp2).nwk.nib.joined);
+    assert_eq!(sim.stack(lamp2).storage.len(), 1);
+    assert!(sim.stack(lamp2).nwk.security.keys.outgoing.peek() >= counter_before);
 }

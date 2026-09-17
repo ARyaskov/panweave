@@ -596,6 +596,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// A network key update in progress on the Trust Center (§4.6.3.4):
     /// the alternate key's sequence number and when to switch to it.
     pub(crate) key_update: Option<(KeySequenceNumber, Instant)>,
+    /// A factory reset waits for the leave to complete before clearing
+    /// persistent data (BDB 3.1 §13.2).
+    pub(crate) factory_reset_pending: bool,
     /// The key being awaited completes a rejoin (not an initial join).
     pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
@@ -705,6 +708,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             beacon_survey: None,
             swap_out_pending: false,
             key_update: None,
+            factory_reset_pending: false,
             awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,

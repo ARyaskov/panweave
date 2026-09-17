@@ -464,6 +464,11 @@ Keep a Changelog; versions follow SemVer.
 
 ### Changed
 
+* A factory reset keeps the outgoing NWK frame counter record (BDB 3.1
+  §13) and `Stack::restore` reloads it even on a factory-new device; the
+  touchlink Reset To Factory New clears persistent data only once the
+  leave has completed; `Stack::erase_persisted` also clears the Green
+  Power proxy table and Zigbee Direct past keys.
 * Frames for sleepy children are secured when the child polls: the NWK
   registers a deferred indirect transaction
   (`NwkAction::MacDataDeferred`, `MacService::data_request_deferred`),

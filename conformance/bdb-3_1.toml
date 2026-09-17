@@ -233,10 +233,10 @@ id = "PW-BDB-RESET-001"
 section = "§13.1–§13.3"
 summary = "Reset to factory new via Basic cluster Reset to Factory Defaults, touchlink reset, or local action: leave network, clear persistent data"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::persist"
-tests = ["factory_reset_erases_network_state"]
-notes = "Stack::erase_persisted clears all network state records; the Basic cluster Reset to Factory Defaults command and touchlink reset are not wired."
+tests = ["factory_reset_erases_network_state", "reset_to_factory_defaults_restores_attributes_and_reporting", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another"]
+notes = "Basic cluster Reset To Factory Defaults resets the attributes of every cluster instance (reporting configuration included) and nothing else (section 13.1); the touchlink Reset To Factory New Request makes the target leave and, once the leave completed, clear its persistent data (section 13.2); Stack::erase_persisted is the local action (section 13.3). Every path keeps the outgoing NWK frame counter record, which Stack::restore reloads even on a factory-new device."
 [[requirement]]
 id = "PW-BDB-RESET-002"
 section = "§13.4, §13.5"

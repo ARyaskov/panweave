@@ -244,16 +244,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Erases all persisted network state (factory reset).
     pub fn erase_persisted(&mut self) -> Result<(), StorageError> {
+        // BDB 3.1 §13: every reset preserves the single outgoing NWK
+        // frame counter (`Kind::NwkFrameCounter`), so a later join never
+        // reuses counter values under a key the network still knows.
         for k in [
             Kind::Nib,
             Kind::Children,
             Kind::NetworkKeys,
             Kind::LinkKey,
             Kind::ApsFrameCounter,
-            Kind::NwkFrameCounter,
             Kind::Aib,
             Kind::Bindings,
             Kind::Groups,
+            Kind::GreenPower,
+            Kind::DirectPastKeys,
         ] {
             self.storage.erase_kind(k)?;
         }
@@ -266,6 +270,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// last persisted reservation; the caller then calls
     /// [`Stack::resume`].
     pub fn restore(&mut self) -> Result<Restored, StorageError> {
+        // The outgoing NWK frame counter outlives a factory reset (BDB
+        // 3.1 §13): continue past the last reservation either way.
+        let mut fc = [0u8; 4];
+        if self
+            .storage
+            .load(Key::single(Kind::NwkFrameCounter), &mut fc)?
+            .is_some()
+        {
+            self.nwk
+                .security
+                .restore_outgoing_counter(u32::from_le_bytes(fc));
+        }
         let Some(nib) = record(&mut self.storage, Key::single(Kind::Nib))? else {
             return Ok(Restored::FactoryNew);
         };
@@ -323,16 +339,6 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         // Frame counter: continue after the last persisted reservation
         // (never reuse a value, §4.3.4).
-        let mut fc = [0u8; 4];
-        if self
-            .storage
-            .load(Key::single(Kind::NwkFrameCounter), &mut fc)?
-            .is_some()
-        {
-            self.nwk
-                .security
-                .restore_outgoing_counter(u32::from_le_bytes(fc));
-        }
         let mut partners: Vec<u64, 8> = Vec::new();
         if let Some(aib) = record(&mut self.storage, Key::single(Kind::Aib))? {
             let mut r = Reader::new(&aib);

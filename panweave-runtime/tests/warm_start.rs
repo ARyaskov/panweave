@@ -281,10 +281,14 @@ fn factory_reset_erases_network_state() {
             .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
     }));
     assert!(!sim.stack(c).storage.is_empty());
+    let counter_before = sim.stack(c).nwk.security.keys.outgoing.peek();
     sim.stack(c).erase_persisted().unwrap();
-    assert!(sim.stack(c).storage.is_empty());
+    // Everything but the outgoing NWK frame counter is gone (BDB 3.1
+    // §13), and a fresh stack continues past it.
     let storage = sim.stack(c).storage.clone();
+    assert_eq!(storage.len(), 1);
     let mut fresh = build(LogicalDeviceType::Coordinator, COORD_IEEE, 5, storage);
     assert_eq!(fresh.restore().unwrap(), Restored::FactoryNew);
+    assert!(fresh.nwk.security.keys.outgoing.peek() >= counter_before);
     assert!(fresh.resume().is_err());
 }

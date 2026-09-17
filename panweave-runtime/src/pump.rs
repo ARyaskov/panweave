@@ -674,6 +674,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.stop_keep_alive();
                         self.fast_poll_mode = None;
                         self.push_event(StackEvent::Left { rejoin });
+                        self.finish_factory_reset();
                         self.apply_pending_startup();
                         self.apply_pending_touchlink();
                     }
@@ -695,6 +696,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             DeviceState::NotJoined,
                         );
                         self.push_event(StackEvent::Left { rejoin: false });
+                        self.finish_factory_reset();
                         self.apply_pending_startup();
                         self.apply_pending_touchlink();
                     }
