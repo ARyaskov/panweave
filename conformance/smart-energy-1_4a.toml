@@ -101,8 +101,8 @@ summary = "Price cluster"
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::clusters::price"
-tests = ["publish_price_codec_and_table"]
-notes = "Publish Price with every optional field (SE 1.0 short frames accepted), Get Current Price, Get Scheduled Prices and Price Acknowledgement codecs, and a client-side PriceTable applying the overlap rules of D.4.2.4.1 (newer Issuer Event ID wins; an active price cut by a later one ends when it starts). Block periods, conversion factor, calorific value, tariff information, price matrix, block thresholds, CO2, tier labels, billing periods, consolidated bills, CPP events, credit payments, currency conversion and tariff cancellation are not implemented (TODO(PW-SE-PRICE))."
+tests = ["codecs_round_trip", "scheduled_store_keeps_current_and_next", "tariff_store_assembles_and_cancels"]
+notes = "Publish Price with every optional field (SE 1.0 short frames accepted), Get Current Price, Get Scheduled Prices and Price Acknowledgement codecs, and a client-side PriceTable applying the overlap rules of D.4.2.4.1; clusters::price::extended adds the codecs of every optional command (block periods, conversion factor, calorific value, tariff information, price matrix and block thresholds with fragmentation, CO2 value, tier labels, billing periods, consolidated bills, CPP events and responses, credit payments, currency conversion, cancel tariff, the Get* requests), a generic Scheduled store keeping the current and next instance per tariff type with the 0xFFFFFFFF cancellation, newer-issuer-event and Get* ordering rules, and a TariffStore assembling a tariff from its fragmented parts with price lookup, block-for-consumption and CancelTariff. Server-side answering of the Get* requests beyond Scheduled::scheduled, the Price client attributes (provisional) and binding to a ZCL endpoint dispatcher are not done (TODO(PW-SE-PRICE-DISPATCH))."
 [[requirement]]
 id = "PW-SE-CL-004"
 section = "Annex D.5"

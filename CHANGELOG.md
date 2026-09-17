@@ -337,6 +337,15 @@ Keep a Changelog; versions follow SemVer.
   message store answering Get Last Message, gathering Message
   Confirmations and holding a pending Cancel All Messages for
   GetMessageCancellation; `ImplementationTime` codec.
+* `panweave-smart-energy::clusters::price::extended`: every optional
+  Price command of Tables D-95 / D-96 (block periods, conversion factor,
+  calorific value, tariff information, fragmented price matrix and block
+  thresholds, CO2, tier labels, billing periods, consolidated bills, CPP
+  events, credit payments, currency conversion, cancel tariff and the
+  Get* requests), a generic `Scheduled` current-and-next store with the
+  cancellation and ordering rules, and a client `TariffStore` assembling
+  tariffs with price and block lookup; `price::FULL_SERVER_DEF` /
+  `FULL_CLIENT_DEF` declare the full command set.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

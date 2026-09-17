@@ -9,6 +9,8 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId};
 use panweave_zcl::cluster::ClusterDef;
 
+pub mod extended;
+
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x0700);
 
@@ -43,6 +45,23 @@ pub const SERVER_DEF: ClusterDef = ClusterDef {
         CMD_PRICE_ACKNOWLEDGEMENT,
     ],
     generated: &[CMD_PUBLISH_PRICE],
+};
+
+/// Server cluster definition with every optional command of Tables
+/// D-95 / D-96 (see [`extended`]).
+pub const FULL_SERVER_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 1,
+    received: extended::RECEIVED,
+    generated: extended::GENERATED,
+};
+
+/// Client cluster definition with every optional command.
+pub const FULL_CLIENT_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 1,
+    received: extended::GENERATED,
+    generated: extended::RECEIVED,
 };
 
 /// Longest Rate Label (12 characters).
