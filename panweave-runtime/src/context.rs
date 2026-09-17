@@ -5,7 +5,7 @@ use panweave_aps::layer::NwkView;
 use panweave_aps::layer::RelayInfo;
 use panweave_aps::tables::BindingEntry;
 use panweave_codec::Writer;
-use panweave_codec::tlv::Tlv;
+use panweave_codec::tlv::{Tlv, TlvSet};
 use panweave_nwk::neighbor::Relationship;
 use panweave_nwk::routing::RouteStatus;
 use panweave_nwk::tlv::tag as tlv_tag;
@@ -253,9 +253,14 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
         }
     }
 
-    fn set_beacon_appendix(&mut self, _tlvs: &[u8]) {
-        // TODO(PW-NWK-BEACON-APPENDIX): store nwkNetworkWideBeaconAppendixTLVs
-        // from Mgmt_Permit_Joining_req. Spec: R23.2 §2.4.3.3.7.2.
+    fn set_beacon_appendix(&mut self, tlvs: &[u8]) {
+        // §2.4.3.3.7.2: the Beacon Appendix Encapsulation Global TLV sets
+        // nwkNetworkWideBeaconAppendixTLVs in its entirety.
+        if let Ok(set) = TlvSet::validate(tlvs, |_| false)
+            && let Some(inner) = set.value(tlv_tag::BEACON_APPENDIX_ENCAPSULATION)
+        {
+            self.nwk.set_network_wide_beacon_appendix(inner);
+        }
     }
 
     fn leave(&mut self, device: ExtendedAddress, remove_children: bool, rejoin: bool) -> ZdpStatus {

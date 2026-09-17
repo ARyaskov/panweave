@@ -44,7 +44,7 @@ use crate::broadcast::BroadcastTransactionTable;
 use crate::command::NetworkStatusCode;
 use crate::discovery::DiscoveryTable;
 use crate::neighbor::NeighborTable;
-use crate::nib::Nib;
+use crate::nib::{Nib, constants};
 use crate::routing::{RouteDiscoveryTable, RoutingTable, SourceRouteTable};
 use crate::security::NwkSecurity;
 
@@ -356,6 +356,14 @@ pub enum NwkEvent {
     ParentInformationUpdated,
     /// The active network key sequence changed (Switch Key applied).
     KeySwitched,
+    /// NLME-ED-SCAN.confirm: energy levels indexed by channel number
+    /// for the channels of `channels` (Mgmt_NWK_Update_req processing).
+    EnergyScanConfirm {
+        /// Channels scanned.
+        channels: ChannelMask,
+        /// Energy per channel (index = channel number).
+        energy: [u8; 27],
+    },
 }
 
 /// Requests accepted by [`Nwk::request`]; each also has a direct method.
@@ -457,6 +465,9 @@ pub(crate) enum ScanPurpose {
     FormationActive,
     /// Active scan to verify a PAN ID choice / detect conflicts.
     PanIdConflict,
+    /// NLME-ED-SCAN.request on behalf of the network manager
+    /// (Mgmt_NWK_Update_req, §2.4.3.3.9.2 step 5).
+    EnergyDetect,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -519,6 +530,9 @@ pub struct Nwk<
     pub(crate) formation: Option<FormationState>,
     pub(crate) join: Option<join::JoinState>,
     pub(crate) permit_until: Option<Instant>,
+    /// `nwkNetworkWideBeaconAppendixTLVs`: global TLVs the Trust Center
+    /// set through Mgmt_Permit_Joining_req (§2.4.3.3.7.2); not persisted.
+    pub(crate) network_wide_beacon_appendix: Vec<u8, { constants::MAX_BEACON_APPENDIX }>,
     pub(crate) link_status_due: Option<Instant>,
     pub(crate) child_age_last: Instant,
     pub(crate) now: Instant,
@@ -605,6 +619,7 @@ impl<
             formation: None,
             join: None,
             permit_until: None,
+            network_wide_beacon_appendix: Vec::new(),
             link_status_due: None,
             child_age_last: Instant::ZERO,
             now: Instant::ZERO,

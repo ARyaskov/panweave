@@ -447,8 +447,8 @@ summary = "Beacon payload: protocol id, stack profile, protocol version, router/
 level = "mandatory"
 status = "implemented"
 module = "panweave-nwk::beacon"
-tests = ["beacon_payload_round_trip_and_bit_layout"]
-
+tests = ["beacon_payload_round_trip_and_bit_layout", "trust_center_sets_the_network_wide_beacon_appendix"]
+notes = "Beacon appendix built per §3.6.8.2: network-wide TLVs first, then the device's Router Information unless already set network-wide; TLVs that do not fit are omitted whole."
 [[requirement]]
 id = "PW-R23-NWK-061"
 section = "§3.6.9"
@@ -797,19 +797,19 @@ id = "PW-R23-ZDP-013"
 section = "§2.4.3.3.7, §2.4.4.3.7"
 summary = "Mgmt_Permit_Joining_req/rsp with duration and TC significance; broadcast to routers"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::layer"
-tests = ["management_frames", "management_requests"]
-notes = "Request/response, 0xff -> 0xfe and the Trust Center beacon appendix TLV hand-off are implemented; the Trust Center policy check of §4.7.3.4 is applied by the runtime in ZdoContext::permit_joining."
+tests = ["management_frames", "management_requests", "trust_center_sets_the_network_wide_beacon_appendix"]
+notes = "Trust Center policy applied for remote requests (§4.7.3.4); a Trust Center's request carries the Beacon Appendix Encapsulation with Supported Key Negotiation Methods and Fragmentation Parameters, and receiving routers replace nwkNetworkWideBeaconAppendixTLVs with it (§2.4.3.3.7.2)."
 [[requirement]]
 id = "PW-R23-ZDP-014"
 section = "§2.4.3.3.9, §2.4.4.3.9"
 summary = "Mgmt_NWK_Update_req/notify: energy scan request, channel change, network manager change, update id; energy scan results and counters"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-zdo::layer"
-tests = ["management_frames", "management_requests"]
-notes = "Frame codecs and the server-side event are implemented; energy scan execution, channel change (nwkUpdateId) and attribute updates are performed by the runtime, which replies with Zdo::nwk_update_notify."
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["network_manager_energy_scan_and_channel_change"]
+notes = "Energy scan (ScanDuration 0–5, unicast only, ScanCount repeats) answered with Mgmt_NWK_Update_notify carrying per-channel energy and the NIB transmission counters; channel change (0xfe) honours nwkNextChannelChange, single supported channel and nwkUpdateId; 0xff updates apsChannelMaskList and nwkManagerAddr. Mgmt_NWK_Enhanced_Update_req answers NOT_SUPPORTED."
 [[requirement]]
 id = "PW-R23-ZDP-015"
 section = "§2.4.3.3.10, §2.4.3.3.11, §2.4.3.3.12"

@@ -460,6 +460,7 @@ impl<
                 self.on_unicast_delivered(entry);
             }
             TxStatus::NoAck | TxStatus::ChannelAccessFailure | TxStatus::RadioError => {
+                self.nib.tx_failures = self.nib.tx_failures.saturating_add(1);
                 if let Some(n) = self.neighbors.by_short_mut(entry.next_hop) {
                     n.transmit_failure = n.transmit_failure.saturating_add(1);
                 }

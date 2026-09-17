@@ -271,6 +271,18 @@ pub(crate) enum Phase {
     Operating,
 }
 
+/// An energy scan requested by the network manager
+/// (Mgmt_NWK_Update_req, §2.4.3.3.9.2 step 5).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EnergyScanRequest {
+    pub src: ShortAddress,
+    pub seq: TransactionSequence,
+    pub channels: ChannelMask,
+    pub duration: u8,
+    /// Scans still to run after the current one (ScanCount).
+    pub remaining: u8,
+}
+
 /// An outstanding APS frame counter challenge (§4.6.3.8.1).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Challenge {
@@ -316,6 +328,7 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// Outstanding APS frame counter challenge (`apsChallengeTargetEui64`,
     /// `apsChallengeValue`, `apsChallengePeriodRemainingSeconds`).
     pub(crate) challenge: Option<Challenge>,
+    pub(crate) energy_scan: Option<EnergyScanRequest>,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -398,6 +411,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             fast_polls_left: 0,
             dlk: crate::dlk::DlkState::default(),
             challenge: None,
+            energy_scan: None,
             dropped_events: 0,
         }
     }
@@ -542,10 +556,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// a network, §8.2 / R23.2 §2.4.3.3.7).
     pub fn permit_join_network(&mut self, seconds: u8) -> Result<(), NwkStatus> {
         self.permit_join(seconds)?;
+        let mut tlvs = [0u8; 40];
+        let n = self.permit_joining_tlvs(&mut tlvs);
         let req = panweave_zdo::zdp::MgmtPermitJoiningReq {
             duration: if seconds == 0xff { 0xfe } else { seconds },
             tc_significance: true,
-            tlvs: &[],
+            tlvs: tlvs.get(..n).unwrap_or(&[]),
         };
         self.zdo
             .send_unsolicited(

@@ -177,6 +177,70 @@ impl<
         Ok(())
     }
 
+    /// Sets `nwkNetworkWideBeaconAppendixTLVs` from the Trust Center's
+    /// Beacon Appendix Encapsulation (§2.4.3.3.7.2): replaces the whole
+    /// value, keeps only well-formed global TLVs that fit the beacon.
+    pub fn set_network_wide_beacon_appendix(&mut self, tlvs: &[u8]) {
+        self.network_wide_beacon_appendix.clear();
+        if let Ok(set) = TlvSet::validate(tlvs, |_| false) {
+            let mut buf = [0u8; constants::MAX_BEACON_APPENDIX];
+            let mut w = panweave_codec::Writer::new(&mut buf);
+            for t in set.iter() {
+                if !panweave_codec::tlv::is_global_tag(t.tag) {
+                    continue;
+                }
+                if panweave_codec::tlv::write_tlv(&mut w, t.tag, t.value).is_err() {
+                    break;
+                }
+            }
+            let n = w.position();
+            let _ = self
+                .network_wide_beacon_appendix
+                .extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        }
+        self.update_beacon_payload();
+    }
+
+    /// NLME-ED-SCAN.request: an energy detect scan over `channels`
+    /// (§3.2.2.5); completes with [`NwkEvent::EnergyScanConfirm`].
+    pub fn energy_scan(&mut self, channels: ChannelMask, duration: u8) -> Result<(), NwkError> {
+        if self.scan.is_some() {
+            return Err(NwkError::Busy);
+        }
+        if channels.is_empty() || duration > 5 {
+            return Err(NwkError::InvalidParameter);
+        }
+        self.scan = Some(ScanState {
+            purpose: ScanPurpose::EnergyDetect,
+            channels,
+            duration,
+            only_permit_join: false,
+        });
+        self.push_action(NwkAction::MacScan {
+            kind: ScanKind::Energy,
+            channels,
+            duration,
+        });
+        Ok(())
+    }
+
+    /// Changes the logical channel on the network manager's instruction
+    /// (Mgmt_NWK_Update_req with ScanDuration 0xfe, §2.4.3.3.9.2 step 3):
+    /// records `update_id`, switches the MAC and persists the NIB.
+    pub fn change_channel(&mut self, channel: Channel, update_id: u8) {
+        self.nib.channel = channel;
+        self.nib.update_id = update_id;
+        self.nib.next_channel_change = ChannelMask::EMPTY;
+        self.push_action(NwkAction::MacSetChannel {
+            page: self.nib.channel_page,
+            channel,
+        });
+        if self.nib.is_router_or_coordinator() {
+            self.update_beacon_payload();
+        }
+        self.push_action(NwkAction::Persist);
+    }
+
     /// MLME-BEACON-NOTIFY: a beacon received during a scan (or during
     /// normal operation, for PAN ID conflict detection).
     pub fn on_mac_beacon(
@@ -262,7 +326,7 @@ impl<
                     self.report_pan_id_conflict(src_pan);
                 }
             }
-            Some(ScanPurpose::FormationEnergy) | None => {
+            Some(ScanPurpose::FormationEnergy | ScanPurpose::EnergyDetect) | None => {
                 // Operating: PAN ID conflict detection (§3.6.1.13.1).
                 if self.nib.joined
                     && src_pan == self.nib.pan_id
@@ -326,6 +390,12 @@ impl<
             (ScanPurpose::FormationActive, ScanKind::Active) => self.finish_formation(),
             (ScanPurpose::PanIdConflict, ScanKind::Active) => {
                 self.formation = None;
+            }
+            (ScanPurpose::EnergyDetect, ScanKind::Energy) => {
+                self.push_event(NwkEvent::EnergyScanConfirm {
+                    channels: scan.channels,
+                    energy: *energy,
+                });
             }
             _ => {}
         }
@@ -472,8 +542,15 @@ impl<
             && self.neighbors.len() < self.neighbors.capacity();
         let end_device_capacity = self.neighbors.child_count() < usize::from(self.nib.max_children)
             && self.neighbors.len() < self.neighbors.capacity();
-        let mut appendix = [0u8; 8];
-        let appendix_len = if self.config.r23_beacon_appendix {
+        // §3.6.8.2 steps 3–4: network-wide TLVs first, then the device's
+        // own TLVs whose tags were not already set network-wide.
+        let mut appendix = [0u8; constants::MAX_BEACON_APPENDIX];
+        let mut w = panweave_codec::Writer::new(&mut appendix);
+        let _ = w.bytes(&self.network_wide_beacon_appendix);
+        let has_router_info = TlvSet::validate(&self.network_wide_beacon_appendix, |_| false)
+            .ok()
+            .is_some_and(|set| set.find(tlv::tag::ROUTER_INFORMATION).is_some());
+        let appendix_len = if self.config.r23_beacon_appendix && !has_router_info {
             let mut bits = 0u16;
             if self.nib.hub_connectivity {
                 bits |= RouterInformation::HUB_CONNECTIVITY;
@@ -493,11 +570,10 @@ impl<
             if self.config.keepalive_methods & 0x02 != 0 {
                 bits |= RouterInformation::END_DEVICE_KEEPALIVE;
             }
-            let mut w = panweave_codec::Writer::new(&mut appendix);
             let _ = RouterInformation(bits).write(&mut w);
             w.position()
         } else {
-            0
+            w.position()
         };
         let payload = BeaconPayload::new(
             self.nib.extended_pan_id,

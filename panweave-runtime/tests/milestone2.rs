@@ -418,3 +418,187 @@ fn trust_center_removes_a_device_through_its_parent() {
     )));
     assert!(sim.stack(r).nwk.neighbors.by_extended(SED_IEEE).is_none());
 }
+
+/// Mgmt_NWK_Update_req (R23.2 §2.4.3.3.9): an energy scan is reported
+/// with Mgmt_NWK_Update_notify, a channel change moves the router, the
+/// invalid variants are refused.
+#[test]
+fn network_manager_energy_scan_and_channel_change() {
+    use panweave_codec::Decode;
+    use panweave_types::{Channel, ChannelMask};
+    use panweave_zdo::cluster;
+    use panweave_zdo::zdp::{MgmtNwkUpdateNotify, MgmtNwkUpdateReq, ZdpStatus};
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "coord",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 31, false),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "router",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 32, false),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(r)).is_some()));
+    sim.run_for(Duration::from_secs(3));
+    sim.take_events(c);
+    let router_short = sim.stack(r).short_address();
+    let notify = |sim: &Simulator| {
+        sim.events(c).iter().find_map(|e| match e {
+            StackEvent::Zdp(z) if z.cluster == ClusterId(0x8038) => Some(z.data.clone()),
+            _ => None,
+        })
+    };
+
+    // Energy scan over three channels.
+    let mask = ChannelMask::EMPTY
+        .with(Channel::new(11).unwrap())
+        .with(Channel::new(15).unwrap())
+        .with(Channel::new(20).unwrap());
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_UPDATE_REQ,
+            &MgmtNwkUpdateReq {
+                scan_channels: mask,
+                scan_duration: 2,
+                scan_count: Some(1),
+                update_id: None,
+                manager: None,
+            },
+        )
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(20), |x| notify(x).is_some()));
+    let data = notify(&sim).unwrap();
+    let n = MgmtNwkUpdateNotify::decode_exact(&data).unwrap();
+    assert_eq!(n.status, ZdpStatus::Success);
+    assert_eq!(n.scanned_channels.channels_only(), mask);
+    assert_eq!(n.energy.len(), 3);
+    assert!(n.total_transmissions > 0);
+    sim.take_events(c);
+
+    // A scan over unsupported channels is INV_REQUESTTYPE.
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_UPDATE_REQ,
+            &MgmtNwkUpdateReq {
+                scan_channels: ChannelMask(0x0000_0007),
+                scan_duration: 2,
+                scan_count: Some(1),
+                update_id: None,
+                manager: None,
+            },
+        )
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(10), |x| notify(x).is_some()));
+    let data = notify(&sim).unwrap();
+    let n = MgmtNwkUpdateNotify::decode_exact(&data).unwrap();
+    assert_eq!(n.status, ZdpStatus::InvalidRequestType);
+    sim.take_events(c);
+
+    // Channel change: the coordinator moves first, then commands the router
+    // (broadcast to rx-on devices), which follows and stays reachable.
+    let old = sim.stack(r).nwk.nib.channel;
+    let target = if old == Channel::new(25).unwrap() {
+        Channel::new(20).unwrap()
+    } else {
+        Channel::new(25).unwrap()
+    };
+    let update_id = sim.stack(c).nwk.nib.update_id.wrapping_add(1);
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_UPDATE_REQ,
+            &MgmtNwkUpdateReq {
+                scan_channels: ChannelMask::EMPTY.with(target),
+                scan_duration: 0xfe,
+                scan_count: None,
+                update_id: Some(update_id),
+                manager: None,
+            },
+        )
+        .unwrap();
+    sim.run_for(Duration::from_secs(1));
+    sim.stack(c).nwk.change_channel(target, update_id);
+    sim.stack(c).flush();
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.node(r).stack.nwk.nib.channel == target
+    }));
+    assert_eq!(sim.stack(r).nwk.nib.update_id, update_id);
+    assert_eq!(sim.stack(c).nwk.nib.channel, target);
+    // Traffic still flows on the new channel.
+    sim.take_events(c);
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_UPDATE_REQ,
+            &MgmtNwkUpdateReq {
+                scan_channels: ChannelMask::EMPTY.with(target),
+                scan_duration: 1,
+                scan_count: Some(1),
+                update_id: None,
+                manager: None,
+            },
+        )
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(20), |x| notify(x).is_some()));
+}
+
+/// The Trust Center's Mgmt_Permit_Joining_req carries the Beacon Appendix
+/// Encapsulation; routers advertise it network-wide in their beacons
+/// (R23.2 §2.4.3.3.7.2, §3.6.8.2).
+#[test]
+fn trust_center_sets_the_network_wide_beacon_appendix() {
+    use panweave_codec::tlv::TlvSet;
+    use panweave_nwk::beacon::BeaconPayload;
+    use panweave_nwk::tlv::{GlobalTlvs, tag};
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "coord",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 41, false),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "router",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 42, false),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(r)).is_some()));
+    sim.run_for(Duration::from_secs(3));
+    // Opening the network again reaches the joined router.
+    sim.stack(c).permit_join_network(60).unwrap();
+    sim.run_for(Duration::from_secs(2));
+    // The router's beacon payload now carries the Trust Center's TLVs
+    // (Supported Key Negotiation Methods from the Trust Center's address)
+    // ahead of its own Router Information.
+    let payload = sim.stack(r).mac.pib.beacon_payload.to_vec();
+    let beacon = Decode::decode_exact(&payload)
+        .map(|b: BeaconPayload<'_>| b.appendix.to_vec())
+        .unwrap();
+    let set = TlvSet::validate(&beacon, |_| false).unwrap();
+    let methods = set.key_negotiation_methods().expect("network-wide TLV");
+    assert_eq!(methods.source, Some(COORD_IEEE));
+    assert!(set.find(tag::FRAGMENTATION_PARAMETERS).is_some());
+    assert!(set.router_information().is_some());
+}

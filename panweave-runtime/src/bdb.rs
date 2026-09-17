@@ -288,10 +288,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Broadcasts Mgmt_Permit_Joining_req (TC significance set) without
     /// touching the local permit flag (BDB 3.1 §9.7 step 2).
     pub fn broadcast_permit_join(&mut self, seconds: u8) -> Result<(), panweave_zdo::ZdoError> {
+        let mut tlvs = [0u8; 40];
+        let n = self.permit_joining_tlvs(&mut tlvs);
         let req = panweave_zdo::zdp::MgmtPermitJoiningReq {
             duration: if seconds == 0xff { 0xfe } else { seconds },
             tc_significance: true,
-            tlvs: &[],
+            tlvs: tlvs.get(..n).unwrap_or(&[]),
         };
         self.zdo.send_unsolicited(
             ShortAddress::BROADCAST_ROUTERS,
@@ -300,6 +302,38 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         )?;
         self.pump();
         Ok(())
+    }
+
+    /// TLV Data of a Trust Center's Mgmt_Permit_Joining_req
+    /// (§2.4.3.3.7.2): the Beacon Appendix Encapsulation with the
+    /// Supported Key Negotiation Methods and Fragmentation Parameters
+    /// global TLVs. Empty for devices that are not the Trust Center.
+    pub(crate) fn permit_joining_tlvs(&self, out: &mut [u8]) -> usize {
+        if !self.aps.config.is_trust_center {
+            return 0;
+        }
+        let mut w = panweave_codec::Writer::new(out);
+        let ok = panweave_nwk::tlv::write_encapsulation(
+            &mut w,
+            panweave_nwk::tlv::tag::BEACON_APPENDIX_ENCAPSULATION,
+            |w| {
+                panweave_nwk::tlv::SupportedKeyNegotiationMethods {
+                    protocols: self.aps.aib.supported_key_negotiation_methods,
+                    secrets: panweave_nwk::tlv::SupportedKeyNegotiationMethods::SECRET_AUTH_TOKEN
+                        | panweave_nwk::tlv::SupportedKeyNegotiationMethods::SECRET_INSTALL_CODE,
+                    source: Some(self.config.ieee),
+                }
+                .write(w)?;
+                panweave_nwk::tlv::FragmentationParameters {
+                    node: self.nwk.nib.network_address,
+                    options: 0,
+                    max_incoming_transfer_unit: self.aps.aib.max_size_asdu,
+                }
+                .write(w)
+            },
+        )
+        .is_ok();
+        if ok { w.position() } else { 0 }
     }
 
     /// Keeps a sleepy end device polling at the fast rate for `duration`

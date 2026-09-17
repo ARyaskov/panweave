@@ -27,6 +27,7 @@ use panweave_types::{
     ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyType, LogicalDeviceType, NwkStatus,
     ProfileId, ShortAddress,
 };
+use panweave_types::{ChannelMask, TransactionSequence};
 use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
 use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
 use panweave_zdo::security::{
@@ -34,10 +35,13 @@ use panweave_zdo::security::{
     RetrieveAuthenticationTokenRsp, SelectedKeyNegotiationMethod, StartKeyNegotiationRsp,
     StartKeyUpdateReq,
 };
+use panweave_zdo::zdp::{MgmtNwkUpdateNotify, MgmtNwkUpdateReq};
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
-use crate::stack::{Challenge, PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData};
+use crate::stack::{
+    Challenge, EnergyScanRequest, PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData,
+};
 
 /// Largest NWK payload copied out of a MAC frame.
 const NPDU_BUF: usize = 116;
@@ -600,6 +604,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         let _ = self.join(crate::JoinMode::SecuredRejoin);
                     }
                 }
+                NwkEvent::EnergyScanConfirm { channels, energy } => {
+                    self.on_energy_scan_confirm(channels, &energy);
+                }
                 NwkEvent::StartRouterConfirm { .. }
                 | NwkEvent::RouteDiscoveryConfirm { .. }
                 | NwkEvent::PermitJoining(_)
@@ -889,6 +896,118 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             secret,
             deadline,
         });
+    }
+
+    /// Mgmt_NWK_Update_req server processing (§2.4.3.3.9.2): channel
+    /// change (0xfe), channel mask / network manager update (0xff) or an
+    /// energy scan (0x00–0x05) answered with Mgmt_NWK_Update_notify.
+    fn on_nwk_update_request(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+        req: &MgmtNwkUpdateReq,
+        broadcast: bool,
+    ) {
+        let channels = req.scan_channels.channels_only();
+        let supported = channels.and(ChannelMask::ALL_2_4GHZ);
+        let error = |me: &mut Self, status: ZdpStatus| {
+            // Error Response procedure (§2.4.3.3.9.3).
+            if !broadcast {
+                let notify = MgmtNwkUpdateNotify {
+                    status,
+                    scanned_channels: req.scan_channels,
+                    total_transmissions: 0,
+                    transmission_failures: 0,
+                    energy: &[],
+                };
+                me.zdo.nwk_update_notify(src, seq, &notify);
+            }
+        };
+        match req.scan_duration {
+            0xfe => {
+                let next = self.nwk.nib.next_channel_change.channels_only();
+                if !next.is_empty() && next != channels {
+                    error(self, ZdpStatus::NotAuthorized);
+                    return;
+                }
+                if channels.len() != 1 {
+                    error(self, ZdpStatus::InvalidRequestType);
+                    return;
+                }
+                let Some(channel) = supported.first() else {
+                    error(self, ZdpStatus::InvalidRequestType);
+                    return;
+                };
+                let update_id = req.update_id.unwrap_or(self.nwk.nib.update_id);
+                self.nwk.change_channel(channel, update_id);
+            }
+            0xff => {
+                let Some(manager) = req.manager else {
+                    error(self, ZdpStatus::InvalidRequestType);
+                    return;
+                };
+                // On a centralized network the network manager is the
+                // coordinator (step 4a).
+                if !self.aps.aib.is_distributed() && manager != ShortAddress::COORDINATOR {
+                    return;
+                }
+                self.aps.aib.channel_mask = req.scan_channels;
+                self.nwk.nib.manager_addr = manager;
+                let _ = self.persist_nib();
+            }
+            0x00..=0x05 => {
+                if broadcast {
+                    return;
+                }
+                if supported.is_empty() {
+                    error(self, ZdpStatus::InvalidRequestType);
+                    return;
+                }
+                let count = req.scan_count.unwrap_or(1).max(1);
+                if self.nwk.energy_scan(supported, req.scan_duration).is_err() {
+                    error(self, ZdpStatus::TemporaryFailure);
+                    return;
+                }
+                self.energy_scan = Some(EnergyScanRequest {
+                    src,
+                    seq,
+                    channels: supported,
+                    duration: req.scan_duration,
+                    remaining: count - 1,
+                });
+            }
+            _ => error(self, ZdpStatus::InvalidRequestType),
+        }
+    }
+
+    /// NLME-ED-SCAN.confirm for a Mgmt_NWK_Update_req: report the energy
+    /// values and run the remaining scans of the ScanCount.
+    fn on_energy_scan_confirm(&mut self, channels: ChannelMask, energy: &[u8; 27]) {
+        let Some(mut pending) = self.energy_scan.take() else {
+            return;
+        };
+        let mut values: Vec<u8, 27> = Vec::new();
+        for c in channels.iter() {
+            let _ = values.push(*energy.get(usize::from(c.raw())).unwrap_or(&0xff));
+        }
+        let notify = MgmtNwkUpdateNotify {
+            status: ZdpStatus::Success,
+            scanned_channels: channels,
+            total_transmissions: self.nwk.nib.tx_total,
+            transmission_failures: self.nwk.nib.tx_failures,
+            energy: &values,
+        };
+        self.zdo
+            .nwk_update_notify(pending.src, pending.seq, &notify);
+        if pending.remaining > 0
+            && self
+                .nwk
+                .energy_scan(pending.channels, pending.duration)
+                .is_ok()
+        {
+            pending.remaining -= 1;
+            self.energy_scan = Some(pending);
+        }
     }
 
     /// A child left this router (§4.6.3.6.2): a router on a centralized
@@ -1290,17 +1409,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZdoEvent::Timeout { seq, cluster, dst } => {
                     self.push_event(StackEvent::ZdpTimeout { seq, cluster, dst });
                 }
-                ZdoEvent::NwkUpdateRequest { src, seq, req, .. } => {
-                    // TODO(PW-ZDP-014): run the energy scan / channel change.
-                    // Spec: R23.2 §2.4.3.3.9.2. Report NOT_SUPPORTED for now.
-                    let notify = panweave_zdo::zdp::MgmtNwkUpdateNotify {
-                        status: ZdpStatus::NotSupported,
-                        scanned_channels: req.scan_channels,
-                        total_transmissions: 0,
-                        transmission_failures: 0,
-                        energy: &[],
-                    };
-                    self.zdo.nwk_update_notify(src, seq, &notify);
+                ZdoEvent::NwkUpdateRequest {
+                    src,
+                    seq,
+                    req,
+                    broadcast,
+                } => {
+                    self.on_nwk_update_request(src, seq, &req, broadcast);
                 }
             }
         }
@@ -1374,7 +1489,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         dst: ShortAddress,
         cluster: panweave_types::ClusterId,
         payload: &impl Encode,
-    ) -> Result<panweave_types::TransactionSequence, panweave_zdo::ZdoError> {
+    ) -> Result<TransactionSequence, panweave_zdo::ZdoError> {
         let seq = self.zdo.request(dst, cluster, payload)?;
         self.pump();
         Ok(seq)

@@ -42,6 +42,10 @@ pub mod constants {
     pub const UNICAST_RETRIES: u8 = 3;
     /// `nwkcUnicastRetryDelay`.
     pub const UNICAST_RETRY_DELAY: Duration = Duration::from_millis(50);
+    /// Largest beacon appendix (beacon payload minus the Beacon Info
+    /// field, §3.6.8.2).
+    pub const MAX_BEACON_APPENDIX: usize = 52 - 15;
+
     /// `nwkcMinRouterBootstrapJitter` (500 ms).
     pub const MIN_ROUTER_BOOTSTRAP_JITTER: Duration = Duration::from_millis(500);
     /// `nwkcMaxRouterBootstrapJitter` (1 s).
@@ -139,6 +143,9 @@ pub struct Nib {
     pub routing_sequence_number: u16,
     /// `nwkTxTotal`.
     pub tx_total: u16,
+    /// Transmission failures counted for Mgmt_NWK_Update_notify
+    /// (`TransmissionFailures`).
+    pub tx_failures: u16,
     /// Logical device type of this node.
     pub device_type: LogicalDeviceType,
     /// True once the node is joined and authenticated on a network.
@@ -205,6 +212,7 @@ impl Nib {
             pan_id_conflict_count: 0,
             routing_sequence_number: 0,
             tx_total: 0,
+            tx_failures: 0,
             device_type,
             joined: false,
             authenticated: false,
@@ -258,6 +266,7 @@ impl Nib {
         self.concentrator_radius = 0;
         self.pan_id = PanId::BROADCAST;
         self.tx_total = 0;
+        self.tx_failures = 0;
         self.parent_information = ParentInformation(0);
         self.parent_address = ShortAddress::NO_SHORT_ADDRESS;
         self.parent_ieee = ExtendedAddress::ZERO;
