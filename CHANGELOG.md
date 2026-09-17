@@ -269,6 +269,19 @@ Keep a Changelog; versions follow SemVer.
   `respond` fragmenting the virtual-HAN list (WAIT_FOR_DATA on a version
   match or missing data) and a client `Assembler` collecting fragments
   into a `VirtualHan` before it restricts discovery and binding.
+* `panweave-smart-energy::clusters::sub_ghz`: the Sub-GHz cluster —
+  page 28–31 channel mask attributes with helpers, the Suspend ZCL
+  Messages / Get Suspend ZCL Messages Status codecs and a client
+  `Suspension` holding ZCL traffic for the announced period.
+* `panweave-smart-energy::clusters::device_management`: the Device
+  Management cluster — supplier / tenancy / backhaul / HAN attribute
+  identifiers, the change-control and event-configuration bitmaps,
+  codecs for every command (change of tenancy and supplier, password
+  delivery with a redacted constant-time `Password`, Site ID and CIN
+  updates, event configuration set / get / report with the four "apply
+  by" selectors), a client `EventConfig` table with fragmented reports
+  and a client `Pending` store applying the implementation-time,
+  cancellation (0xFFFFFFFF) and provider-match rules.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

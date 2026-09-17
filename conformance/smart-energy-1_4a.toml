@@ -135,10 +135,10 @@ id = "PW-SE-CL-007"
 section = "Annex D.9, D.10, D.11, D.12, D.13, D.14"
 summary = "Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-smart-energy::clusters::calendar"
-tests = ["codecs_round_trip", "store_resolves_the_day_profile_in_force", "special_day_tables_replace_and_cancel", "log_pages_most_recent_first_and_clears_where_allowed", "manage_event_applies_opt_out_rules", "duty_time_algorithm", "server_fragments_and_client_reassembles"]
-notes = "Calendar (D.9) codecs and client store, Events (D.11) codecs and server log, Energy Management (D.12, provisional) ManageEvent rules and attributes, MDU Pairing (D.13, provisional) codecs with fragmentation and reassembly implemented; Device Management (D.10) and Sub-GHz (D.14) clusters not yet implemented."
+tests = ["codecs_round_trip", "store_resolves_the_day_profile_in_force", "special_day_tables_replace_and_cancel", "log_pages_most_recent_first_and_clears_where_allowed", "manage_event_applies_opt_out_rules", "duty_time_algorithm", "server_fragments_and_client_reassembles", "suspension_holds_traffic_for_the_period", "event_configuration_selectors_and_reports", "pending_changes_apply_and_cancel"]
+notes = "Calendar (D.9), Device Management (D.10), Events (D.11), Energy Management (D.12, provisional), MDU Pairing (D.13, provisional) and Sub-GHz (D.14) codecs with client/server state helpers. Sub-GHz radio operation itself needs a sub-GHz PHY (requires hardware validation); the clusters are not yet wired into runtime endpoint builders (TODO(PW-SE-ENDPOINTS))."
 [[requirement]]
 id = "PW-SE-CL-008"
 section = "Annex A.3, §6.1.6"
