@@ -62,7 +62,7 @@ clusters referenced by BDB), BDB3.1 (device behaviour on top of the stack).
 | §4.8 Distributed networks | Distributed TC address, network key updates, link keys | `panweave-security::distributed` |
 | §4.9 Device operations | Joining device policies, TC address handling, receiving/negotiating link keys, passphrase update | `panweave-security::device` |
 | Annex A, B, C | CCM*, AES-MMO hash, keyed hash (HMAC-AES-MMO), test vectors | `panweave-security::{ccm, mmo, kdf}` |
-| Annex D | MAC/PHY clarifications: status codes, association usage, frame version, beacon payload, backoff timing, enhanced beacons, power control, sub-GHz PHYs | `panweave-mac` (traits) / `panweave-nwk::beacon` |
+| Annex D | MAC/PHY clarifications: status codes, association usage, frame version, beacon payload, backoff timing, enhanced beacons, power control, sub-GHz PHYs | `panweave-mac` (traits) / `panweave-nwk::beacon`; `panweave-mac::ie` (D.11.1 enhanced beacon request / beacon IEs), `panweave-mac::power` (D.11.2 power control table) |
 | Annex E, F | Network manager / frequency agility guidance | `panweave-nwk::network_manager` |
 | Annex G | Inter-PAN transmission (stub NWK header, inter-PAN APS) | `panweave-aps::interpan` |
 | Annex H | GP device frame test vectors | `panweave-green-power` tests |

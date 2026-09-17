@@ -1194,19 +1194,19 @@ id = "PW-R23-MAC-002"
 section = "Annex D.11.1"
 summary = "Enhanced beacon request / enhanced beacon with Zigbee payload IE"
 level = "optional"
-status = "not-implemented"
-module = "panweave-mac::frame::ie"
-tests = []
-
+status = "implemented"
+module = "panweave-mac::ie"
+tests = ["enhanced_beacon_request_of_figure_d1", "rejoin_request_round_trips_and_unknown_ies_are_skipped", "enhanced_beacon_round_trips", "joins_and_rejoins_through_enhanced_beacons", "joining_list_filters_enhanced_beacon_requests"]
+notes = "Payload IE list handling, the MLME nested EB Filter IE and the Zigbee Payload IE (OUI 4A-19-1B) with the Rejoin, TX Power and EB Payload sub-IEs (Table D-5), checked against the Figure D-1 frame. Behind MacServiceConfig::enhanced_beacons and NwkConfig::enhanced_beacon_requests: network discovery sends EBRs (EB Filter IE with Permit Joining On when joining, Rejoin IE when rejoining, TX Power IE at the maximum power); routers answer per the filter, the mibJoiningPolicy / mibJoiningIeeeList mirrored into the MAC PIB and the extended PAN ID of a rejoin (D.11.1.2, D.11.1.3), with an Enhanced Beacon whose EB Payload IE is presented to the NWK as a standard beacon. The percent filter is not applied (every eligible router answers) and the mibIeeeExpiryInterval countdown is not run (the list lives until the Trust Center replaces it)."
 [[requirement]]
 id = "PW-R23-MAC-003"
 section = "Annex D.11.2"
 summary = "MAC power control support"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-mac::power"
-tests = ["adjusts_from_maximum_and_clamps", "unnegotiated_entries_expire_and_are_evicted_first"]
-notes = "The Power Control Information Table (D.11.2.3: per-link TX power and last RSSI, NWK-negotiated flag, 10 s expiry of unconfirmed links, reset on channel change) with configurable limits (D.11.2.4.4) is kept by the MAC service and sets TxOptions::tx_power_dbm for every unicast to a known link (D.11.2.4.5). The TX Power IE in enhanced beacon requests / beacons (D.11.2.2) is not implemented (needs PW-R23-MAC-002)."
+tests = ["adjusts_from_maximum_and_clamps", "unnegotiated_entries_expire_and_are_evicted_first", "joins_and_rejoins_through_enhanced_beacons"]
+notes = "The Power Control Information Table (D.11.2.3: per-link TX power and last RSSI, NWK-negotiated flag set when the join confirms the link, 10 s expiry of unconfirmed links) with configurable limits and OPTRSSI (D.11.2.4.4, D.11.2.4.2) is kept by the MAC service and sets TxOptions::tx_power_dbm for every unicast to a known link (D.11.2.4.5); RSSI accompanies every reception (D.11.2.1.1). The TX Power IE of the EBR/EB exchange negotiates the initial link power (D.11.2.4.2). Beacons and acknowledgements go out at the maximum power (D.11.1.5 second bullet: the highest-known-power-plus-6-dB rule is not applied)."
 [[requirement]]
 id = "PW-R23-MAC-004"
 section = "Annex D.12–D.14"

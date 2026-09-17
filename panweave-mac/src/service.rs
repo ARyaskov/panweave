@@ -35,8 +35,12 @@ use panweave_types::{
 };
 
 use crate::constants::{self, MAX_MAC_FRAME_SIZE};
-use crate::frame::{Beacon, Frame, FrameType, Header, MacAddress, MacCommand};
-use crate::power::{PowerControlTable, PowerLimits};
+use crate::frame::{
+    AddressMode, Beacon, Frame, FrameControl, FrameType, FrameVersion, Header, MacAddress,
+    MacCommand, SuperframeSpec,
+};
+use crate::ie::{EnhancedBeacon, EnhancedBeaconRequest, HEADER_TERMINATION_1};
+use crate::power::{PowerControlTable, PowerEntry, PowerLimits};
 use crate::radio::{RadioCapabilities, RadioConfig, RxMetadata, TxOptions, TxResult};
 
 /// Fixed-capacity buffer holding one MAC frame.
@@ -57,6 +61,23 @@ pub const QUEUE_CAPACITY: usize = 8;
 
 /// Links in the Power Control Information Table (Annex D.11.2.3).
 pub const POWER_ENTRIES: usize = 16;
+
+/// Entries of `mibJoiningIeeeList` mirrored into the PIB (Table D-4).
+pub const JOINING_LIST_CAPACITY: usize = 16;
+
+/// `mibJoiningPolicy` (Table D-4): whether an Enhanced Beacon Request
+/// with the EB Filter IE is answered (D.11.1.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum JoiningPolicy {
+    /// No Enhanced Beacon for joining devices.
+    NoJoin,
+    /// Every joining device gets an Enhanced Beacon.
+    #[default]
+    AllJoin,
+    /// Only devices on `mibJoiningIeeeList` do.
+    IeeeListJoin,
+}
 
 /// Opaque handle identifying a transmission request in its confirm.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -105,6 +126,10 @@ pub struct MacServiceConfig {
     pub poll_wait: Duration,
     /// Transmit power limits for power control (Annex D.11.2.4.4).
     pub power_limits: PowerLimits,
+    /// Answer Enhanced Beacon Requests with Enhanced Beacons (Annex
+    /// D.11.1; optional at 2.4 GHz). Enhanced Beacons are always
+    /// understood on reception.
+    pub enhanced_beacons: bool,
 }
 
 impl Default for MacServiceConfig {
@@ -117,6 +142,7 @@ impl Default for MacServiceConfig {
             transaction_persistence: constants::transaction_persistence_time(),
             poll_wait: Duration::from_millis(100),
             power_limits: PowerLimits::default(),
+            enhanced_beacons: false,
         }
     }
 }
@@ -371,6 +397,9 @@ struct ScanState {
     duration_symbols: u32,
     /// Channel/page to restore afterwards.
     restore: (ChannelPage, Channel),
+    /// Send Enhanced Beacon Requests with this content instead of
+    /// Beacon Requests (Annex D.11.1).
+    enhanced: Option<EnhancedBeaconRequest>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -421,6 +450,11 @@ pub struct Pib {
     pub dsn: u8,
     /// `macBSN`.
     pub bsn: u8,
+    /// `mibJoiningPolicy` (Table D-4), mirrored from the network layer
+    /// that owns the joining list and its expiry.
+    pub joining_policy: JoiningPolicy,
+    /// `mibJoiningIeeeList`.
+    pub joining_ieee_list: Vec<ExtendedAddress, JOINING_LIST_CAPACITY>,
 }
 
 impl Default for Pib {
@@ -440,6 +474,8 @@ impl Default for Pib {
             beacon_payload: Vec::new(),
             dsn: 0,
             bsn: 0,
+            joining_policy: JoiningPolicy::AllJoin,
+            joining_ieee_list: Vec::new(),
         }
     }
 }
@@ -639,10 +675,6 @@ impl MacService {
 
     /// Changes channel (frequency agility).
     pub fn set_channel(&mut self, page: ChannelPage, channel: Channel) {
-        if channel != self.pib.channel || page != self.pib.page {
-            // Maximum power again on a new channel (§3.4.13.1).
-            self.power.reset();
-        }
         self.pib.page = page;
         self.pib.channel = channel;
         self.push_action(MacAction::SetChannel { page, channel });
@@ -985,6 +1017,33 @@ impl MacService {
         channels: ChannelMask,
         duration: u8,
     ) -> Result<(), MacError> {
+        self.scan_with(kind, channels, duration, None)
+    }
+
+    /// An active scan that sends Enhanced Beacon Requests (Annex
+    /// D.11.1): `request` carries the EB Filter IE (joining) or the
+    /// Rejoin IE (rejoining); the TX Power IE is filled with the
+    /// maximum power when absent (D.11.2.4.2).
+    pub fn scan_enhanced(
+        &mut self,
+        channels: ChannelMask,
+        duration: u8,
+        request: EnhancedBeaconRequest,
+    ) -> Result<(), MacError> {
+        let request = EnhancedBeaconRequest {
+            tx_power: request.tx_power.or(Some(self.power.limits.max_dbm)),
+            ..request
+        };
+        self.scan_with(ScanKind::Active, channels, duration, Some(request))
+    }
+
+    fn scan_with(
+        &mut self,
+        kind: ScanKind,
+        channels: ChannelMask,
+        duration: u8,
+        enhanced: Option<EnhancedBeaconRequest>,
+    ) -> Result<(), MacError> {
         if self.scan.is_some() || self.assoc.is_some() {
             return Err(MacError::Busy);
         }
@@ -1005,6 +1064,7 @@ impl MacService {
             dwell,
             duration_symbols,
             restore: (self.pib.page, self.pib.channel),
+            enhanced,
         });
         self.scan_next_channel();
         Ok(())
@@ -1032,6 +1092,9 @@ impl MacService {
                     channel: ch,
                 });
                 match s.kind {
+                    ScanKind::Active if s.enhanced.is_some() => {
+                        self.send_enhanced_beacon_request(s.enhanced.unwrap_or_default());
+                    }
                     ScanKind::Active => {
                         // Beacon request: broadcast PAN, broadcast short dst,
                         // no source address.
@@ -1562,6 +1625,51 @@ impl MacService {
 
         // Frames from our own short address are echoes; ignore.
         match h.frame_control.frame_type() {
+            FrameType::Beacon
+                if h.frame_control.version() == FrameVersion::V2015
+                    && h.frame_control.ie_present() =>
+            {
+                // Enhanced Beacon (Annex D.11.1.2): the standard beacon
+                // information comes from the EB Payload IE; the TX Power
+                // IE sets the power of the link (D.11.2.4.2).
+                let Ok(eb) = EnhancedBeacon::parse(frame.payload) else {
+                    return RxDisposition::Handled;
+                };
+                // Only the device that asked adopts the power (a
+                // bystander did not measure this path).
+                if let (Some(p), Some(e), true) =
+                    (eb.tx_power, h.src.extended(), self.scan.is_some())
+                {
+                    let _ = self.power.set(PowerEntry {
+                        short: eb.sender_short,
+                        extended: e,
+                        tx_power_dbm: p,
+                        last_rssi_dbm: meta.rssi_dbm,
+                        nwk_negotiated: false,
+                        created: self.now,
+                    });
+                }
+                let beacon = Beacon {
+                    superframe: eb.superframe,
+                    pending_short: 0,
+                    pending_extended: 0,
+                    payload: eb.beacon_payload,
+                };
+                let header = Header {
+                    frame_control: h.frame_control,
+                    sequence: h.sequence,
+                    dst_pan: None,
+                    dst: MacAddress::None,
+                    src_pan: h.src_pan,
+                    src: MacAddress::Short(eb.sender_short),
+                    header_ies: &[],
+                };
+                RxDisposition::Beacon {
+                    header,
+                    beacon,
+                    meta,
+                }
+            }
             FrameType::Beacon => {
                 let Ok(beacon) = Beacon::decode_exact(frame.payload) else {
                     return RxDisposition::Handled;
@@ -1609,6 +1717,12 @@ impl MacService {
 
     fn on_command<'a>(&mut self, frame: Frame<'a>, meta: RxMetadata) -> RxDisposition<'a> {
         let h = frame.header;
+        if h.frame_control.version() == FrameVersion::V2015 && h.frame_control.ie_present() {
+            if let Ok(ebr) = EnhancedBeaconRequest::parse(frame.payload) {
+                self.on_enhanced_beacon_request(&ebr, &h, meta);
+            }
+            return RxDisposition::Handled;
+        }
         let Ok(cmd) = MacCommand::decode_exact(frame.payload) else {
             return RxDisposition::Handled;
         };
@@ -1775,6 +1889,145 @@ impl MacService {
                 seq,
                 ack_request: false,
                 options: TxOptions::UNACKED,
+            });
+        }
+    }
+
+    /// Enhanced Beacon Request received (Annex D.11.1.1-D.11.1.3): a
+    /// joining request is answered when joining is permitted, the link
+    /// quality filter passes and `mibJoiningPolicy` admits the device; a
+    /// rejoin request when its extended PAN ID is ours. The percent
+    /// filter is not applied (every eligible device answers). The
+    /// Enhanced Beacon goes out at the power the TX Power IE and RSSI of
+    /// the request call for (D.11.2.4.2), which also seeds the entry of
+    /// the link in the Power Control Information Table.
+    fn on_enhanced_beacon_request(
+        &mut self,
+        ebr: &EnhancedBeaconRequest,
+        h: &Header<'_>,
+        meta: RxMetadata,
+    ) {
+        if !self.config.enhanced_beacons
+            || !self.pib.beacon_capable
+            || self.pib.pan_id == PanId::BROADCAST
+            || self.scan.is_some()
+        {
+            return;
+        }
+        let respond = if let Some(f) = ebr.filter {
+            (!f.permit_joining_on || self.pib.association_permit)
+                && f.link_quality.is_none_or(|q| meta.lqi >= q)
+                && match self.pib.joining_policy {
+                    JoiningPolicy::NoJoin => false,
+                    JoiningPolicy::AllJoin => true,
+                    JoiningPolicy::IeeeListJoin => h
+                        .src
+                        .extended()
+                        .is_some_and(|e| self.pib.joining_ieee_list.contains(&e)),
+                }
+        } else if let Some((epid, _)) = ebr.rejoin {
+            // The extended PAN ID sits at octets 3..11 of the Zigbee
+            // beacon payload (§3.6.7).
+            self.pib
+                .beacon_payload
+                .get(3..11)
+                .and_then(|b| <[u8; 8]>::try_from(b).ok())
+                .is_some_and(|b| ExtendedAddress(u64::from_le_bytes(b)) == epid)
+        } else {
+            false
+        };
+        if !respond {
+            return;
+        }
+        let tx_power = ebr
+            .tx_power
+            .map(|p| self.power.limits.power_for_path(p, meta.rssi_dbm));
+        if let (Some(p), Some(e)) = (tx_power, h.src.extended()) {
+            let _ = self.power.set(PowerEntry {
+                short: ebr
+                    .rejoin
+                    .map_or(ShortAddress::NO_SHORT_ADDRESS, |(_, s)| s),
+                extended: e,
+                tx_power_dbm: p,
+                last_rssi_dbm: meta.rssi_dbm,
+                nwk_negotiated: false,
+                created: self.now,
+            });
+        }
+        self.send_enhanced_beacon(tx_power);
+    }
+
+    /// Sends an Enhanced Beacon (D.11.1.2): frame version 2, no
+    /// destination, extended source with the PAN ID, the beacon
+    /// information in the EB Payload IE and the TX Power IE.
+    fn send_enhanced_beacon(&mut self, tx_power: Option<i8>) {
+        let seq = self.next_bsn();
+        let fc = FrameControl::new(FrameType::Beacon, FrameVersion::V2015)
+            .with_dst_mode(AddressMode::None)
+            .with_src_mode(AddressMode::Extended)
+            .with_ie_present(true);
+        let header = Header {
+            frame_control: fc,
+            sequence: Some(seq),
+            dst_pan: None,
+            dst: MacAddress::None,
+            src_pan: Some(self.pib.pan_id),
+            src: MacAddress::Extended(self.pib.extended_address),
+            header_ies: &HEADER_TERMINATION_1,
+        };
+        let payload = self.pib.beacon_payload.clone();
+        let eb = EnhancedBeacon {
+            beacon_payload: &payload,
+            superframe: SuperframeSpec::non_beacon(
+                self.pib.pan_coordinator,
+                self.pib.association_permit,
+            ),
+            sender_short: self.pib.short_address,
+            tx_power,
+        };
+        if let Ok(frame) = Self::build_frame(&header, &eb) {
+            let _ = self.enqueue(QueuedTx {
+                kind: InFlightKind::Beacon,
+                frame,
+                seq,
+                ack_request: false,
+                options: TxOptions {
+                    tx_power_dbm: tx_power,
+                    ..TxOptions::UNACKED
+                },
+            });
+        }
+    }
+
+    /// Sends an Enhanced Beacon Request (D.11.1.1, Figure D-1): frame
+    /// version 2, broadcast PAN and short destination, extended source
+    /// with PAN ID compression, HT1 then the payload IEs.
+    fn send_enhanced_beacon_request(&mut self, request: EnhancedBeaconRequest) {
+        let seq = self.next_dsn();
+        let fc = FrameControl::new(FrameType::Command, FrameVersion::V2015)
+            .with_dst_mode(AddressMode::Short)
+            .with_src_mode(AddressMode::Extended)
+            .with_pan_id_compression(true)
+            .with_ie_present(true);
+        let header = Header {
+            frame_control: fc,
+            sequence: Some(seq),
+            dst_pan: Some(PanId::BROADCAST),
+            dst: MacAddress::Short(ShortAddress::BROADCAST_ALL),
+            src_pan: None,
+            src: MacAddress::Extended(self.pib.extended_address),
+            header_ies: &HEADER_TERMINATION_1,
+        };
+        if let Ok(frame) = Self::build_frame(&header, &request) {
+            let _ = self.enqueue(QueuedTx {
+                kind: InFlightKind::BeaconRequest,
+                frame,
+                seq,
+                ack_request: false,
+                options: TxOptions {
+                    tx_power_dbm: request.tx_power,
+                    ..TxOptions::UNACKED
+                },
             });
         }
     }

@@ -81,6 +81,9 @@ pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng> {
     pub is_trust_center: bool,
     /// Set when the binding table changed (runtime persists it).
     pub bindings_changed: bool,
+    /// Set when the joining policy or list changed (runtime mirrors it
+    /// into the MAC PIB).
+    pub joining_list_changed: bool,
     /// Key negotiation state.
     pub dlk: &'a mut DlkState,
 }
@@ -275,6 +278,7 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
     ) {
         if let Some(p) = panweave_nwk::joining_list::JoiningPolicy::from_raw(policy) {
             let _ = self.nwk.joining_list.apply(p, total, start_index, entries);
+            self.joining_list_changed = true;
         }
     }
 

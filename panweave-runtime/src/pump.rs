@@ -219,11 +219,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 policy: &config.trust_center_policy,
                 is_trust_center: is_tc,
                 bindings_changed: false,
+                joining_list_changed: false,
                 dlk,
             };
             let out = zdo.on_data(&borrowed, &mut ctx);
-            if ctx.bindings_changed {
+            let (bindings_changed, joining_list_changed) =
+                (ctx.bindings_changed, ctx.joining_list_changed);
+            if bindings_changed {
                 let _ = self.persist_bindings();
+            }
+            if joining_list_changed {
+                self.sync_joining_filter();
             }
             self.zdo.restricted_mode = self.aps.aib.zdo_restricted_mode;
             if let Some((method, via)) = self.dlk.start_requested.take() {
@@ -432,8 +438,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     kind,
                     channels,
                     duration,
+                    enhanced,
                 } => {
-                    if self.mac.scan(kind, channels, duration).is_err() {
+                    let started = match enhanced {
+                        Some(e) => self.mac.scan_enhanced(channels, duration, e),
+                        None => self.mac.scan(kind, channels, duration),
+                    };
+                    if started.is_err() {
                         self.nwk.on_mac_scan_confirm(kind, &[0; 27]);
                     }
                 }
@@ -488,6 +499,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 NwkAction::MacSetChannel { page, channel } => self.mac.set_channel(page, channel),
                 NwkAction::MacSetCoordinator { short, extended } => {
                     self.mac.set_coordinator(short, extended);
+                    // The link to the parent is confirmed (Annex D.11.2.3).
+                    self.mac
+                        .power_table_mut()
+                        .mark_negotiated(Some(short), Some(extended));
                 }
                 NwkAction::MacSetRxOnWhenIdle(on) => self.mac.set_rx_on_when_idle(on),
                 NwkAction::MacPoll => {
@@ -631,7 +646,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     capability: _,
                     method,
                     joiner_tlvs,
-                } => self.on_child_joined(device, network_address, method, &joiner_tlvs),
+                } => {
+                    // The link to the child is confirmed (Annex D.11.2.3).
+                    self.mac
+                        .power_table_mut()
+                        .mark_negotiated(Some(network_address), Some(device));
+                    self.on_child_joined(device, network_address, method, &joiner_tlvs);
+                }
                 NwkEvent::AuthenticationTimeout => {
                     self.phase = Phase::Idle;
                     self.aps

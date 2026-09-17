@@ -782,6 +782,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         Ok(())
     }
 
+    /// Mirrors the joining policy and IEEE joining list into the MAC PIB
+    /// (`mibJoiningPolicy` / `mibJoiningIeeeList`, Annex D.11.1.2) for
+    /// Enhanced Beacon Request filtering. Called after every update of
+    /// [`Stack::nwk`]`.joining_list`.
+    pub fn sync_joining_filter(&mut self) {
+        use panweave_nwk::joining_list::JoiningPolicy as N;
+        self.mac.pib.joining_policy = match self.nwk.joining_list.policy {
+            N::AllJoin => panweave_mac::service::JoiningPolicy::AllJoin,
+            N::IeeeListJoin => panweave_mac::service::JoiningPolicy::IeeeListJoin,
+            N::NoJoin => panweave_mac::service::JoiningPolicy::NoJoin,
+        };
+        self.mac.pib.joining_ieee_list.clear();
+        for e in self.nwk.joining_list.entries() {
+            if self.mac.pib.joining_ieee_list.push(*e).is_err() {
+                break;
+            }
+        }
+    }
+
     /// Forms a network with a freshly generated random network key.
     pub fn form_network(&mut self) -> Result<(), NwkStatus> {
         let (channels, duration) = (self.config.channels, self.config.scan_duration);

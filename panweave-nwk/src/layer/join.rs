@@ -5,6 +5,7 @@
 use heapless::Vec;
 use panweave_codec::tlv::TlvSet;
 use panweave_mac::frame::{Beacon, MacAddress};
+use panweave_mac::ie::EnhancedBeaconRequest;
 use panweave_mac::service::{ScanKind, TxStatus};
 use panweave_security::cipher::BlockCipher;
 use panweave_types::{
@@ -165,16 +166,33 @@ impl<
         }
         self.discovery.clear();
         self.survey = super::SurveyCounts::default();
+        // A (re)join starts at the maximum power (§3.4.13.1, §3.6.11.1);
+        // the enhanced beacon exchange may negotiate it down again.
+        self.push_action(NwkAction::MacResetTxPower);
         self.scan = Some(ScanState {
             purpose: ScanPurpose::Discovery,
             channels,
             duration,
             only_permit_join,
         });
+        // Annex D.11.1: a joining device filters on permit joining, a
+        // rejoining one on its extended PAN ID.
+        let enhanced = if !self.config.enhanced_beacon_requests {
+            None
+        } else if self.nib.extended_pan_id != ExtendedAddress::ZERO && !only_permit_join {
+            Some(EnhancedBeaconRequest::rejoining(
+                self.nib.extended_pan_id,
+                self.nib.network_address,
+                None,
+            ))
+        } else {
+            Some(EnhancedBeaconRequest::joining(None))
+        };
         self.push_action(NwkAction::MacScan {
             kind: ScanKind::Active,
             channels,
             duration,
+            enhanced,
         });
         Ok(())
     }
@@ -222,6 +240,7 @@ impl<
             kind: ScanKind::Energy,
             channels,
             duration,
+            enhanced: None,
         });
         Ok(())
     }
@@ -411,6 +430,7 @@ impl<
                     kind: ScanKind::Active,
                     channels: mask,
                     duration: scan.duration,
+                    enhanced: None,
                 });
             }
             (ScanPurpose::FormationActive, ScanKind::Active) => self.finish_formation(),
@@ -505,6 +525,7 @@ impl<
             },
             channels,
             duration,
+            enhanced: None,
         });
         Ok(())
     }
@@ -1084,8 +1105,6 @@ impl<
             extended: parent_ext,
         });
         self.push_action(NwkAction::MacSetRxOnWhenIdle(self.nib.rx_on_when_idle));
-        // A (re)join starts at the maximum power (§3.4.13.1, §3.6.11.1).
-        self.push_action(NwkAction::MacResetTxPower);
         self.power_delta_due = None;
         self.power_request = None;
         if secured {

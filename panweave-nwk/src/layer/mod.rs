@@ -32,6 +32,7 @@ mod tx;
 
 use heapless::{Deque, Vec};
 
+use panweave_mac::ie::EnhancedBeaconRequest;
 use panweave_mac::service::{ScanKind, TxHandle, TxStatus};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::frame_counter::Reservation;
@@ -157,6 +158,10 @@ pub struct NwkConfig {
     /// The `nwkLinkPowerDeltaTransmitRate` an end device adopts once its
     /// parent supports power negotiation (§3.6.11.2), seconds.
     pub end_device_power_delta_rate_secs: u16,
+    /// Discover networks with Enhanced Beacon Requests (Annex D.11.1):
+    /// the EB Filter IE when joining, the Rejoin IE when rejoining.
+    /// Only routers that support enhanced beaconing answer them.
+    pub enhanced_beacon_requests: bool,
 }
 
 impl Default for NwkConfig {
@@ -173,6 +178,7 @@ impl Default for NwkConfig {
             power_control: false,
             optimal_rssi_dbm: -65,
             end_device_power_delta_rate_secs: 16,
+            enhanced_beacon_requests: false,
         }
     }
 }
@@ -212,6 +218,9 @@ pub enum NwkAction {
         channels: ChannelMask,
         /// Scan duration exponent.
         duration: u8,
+        /// Send Enhanced Beacon Requests with this content (Annex
+        /// D.11.1) instead of Beacon Requests.
+        enhanced: Option<EnhancedBeaconRequest>,
     },
     /// Start MAC association with a candidate parent (the driver must
     /// switch to `channel` first).

@@ -393,6 +393,16 @@ Keep a Changelog; versions follow SemVer.
   (`panweave_mac::power`, `MacServiceConfig::power_limits`) that sets
   the transmit power of every unicast to a negotiated link;
   `StackEvent::LinkPowerDelta` reports processed commands.
+* Enhanced beaconing (R23.2 Annex D.11.1): `panweave_mac::ie` with the
+  payload IE list, the EB Filter IE and the Zigbee Payload IE (Rejoin,
+  TX Power and EB Payload sub-IEs); `MacService::scan_enhanced` sends
+  Enhanced Beacon Requests and, behind `MacServiceConfig::enhanced_beacons`,
+  routers answer them per the filter, the mirrored `mibJoiningPolicy` /
+  `mibJoiningIeeeList` (`Stack::sync_joining_filter`) and the extended
+  PAN ID of a rejoin with Enhanced Beacons presented to the NWK as
+  standard beacons; `NwkConfig::enhanced_beacon_requests` makes network
+  discovery use them. The TX Power IE exchange seeds the Power Control
+  Information Table (D.11.2.4.2).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

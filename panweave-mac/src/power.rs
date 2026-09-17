@@ -33,6 +33,9 @@ pub struct PowerLimits {
     /// Maximum transmit power in dBm (the power used before any
     /// negotiation and for links not in the table).
     pub max_dbm: i8,
+    /// The optimum receive level `OPTRSSI` in dBm, 20 dB above the
+    /// receiver sensitivity (D.11.2.4.2): −65 dBm for the 2.4 GHz PHY.
+    pub optimal_rssi_dbm: i8,
 }
 
 impl Default for PowerLimits {
@@ -40,7 +43,19 @@ impl Default for PowerLimits {
         PowerLimits {
             min_dbm: -20,
             max_dbm: 8,
+            optimal_rssi_dbm: -65,
         }
+    }
+}
+
+impl PowerLimits {
+    /// The transmit power that reaches a peer at the optimum level
+    /// (D.11.2.4.2): the peer sent at `peer_tx_dbm` and arrived at
+    /// `rssi_dbm`, so the path loss is their difference and the answer
+    /// is `OPTRSSI` plus that loss, within the limits.
+    pub const fn power_for_path(&self, peer_tx_dbm: i8, rssi_dbm: i8) -> i8 {
+        let path_loss = rssi_dbm.saturating_sub(peer_tx_dbm);
+        self.clamp(self.optimal_rssi_dbm.saturating_sub(path_loss))
     }
 }
 
@@ -200,7 +215,9 @@ impl<const N: usize> PowerControlTable<N> {
     }
 
     /// Marks the link as confirmed by the network layer (the joiner is
-    /// now in the neighbor table).
+    /// now in the neighbor table), completing an address the entry did
+    /// not have yet (a joiner is known by its IEEE address only until
+    /// it is given a short address).
     pub fn mark_negotiated(
         &mut self,
         short: Option<ShortAddress>,
@@ -210,6 +227,16 @@ impl<const N: usize> PowerControlTable<N> {
             && let Some(e) = self.entries.get_mut(i)
         {
             e.nwk_negotiated = true;
+            if let Some(s) = short
+                && s.is_unicast()
+            {
+                e.short = s;
+            }
+            if let Some(x) = extended
+                && x != ExtendedAddress::ZERO
+            {
+                e.extended = x;
+            }
         }
     }
 
@@ -276,6 +303,10 @@ mod tests {
         // Cumulative, then clamped at the limits.
         assert_eq!(t.adjust(A, A_IEEE, -30, -30, Instant::ZERO).unwrap(), -20);
         assert_eq!(t.adjust(A, A_IEEE, 100, -90, Instant::ZERO).unwrap(), 8);
+        // A request sent at +8 dBm heard at -40 dBm: 48 dB of path loss,
+        // so -17 dBm reaches the peer at -65 dBm.
+        assert_eq!(t.limits.power_for_path(8, -40), -17);
+        assert_eq!(t.limits.power_for_path(8, -90), 8);
         assert_eq!(
             t.tx_power_for(&MacAddress::Short(ShortAddress::BROADCAST_ALL)),
             None
@@ -341,11 +372,14 @@ mod tests {
         .unwrap();
         t.expire(Instant::ZERO + Duration::from_secs(9));
         assert_eq!(t.len(), 1);
-        t.mark_negotiated(None, Some(A_IEEE));
+        t.mark_negotiated(Some(ShortAddress(0x0042)), Some(A_IEEE));
         t.expire(Instant::ZERO + Duration::from_secs(11));
         assert_eq!(t.len(), 1);
-        t.get(Some(A), None).unwrap();
-        t.remove(Some(A), None);
+        assert_eq!(
+            t.get(None, Some(A_IEEE)).unwrap().short,
+            ShortAddress(0x0042)
+        );
+        t.remove(Some(ShortAddress(0x0042)), None);
         t.set(PowerEntry {
             short: A,
             extended: A_IEEE,

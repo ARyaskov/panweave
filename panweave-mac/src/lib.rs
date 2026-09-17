@@ -37,6 +37,7 @@ extern crate alloc;
 
 pub mod constants;
 pub mod frame;
+pub mod ie;
 pub mod power;
 pub mod radio;
 pub mod service;

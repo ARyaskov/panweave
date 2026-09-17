@@ -181,6 +181,7 @@ impl Net {
                 kind,
                 channels,
                 duration: _,
+                enhanced: _,
             } => {
                 let mut energy = [0u8; 27];
                 if kind == ScanKind::Active {
