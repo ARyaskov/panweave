@@ -31,6 +31,12 @@ formation, discovery, Network Commissioning join, Trust Center
 authorization (network key and unique link key), device announce, ZDO
 interview and ZCL attribute reads, commands and reports.
 
+Milestone 2 is reached: `panweave-runtime/tests/milestone2.rs` adds a
+virtual router and a sleepy end device — multi-hop routing, MAC polling
+with indirect delivery, the network key tunnelled through the parent,
+bindings and attribute reports across the router, and a secured rejoin to
+the coordinator after the router fails.
+
 ## Layout
 
 See `docs/architecture.md`. Quick tour:

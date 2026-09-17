@@ -483,6 +483,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             self.complete_join(rejoin);
                         } else {
                             self.phase = Phase::AwaitingKey;
+                            // A sleepy joiner polls its parent for the
+                            // tunnelled network key (§4.6.3.2.3).
+                            self.next_poll = Some(self.now);
+                            self.schedule_fast_polls();
                         }
                     } else {
                         self.phase = Phase::Idle;
@@ -522,8 +526,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.push_event(StackEvent::Left { rejoin: false });
                     }
                 }
+                NwkEvent::NetworkStatus { code, .. } => {
+                    if code == panweave_nwk::command::NetworkStatusCode::ParentLinkFailure
+                        && self.config.role == LogicalDeviceType::EndDevice
+                        && self.phase == Phase::Operating
+                    {
+                        // §3.6.1.4.2 / BDB 3.1 §10.1: rejoin after losing
+                        // the parent.
+                        self.next_poll = None;
+                        let _ = self.join(crate::JoinMode::SecuredRejoin);
+                    }
+                }
                 NwkEvent::StartRouterConfirm { .. }
-                | NwkEvent::NetworkStatus { .. }
                 | NwkEvent::RouteDiscoveryConfirm { .. }
                 | NwkEvent::PermitJoining(_)
                 | NwkEvent::ChildRemoved { .. }
@@ -540,6 +554,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     fn complete_join(&mut self, rejoin: bool) {
         self.phase = Phase::Operating;
         self.aps.set_authorized();
+        self.next_poll = Some(self.now);
+        self.fast_polls_left = self.config.fast_polls;
         if self.config.role == LogicalDeviceType::Router {
             let _ = self.nwk.start_router();
         }
@@ -706,6 +722,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     .data_request(dst, &frame, radius, discover_route, secure)
                 {
                     Ok(id) => {
+                        self.schedule_fast_polls();
                         if self.aps_handles.push((id, handle)).is_err() {
                             self.aps
                                 .on_nwk_data_confirm(handle, NwkStatus::FrameNotBuffered);

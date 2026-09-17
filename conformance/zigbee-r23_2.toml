@@ -981,7 +981,7 @@ summary = "Tunnel command wrapping an APS command for a joining device via its p
 level = "mandatory"
 status = "implemented"
 module = "panweave-aps::layer::cmd"
-tests = ["device_management_commands", "trust_center_join_and_link_key_update"]
+tests = ["device_management_commands", "trust_center_join_and_link_key_update", "router_and_sleepy_end_device_with_router_failure"]
 
 [[requirement]]
 id = "PW-R23-SEC-015"
@@ -1026,7 +1026,7 @@ summary = "Trust Center handling of Update Device: apply policy (allow joins, in
 level = "mandatory"
 status = "implemented"
 module = "panweave-runtime::pump"
-tests = ["trust_center_join_and_link_key_update", "coordinator_and_end_device_full_stack"]
+tests = ["trust_center_join_and_link_key_update", "coordinator_and_end_device_full_stack", "router_and_sleepy_end_device_with_router_failure"]
 notes = "The runtime evaluates TrustCenterPolicy on join indications and Update Device, creates the well-known key entry when required, sends the network key directly to neighbour joiners or tunnelled through the parent, and authenticates the child once the Transport Key is confirmed. Removal on rejection uses NLME-LEAVE."
 [[requirement]]
 id = "PW-R23-SEC-020"

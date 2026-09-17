@@ -30,3 +30,5 @@ Keep a Changelog; versions follow SemVer.
 * `panweave-storage`, `panweave-testkit`, `panweave-runtime`: storage
   abstraction, virtual clock / medium / test RNG and the sans-I/O stack
   driver; the Milestone 1 end-to-end test.
+* Milestone 2: router + sleepy end device (polling, tunnelled key, routed
+  reports, rejoin after router failure); network-wide permit joining.

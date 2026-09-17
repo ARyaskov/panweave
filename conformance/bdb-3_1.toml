@@ -53,10 +53,10 @@ id = "PW-BDB-POL-005"
 section = "§6.6"
 summary = "MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-runtime::end_device::poll"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::stack"
+tests = ["router_and_sleepy_end_device_with_router_failure"]
+notes = "Sleepy end devices poll at a configurable base rate (default 3 s) and burst fast polls after each transmission and while waiting for the network key; the exact BDB rate constants and Poll Control cluster integration are not implemented."
 [[requirement]]
 id = "PW-BDB-POL-006"
 section = "§6.7"
@@ -206,10 +206,10 @@ id = "PW-BDB-REJOIN-001"
 section = "§10.1"
 summary = "Rejoin procedure: secured rejoin on current channel, then all channels, then unsecured TC rejoin if allowed, with back-off and attempt limits; end devices choose parent by link quality"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::rejoin"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::pump"
+tests = ["router_and_sleepy_end_device_with_router_failure"]
+notes = "Parent link failure (poll failures / keepalive expiry) triggers a secured NWK rejoin over the configured channel mask, keeping the network address; the channel escalation, back-off/attempt limits and the unsecured Trust Center rejoin fallback are not implemented."
 [[requirement]]
 id = "PW-BDB-FB-001"
 section = "§11"

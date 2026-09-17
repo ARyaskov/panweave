@@ -1,0 +1,327 @@
+//! Milestone 2: a router joins the coordinator, a sleepy end device joins
+//! through the router (network key tunnelled by the Trust Center), data
+//! is routed coordinator ↔ router ↔ sleepy end device with MAC polling,
+//! attribute reports flow to the coordinator, and after the router fails
+//! the sleepy end device rejoins the coordinator directly.
+
+#![allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
+
+mod common;
+use common::{COORD_IEEE, NETWORK_KEY, Node, ROUTER_IEEE, SED_IEEE, Sim};
+
+use panweave_aps::Destination;
+use panweave_aps::tables::BindingDestination;
+use panweave_codec::{Decode, Encode};
+use panweave_mac::service::MacServiceConfig;
+use panweave_runtime::{JoinMode, StackConfig, StackEvent};
+use panweave_storage::MemoryStorage;
+use panweave_testkit::TestRng;
+use panweave_types::time::Duration;
+use panweave_types::{
+    AttributeId, ClusterId, DeviceId, Endpoint, LogicalDeviceType, ProfileId, ShortAddress,
+};
+use panweave_zcl::clusters::{identify, on_off};
+use panweave_zcl::frame::Direction;
+use panweave_zcl::global::{AttributeValue, Records, ReportingConfig, command};
+use panweave_zcl::layer::EndpointInstance;
+use panweave_zcl::types::{DataType, Value};
+use panweave_zcl::{ClusterDef, Role};
+use panweave_zdo::descriptor::SimpleDescriptor;
+use panweave_zdo::zdp::{BindReq, StatusRsp, ZdpStatus, cluster};
+
+fn node(
+    role: LogicalDeviceType,
+    ieee: panweave_types::ExtendedAddress,
+    seed: u64,
+    sleepy: bool,
+) -> Node {
+    let mut cfg = StackConfig::new(role, ieee);
+    cfg.sleepy = sleepy;
+    cfg.trust_center_policy.allow_joins = true;
+    cfg.poll_interval = Duration::from_millis(1500);
+    let mut n = Node::new(
+        cfg,
+        MacServiceConfig::default(),
+        TestRng::seed(seed),
+        MemoryStorage::new(),
+    );
+    let desc = SimpleDescriptor::new(
+        Endpoint(1),
+        ProfileId::HOME_AUTOMATION,
+        DeviceId(if sleepy { 0x0100 } else { 0x0005 }),
+        1,
+        &[ClusterId(0), identify::ID, on_off::ID],
+        &[on_off::ID],
+    )
+    .unwrap();
+    let mut ep = EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION);
+    ep.add_instance(identify::server().unwrap()).unwrap();
+    ep.add_instance(on_off::server().unwrap()).unwrap();
+    ep.add_cluster(
+        ClusterDef {
+            id: on_off::ID,
+            revision: 2,
+            received: &[],
+            generated: &[],
+        },
+        Role::Client,
+    )
+    .unwrap();
+    n.add_endpoint(desc, ep).unwrap();
+    n
+}
+
+fn joined(events: &[StackEvent]) -> Option<ShortAddress> {
+    events.iter().find_map(|e| match e {
+        StackEvent::Joined { short, .. } => Some(*short),
+        _ => None,
+    })
+}
+
+#[test]
+fn router_and_sleepy_end_device_with_router_failure() {
+    let mut sim = Sim::new();
+    let c = sim.add(node(LogicalDeviceType::Coordinator, COORD_IEEE, 11, false));
+    let r = sim.add(node(LogicalDeviceType::Router, ROUTER_IEEE, 12, false));
+    let s = sim.add(node(LogicalDeviceType::EndDevice, SED_IEEE, 13, true));
+    // The sleepy end device only hears the router.
+    let (rc, rs) = (sim.nodes[c].1, sim.nodes[s].1);
+    sim.medium.block(rc, rs);
+
+    // --- Coordinator forms, router joins ---------------------------------
+    sim.nodes[c]
+        .0
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |s| {
+        s.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.nodes[c].0.permit_join_network(180).unwrap();
+    sim.nodes[r].0.join(JoinMode::Association).unwrap();
+    assert!(
+        sim.run_until(Duration::from_secs(60), |s| joined(s.events(r)).is_some()),
+        "router did not join: {:?}",
+        sim.events(r)
+    );
+    let router_short = joined(sim.events(r)).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |s| {
+        s.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::LinkKeyUpdated))
+    }));
+    assert!(sim.nodes[r].0.nwk.nib.router_started);
+    // The router received the network-wide permit joining request.
+    sim.nodes[c].0.permit_join_network(180).unwrap();
+    assert!(sim.run_until(Duration::from_secs(5), |s| {
+        s.nodes[r].0.nwk.is_permitting_joins()
+    }));
+    sim.take_events(c);
+    sim.take_events(r);
+
+    // --- Sleepy end device joins through the router ---------------------
+    sim.nodes[s].0.join(JoinMode::Association).unwrap();
+    assert!(
+        sim.run_until(Duration::from_secs(90), |x| joined(x.events(s)).is_some()),
+        "sleepy end device did not join: {:?} / router {:?} / coord {:?}",
+        sim.events(s),
+        sim.events(r),
+        sim.events(c)
+    );
+    let sed_short = joined(sim.events(s)).unwrap();
+    assert_eq!(sim.nodes[s].0.nwk.nib.parent_address, router_short);
+    // The Trust Center tunnelled the key through the router and learned
+    // the device from Update Device; the router now lists an authenticated
+    // child.
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(c).iter().any(
+                |e| matches!(e, StackEvent::DeviceAuthorized { ieee, .. } if *ieee == SED_IEEE),
+            ) && x
+                .events(s)
+                .iter()
+                .any(|e| matches!(e, StackEvent::LinkKeyUpdated))
+        }),
+        "coord {:?} / sed {:?}",
+        sim.events(c),
+        sim.events(s)
+    );
+    assert!(sim.run_until(Duration::from_secs(20), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::DeviceAnnounce { ieee, .. } if *ieee == SED_IEEE))
+    }));
+    sim.take_events(c);
+    sim.take_events(s);
+
+    // --- Multi-hop: coordinator binds the SED's On/Off to itself ------------
+    sim.nodes[c]
+        .0
+        .zdp_request(
+            sed_short,
+            cluster::BIND_REQ,
+            &BindReq {
+                src: SED_IEEE,
+                src_endpoint: Endpoint(1),
+                cluster: on_off::ID,
+                destination: BindingDestination::Unicast {
+                    address: COORD_IEEE,
+                    endpoint: Endpoint(1),
+                },
+            },
+        )
+        .unwrap();
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(c)
+                .iter()
+                .any(|e| matches!(e, StackEvent::Zdp(z) if z.cluster == ClusterId(0x8021)))
+        }),
+        "no bind response: {:?}",
+        sim.events(c)
+    );
+    let rsp = sim
+        .events(c)
+        .iter()
+        .find_map(|e| match e {
+            StackEvent::Zdp(z) if z.cluster == ClusterId(0x8021) => Some(z.data.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        StatusRsp::decode_exact(&rsp).unwrap().status,
+        ZdpStatus::Success
+    );
+    // Configure reporting on the SED (through the router).
+    let cfg = ReportingConfig::Reported {
+        id: AttributeId(0),
+        ty: DataType::Bool,
+        min: 0,
+        max: 10,
+        change: None,
+    };
+    let mut cbuf = [0u8; 16];
+    let n = cfg.encode_to_slice(&mut cbuf).unwrap();
+    let dst = Destination::Short {
+        address: sed_short,
+        endpoint: Endpoint(1),
+    };
+    let seq = sim.nodes[c]
+        .0
+        .zcl
+        .send_global(
+            dst,
+            ProfileId::HOME_AUTOMATION,
+            on_off::ID,
+            Endpoint(1),
+            command::CONFIGURE_REPORTING,
+            Direction::ToServer,
+            None,
+            &cbuf[..n],
+        )
+        .unwrap();
+    sim.nodes[c].0.flush();
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(c).iter().any(|e| {
+                matches!(
+                    e,
+                    StackEvent::ZclResponse(f) if f.origin.header.seq == seq
+                )
+            })
+        }),
+        "no configure reporting response: {:?}",
+        sim.events(c)
+    );
+    sim.take_events(c);
+    // Toggle the lamp: the change report travels SED → router → coordinator.
+    sim.nodes[c]
+        .0
+        .zcl
+        .send_command(
+            dst,
+            ProfileId::HOME_AUTOMATION,
+            on_off::ID,
+            Endpoint(1),
+            on_off::CMD_ON,
+            Direction::ToServer,
+            None,
+            &[],
+        )
+        .unwrap();
+    sim.nodes[c].0.flush();
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(c)
+                .iter()
+                .any(|e| matches!(e, StackEvent::ZclReport(_)))
+        }),
+        "no report: {:?}",
+        sim.events(c)
+    );
+    let rep = sim
+        .events(c)
+        .iter()
+        .find_map(|e| match e {
+            StackEvent::ZclReport(f) => Some(f.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(rep.origin.src, sed_short);
+    let recs: Vec<AttributeValue> = Records::new(&rep.payload).map(Result::unwrap).collect();
+    assert_eq!(recs[0].value, Value::Bool(Some(true)));
+    assert!(sim.on_off_state[s]);
+    sim.take_events(c);
+    // Periodic reports keep arriving through the router.
+    assert!(sim.run_until(Duration::from_secs(25), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::ZclReport(_)))
+    }));
+    sim.take_events(c);
+    sim.take_events(s);
+
+    // --- Router failure: the sleepy end device rejoins the coordinator ----
+    let rr = sim.nodes[r].1;
+    sim.medium.block(rr, rs);
+    sim.medium.block(rr, rc);
+    sim.medium.unblock(rc, rs);
+    assert!(
+        sim.run_until(Duration::from_secs(300), |x| {
+            x.events(s)
+                .iter()
+                .any(|e| matches!(e, StackEvent::Joined { rejoin: true, .. }))
+        }),
+        "no rejoin: sed {:?}",
+        sim.events(s)
+    );
+    assert_eq!(
+        sim.nodes[s].0.nwk.nib.parent_address,
+        ShortAddress::COORDINATOR
+    );
+    assert_eq!(
+        sim.nodes[s].0.short_address(),
+        sed_short,
+        "address kept on rejoin"
+    );
+    // Reports resume directly to the coordinator.
+    sim.take_events(c);
+    assert!(
+        sim.run_until(Duration::from_secs(40), |x| {
+            x.events(c)
+                .iter()
+                .any(|e| matches!(e, StackEvent::ZclReport(f) if f.origin.src == sed_short))
+        }),
+        "no report after rejoin: {:?}",
+        sim.events(c)
+    );
+    assert_eq!(sim.nodes[c].0.dropped_events, 0);
+    assert_eq!(sim.nodes[s].0.dropped_events, 0);
+}

@@ -10,7 +10,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::TrustCenterPolicy;
 use panweave_storage::Storage;
-use panweave_types::time::Instant;
+use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ChannelMask, ClusterId, CryptoRng, ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber,
     LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId, ShortAddress,
@@ -77,6 +77,14 @@ pub struct StackConfig {
     pub manufacturer_name: &'static [u8],
     /// Model identifier for the Basic cluster.
     pub model: &'static [u8],
+    /// Base MAC data poll interval of a sleepy end device (BDB 3.1 §6.5:
+    /// at most 7.5 s to keep parent buffers alive).
+    pub poll_interval: Duration,
+    /// Fast poll interval used right after a transmission to collect the
+    /// response.
+    pub fast_poll_interval: Duration,
+    /// Number of fast polls after each transmission.
+    pub fast_polls: u8,
 }
 
 impl StackConfig {
@@ -98,6 +106,9 @@ impl StackConfig {
             scan_duration: 3,
             manufacturer_name: b"Panweave",
             model: b"Node",
+            poll_interval: Duration::from_secs(3),
+            fast_poll_interval: Duration::from_millis(100),
+            fast_polls: 3,
         }
     }
 
@@ -249,6 +260,8 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) phase: Phase,
     pub(crate) pending_children: Vec<PendingChild, 4>,
     pub(crate) network_key_sequence: KeySequenceNumber,
+    pub(crate) next_poll: Option<Instant>,
+    pub(crate) fast_polls_left: u8,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -326,6 +339,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             phase: Phase::Idle,
             pending_children: Vec::new(),
             network_key_sequence: KeySequenceNumber(0),
+            next_poll: None,
+            fast_polls_left: 0,
             dropped_events: 0,
         }
     }
@@ -424,12 +439,33 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         Ok(())
     }
 
-    /// Permits joining for `seconds` (0 closes, 0xff → 0xfe).
+    /// Permits joining on this device for `seconds` (0 closes, 0xff → 0xfe).
     pub fn permit_join(&mut self, seconds: u8) -> Result<(), NwkStatus> {
         let s = if seconds == 0xff { 0xfe } else { seconds };
         self.nwk
             .permit_joining(s)
             .map_err(|_| NwkStatus::InvalidRequest)
+    }
+
+    /// Permits joining network-wide: locally and through a broadcast
+    /// Mgmt_Permit_Joining_req to all routers (BDB 3.1 network steering on
+    /// a network, §8.2 / R23.2 §2.4.3.3.7).
+    pub fn permit_join_network(&mut self, seconds: u8) -> Result<(), NwkStatus> {
+        self.permit_join(seconds)?;
+        let req = panweave_zdo::zdp::MgmtPermitJoiningReq {
+            duration: if seconds == 0xff { 0xfe } else { seconds },
+            tc_significance: true,
+            tlvs: &[],
+        };
+        self.zdo
+            .send_unsolicited(
+                ShortAddress::BROADCAST_ROUTERS,
+                panweave_zdo::cluster::MGMT_PERMIT_JOINING_REQ,
+                &req,
+            )
+            .map_err(|_| NwkStatus::InvalidRequest)?;
+        self.pump();
+        Ok(())
     }
 
     /// Leaves the network.
@@ -482,7 +518,40 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.aps.poll_timers(now);
         self.zdo.poll_timers(now);
         self.zcl.poll_timers(now);
+        self.service_polling(now);
         self.pump();
+    }
+
+    /// Periodic and fast MAC data polling of a sleepy end device.
+    fn service_polling(&mut self, now: Instant) {
+        if !self.config.sleepy || !matches!(self.phase, Phase::Operating | Phase::AwaitingKey) {
+            return;
+        }
+        match self.next_poll {
+            Some(t) if now.has_reached(t) => {
+                self.nwk.request(panweave_nwk::layer::NwkRequest::Poll);
+                if self.fast_polls_left > 0 {
+                    self.fast_polls_left -= 1;
+                    self.next_poll = Some(now.saturating_add(self.config.fast_poll_interval));
+                } else {
+                    self.next_poll = Some(now.saturating_add(self.config.poll_interval));
+                }
+            }
+            Some(_) => {}
+            None => self.next_poll = Some(now.saturating_add(self.config.poll_interval)),
+        }
+    }
+
+    /// Schedules a burst of fast polls (after a transmission).
+    pub(crate) fn schedule_fast_polls(&mut self) {
+        if self.config.sleepy && matches!(self.phase, Phase::Operating | Phase::AwaitingKey) {
+            self.fast_polls_left = self.config.fast_polls;
+            let t = self.now.saturating_add(self.config.fast_poll_interval);
+            self.next_poll = Some(match self.next_poll {
+                Some(n) if n.as_millis() < t.as_millis() => n,
+                _ => t,
+            });
+        }
     }
 
     /// Earliest time [`Stack::poll`] should run again.
@@ -493,6 +562,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.aps.next_deadline(),
             self.zdo.next_deadline(),
             self.zcl.next_deadline(),
+            self.next_poll
+                .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]
         .into_iter()
         .flatten()
