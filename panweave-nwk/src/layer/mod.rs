@@ -57,6 +57,9 @@ pub use rx::RxOutcome;
 /// (127 − 2 FCS − 9 header) minus nothing else.
 pub const MAX_NPDU: usize = 116;
 
+/// Entries of the MAC Interface Table.
+pub const MAC_INTERFACES: usize = 4;
+
 /// Fixed-capacity NPDU buffer.
 pub type NpduBuf = Vec<u8, MAX_NPDU>;
 
@@ -613,6 +616,11 @@ pub struct Nwk<
     pub(crate) survey: SurveyCounts,
     /// `mibJoiningPolicy` / `mibJoiningIeeeList`.
     pub joining_list: crate::joining_list::JoiningList<JOINING_LIST_SIZE>,
+    /// `nwkMacInterfaceTable` (Table 3-69, §3.6.12): one enabled 2.4 GHz
+    /// radio (index 0) by default. Scans and formation use only channels
+    /// an enabled interface supports; the entry's `channel_in_use` and
+    /// counters follow the layer's operation.
+    pub interfaces: crate::interface::MacInterfaceTable<MAC_INTERFACES>,
     pub(crate) rng: R,
     pub(crate) actions: Deque<NwkAction, QUEUE_CAPACITY>,
     pub(crate) events: Deque<NwkEvent, QUEUE_CAPACITY>,
@@ -708,6 +716,7 @@ impl<
             discovery: DiscoveryTable::new(),
             survey: SurveyCounts::default(),
             joining_list: crate::joining_list::JoiningList::new(),
+            interfaces: crate::interface::MacInterfaceTable::single(ChannelMask::ALL_2_4GHZ),
             rreq_id: rng.next_u8(),
             rng,
             actions: Deque::new(),

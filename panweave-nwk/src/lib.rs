@@ -36,6 +36,7 @@ pub mod broadcast;
 pub mod command;
 pub mod discovery;
 pub mod frame;
+pub mod interface;
 pub mod joining_list;
 pub mod layer;
 pub mod neighbor;

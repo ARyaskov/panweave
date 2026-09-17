@@ -256,6 +256,13 @@ impl<
 
         // --- Unicast for this device ----------------------------------------
         if dst == my_short {
+            if let Some(i) = self
+                .interfaces
+                .interface_for(self.nib.channel_page, self.nib.channel)
+                .map(|e| e.index)
+            {
+                self.interfaces.note_rx(i);
+            }
             if let Some(idx) = relay_index
                 && idx != 0
                 && self.nib.is_router_or_coordinator()

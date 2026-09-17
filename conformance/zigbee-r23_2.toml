@@ -490,10 +490,10 @@ id = "PW-R23-NWK-065"
 section = "§3.6.12"
 summary = "Multiple MAC interfaces table"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-nwk::interface"
-tests = []
-
+tests = ["set_and_get_interface_follow_3_2_2_34", "interface_table_confines_channels_and_gates_routers"]
+notes = "The nwkMacInterfaceTable (Table 3-69) with NLME-SET-INTERFACE / NLME-GET-INTERFACE semantics (index lookup, last-interface rule, single supported channel, RoutersAllowed, duty cycle thresholds, link cost scalar, counters reset on read) is kept by the NWK layer: discovery, energy scans and formation use only channels an enabled interface supports, the entry records the channel in use, counts unicast traffic and its RoutersAllowed gates router joins; an EnhancedActive ScanType selects enhanced beacon requests. One radio is driven: the Multi-MAC selection and switch procedures of section 3.6.12.1/3.6.12.2 (joining per interface, bridging between interfaces, per-interface link status and broadcasts) are not implemented, and disabling an interface does not switch the radio off (the runtime owns the radio)."
 [[requirement]]
 id = "PW-R23-NWK-066"
 section = "§3.6.13"

@@ -529,6 +529,15 @@ impl<
             return;
         };
         let mut entry = self.pending.swap_remove(pos);
+        // Table 3-42 counters of the interface in use.
+        if let Some(i) = self
+            .interfaces
+            .interface_for(self.nib.channel_page, self.nib.channel)
+            .map(|e| e.index)
+        {
+            self.interfaces
+                .note_tx(i, 0, !matches!(status, TxStatus::Success));
+        }
         match status {
             TxStatus::Success => {
                 if let Some(n) = self.neighbors.by_short_mut(entry.next_hop) {

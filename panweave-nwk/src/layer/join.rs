@@ -161,6 +161,8 @@ impl<
         if self.scan.is_some() {
             return Err(NwkError::Busy);
         }
+        // Only channels an enabled interface supports (§3.2.2.3.3).
+        let channels = self.interfaces.supported_subset(channels);
         if channels.is_empty() {
             return Err(NwkError::InvalidParameter);
         }
@@ -177,7 +179,12 @@ impl<
         });
         // Annex D.11.1: a joining device filters on permit joining, a
         // rejoining one on its extended PAN ID.
-        let enhanced = if !self.config.enhanced_beacon_requests {
+        let enhanced_scan = self.config.enhanced_beacon_requests
+            || self
+                .interfaces
+                .enabled()
+                .any(|i| i.scan_type == crate::interface::ScanType::EnhancedActive);
+        let enhanced = if !enhanced_scan {
             None
         } else if self.nib.extended_pan_id != ExtendedAddress::ZERO && !only_permit_join {
             Some(EnhancedBeaconRequest::rejoining(
@@ -227,6 +234,7 @@ impl<
         if self.scan.is_some() {
             return Err(NwkError::Busy);
         }
+        let channels = self.interfaces.supported_subset(channels);
         if channels.is_empty() || duration > 5 {
             return Err(NwkError::InvalidParameter);
         }
@@ -250,6 +258,7 @@ impl<
     /// records `update_id`, switches the MAC and persists the NIB.
     pub fn change_channel(&mut self, channel: Channel, update_id: u8) {
         self.nib.channel = channel;
+        self.note_channel_in_use();
         self.nib.update_id = update_id;
         self.nib.next_channel_change = ChannelMask::EMPTY;
         self.push_action(NwkAction::MacSetChannel {
@@ -487,6 +496,8 @@ impl<
         if self.nib.joined || self.scan.is_some() {
             return Err(NwkError::InvalidRequest);
         }
+        // Only channels an enabled interface supports (§3.2.2.5.3).
+        let channels = self.interfaces.supported_subset(channels);
         if channels.is_empty() {
             return Err(NwkError::InvalidParameter);
         }
@@ -583,6 +594,7 @@ impl<
         }
         self.nib.pan_id = pan_id;
         self.nib.channel = channel;
+        self.note_channel_in_use();
         self.nib.network_address = short;
         self.nib.joined = true;
         self.nib.authenticated = true;
@@ -707,9 +719,33 @@ impl<
         self.permit_until.is_some_and(|t| !self.now.has_reached(t))
     }
 
+    /// Records the operating channel in the interface entry that carries
+    /// it (Table 3-69 `ChannelInUse`).
+    pub(crate) fn note_channel_in_use(&mut self) {
+        let (page, channel) = (self.nib.channel_page, self.nib.channel);
+        let index = self
+            .interfaces
+            .interface_for(page, channel)
+            .map(|e| e.index);
+        if let Some(i) = index
+            && let Some(e) = self.interfaces.get_mut(i)
+        {
+            e.channel_in_use = Some((page, channel));
+        }
+    }
+
     /// Whether this parent can accept a new child of the given kind.
     fn has_child_capacity(&self, router: bool) -> bool {
         if self.neighbors.len() >= self.neighbors.capacity() {
+            return false;
+        }
+        // Table 3-69 RoutersAllowed of the interface in use.
+        if router
+            && !self
+                .interfaces
+                .interface_for(self.nib.channel_page, self.nib.channel)
+                .is_none_or(|e| e.routers_allowed)
+        {
             return false;
         }
         if self.neighbors.child_count() >= usize::from(self.nib.max_children) {
@@ -1063,6 +1099,7 @@ impl<
         self.nib.update_id = p.update_id;
         self.nib.channel = p.channel;
         self.nib.channel_page = p.page;
+        self.note_channel_in_use();
         self.nib.parent_address = p.short;
         self.nib.parent_ieee = p.extended.unwrap_or(ExtendedAddress::ZERO);
         self.nib.joined = true;

@@ -417,6 +417,11 @@ Keep a Changelog; versions follow SemVer.
   `SessionClass` and the Transport Key forwarding decision; the session
   responder hands the ZVD's key sequence number to the secret resolver
   and reports it in `Established::peer_key_sequence`.
+* `panweave-nwk::interface`: the MAC Interface Table (R23.2 Table 3-69)
+  with NLME-SET-INTERFACE / NLME-GET-INTERFACE semantics
+  (`Nwk::interfaces`): scans and formation are confined to the channels
+  an enabled interface supports, the entry records the channel in use,
+  counts unicast traffic and its `RoutersAllowed` gates router joins.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
