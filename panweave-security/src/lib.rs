@@ -51,6 +51,7 @@ pub mod frame_counter;
 pub mod key_hierarchy;
 pub mod material;
 pub mod mmo;
+pub mod touchlink;
 pub mod trust_center;
 
 pub use aux_header::{AuxHeader, KeyIdentifier, SecurityControl, SecurityLevel};

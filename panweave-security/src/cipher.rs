@@ -14,6 +14,10 @@ pub trait BlockCipher {
 
     /// Encrypts one 16-octet block in place.
     fn encrypt_block(&self, block: &mut [u8; 16]);
+
+    /// Decrypts one 16-octet block in place (only touchlink key
+    /// transport needs the inverse cipher, ZCL8 §13.3.4.11.5).
+    fn decrypt_block(&self, block: &mut [u8; 16]);
 }
 
 /// Software AES-128 from the RustCrypto project.
@@ -31,6 +35,11 @@ impl BlockCipher for SoftwareAes {
     fn encrypt_block(&self, block: &mut [u8; 16]) {
         use cipher::BlockCipherEncrypt;
         self.0.encrypt_block(block.into());
+    }
+
+    fn decrypt_block(&self, block: &mut [u8; 16]) {
+        use cipher::BlockCipherDecrypt;
+        self.0.decrypt_block(block.into());
     }
 }
 

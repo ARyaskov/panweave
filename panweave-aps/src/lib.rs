@@ -28,6 +28,7 @@ extern crate alloc;
 pub mod aib;
 pub mod command;
 pub mod frame;
+pub mod interpan;
 pub mod layer;
 pub mod security;
 pub mod tables;
