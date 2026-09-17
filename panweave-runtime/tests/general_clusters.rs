@@ -24,7 +24,9 @@ use panweave_types::{
     ClusterId, DeviceId, Endpoint, ExtendedAddress, LogicalDeviceType, ProfileId, ShortAddress,
 };
 use panweave_zcl::Role;
-use panweave_zcl::clusters::{alarms, ias_zone, identify, power_configuration as power, time};
+use panweave_zcl::clusters::{
+    alarms, diagnostics, ias_zone, identify, power_configuration as power, time,
+};
 use panweave_zcl::frame::Direction;
 use panweave_zcl::global::{AttributeValue, command};
 use panweave_zcl::layer::EndpointInstance;
@@ -63,6 +65,7 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
                 .unwrap(),
             )
             .unwrap();
+            ep.add_instance(diagnostics::server().unwrap()).unwrap();
             (
                 &[
                     ClusterId(0),
@@ -71,6 +74,7 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
                     alarms::ID,
                     time::ID,
                     ias_zone::ID,
+                    diagnostics::ID,
                 ],
                 &[identify::ID],
             )
@@ -445,4 +449,15 @@ fn ias_zone_auto_enroll_request_and_status_notification() {
     .unwrap();
     assert_eq!((note.zone_status, note.zone_id), (0, 3));
     assert!(note.delay <= 4, "delay {}", note.delay);
+    // The Diagnostics server reflects the traffic so far.
+    assert!(sim.stack(r).refresh_diagnostics(EP));
+    let d = sim
+        .stack(r)
+        .zcl
+        .cluster(EP, diagnostics::ID, Role::Server)
+        .unwrap();
+    assert!(d.u64(diagnostics::MAC_TX_UCAST.id).unwrap() > 0);
+    assert_eq!(d.u8(diagnostics::LAST_MESSAGE_LQI.id), Some(200));
+    assert_eq!(d.u16(diagnostics::NWK_DECRYPT_FAILURES.id), Some(0));
+    assert!(!sim.stack(r).refresh_diagnostics(Endpoint(9)));
 }

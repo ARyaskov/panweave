@@ -162,6 +162,10 @@ Keep a Changelog; versions follow SemVer.
   temperature and the colour loop with timed transitions, continuous
   moves and steps, Options handling, scene extension fields and
   `ZclEvent::Color` — plus the `color_dimmable_light` facade endpoint.
+* `panweave-zcl::clusters::diagnostics` with `Stack::refresh_diagnostics`
+  feeding the stack's counters; the facade instantiates Diagnostics,
+  Alarms, Time, Power Configuration and IAS Zone servers / clients for
+  device types that list them.
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

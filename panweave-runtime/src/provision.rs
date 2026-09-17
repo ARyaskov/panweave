@@ -10,8 +10,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_storage::Storage;
 use panweave_types::{
-    Channel, ChannelMask, CryptoRng, ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber,
-    LogicalDeviceType, NwkStatus, PanId, ShortAddress,
+    Channel, ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
+    KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
 };
 
 use crate::stack::{Phase, Stack};
@@ -206,6 +206,45 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         };
         let _ = self.aps.security.install(e);
         let _ = self.persist_link_keys();
+    }
+
+    /// Refreshes the Diagnostics server on `endpoint` (ZCL8 §3.15) from
+    /// the stack's counters: MAC unicast transmissions and failures, APS
+    /// retries and failures, NWK / APS security drops, replays, relayed
+    /// unicasts, queue overflows and the last frame's LQI / RSSI.
+    /// Counters the stack does not keep are left untouched.
+    pub fn refresh_diagnostics(&mut self, endpoint: Endpoint) -> bool {
+        use panweave_zcl::clusters::diagnostics::{self, Counters, wrap16};
+        let nwk = self.nwk.stats;
+        let aps = self.aps.stats;
+        let counters = Counters {
+            mac_tx_ucast: Some(u32::from(self.nwk.nib.tx_total)),
+            mac_tx_ucast_fail: Some(self.nwk.nib.tx_failures),
+            aps_tx_ucast_retry: Some(wrap16(aps.retries)),
+            aps_tx_ucast_fail: Some(wrap16(aps.ack_failures)),
+            nwk_fc_failure: Some(wrap16(nwk.replays)),
+            aps_unauthorized_key: Some(wrap16(aps.policy_dropped)),
+            nwk_decrypt_failures: Some(wrap16(nwk.security_failures)),
+            aps_decrypt_failures: Some(wrap16(aps.security_dropped)),
+            packet_buffer_allocate_failures: Some(wrap16(
+                aps.events_dropped.saturating_add(aps.actions_dropped),
+            )),
+            relayed_ucast: Some(wrap16(nwk.relayed)),
+            packet_validate_drop_count: Some(wrap16(nwk.malformed.saturating_add(aps.malformed))),
+            last_lqi: self.last_rx.map(|(l, _)| l),
+            last_rssi: self.last_rx.map(|(_, r)| r),
+            ..Counters::default()
+        };
+        match self
+            .zcl
+            .cluster_mut(endpoint, diagnostics::ID, panweave_zcl::Role::Server)
+        {
+            Some(c) => {
+                diagnostics::update(c, &counters);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Removes the link key held for `partner`.

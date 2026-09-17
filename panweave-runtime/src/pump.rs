@@ -129,6 +129,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub(crate) fn handle_radio_frame(&mut self, bytes: &[u8], meta: RxMetadata) {
         let channel = meta.channel.unwrap_or(self.nwk.nib.channel);
         let lqi = meta.lqi;
+        self.last_rx = Some((meta.lqi, meta.rssi_dbm));
         #[cfg(feature = "green-power")]
         let rssi = meta.rssi_dbm;
         match self.mac.on_receive(bytes, meta) {

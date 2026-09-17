@@ -450,6 +450,8 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) next_poll: Option<Instant>,
     pub(crate) fast_polls_left: u8,
     pub(crate) dlk: crate::dlk::DlkState,
+    /// LQI / RSSI of the last received frame (Diagnostics cluster).
+    pub(crate) last_rx: Option<(u8, i8)>,
     /// Outstanding APS frame counter challenge (`apsChallengeTargetEui64`,
     /// `apsChallengeValue`, `apsChallengePeriodRemainingSeconds`).
     pub(crate) challenge: Option<Challenge>,
@@ -548,6 +550,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             next_poll: None,
             fast_polls_left: 0,
             dlk: crate::dlk::DlkState::default(),
+            last_rx: None,
             challenge: None,
             energy_scan: None,
             scan_attempts_left: 0,

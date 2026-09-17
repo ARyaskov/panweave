@@ -11,8 +11,10 @@
 use heapless::Vec;
 use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
-use panweave_zcl::clusters::color_control;
 use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
+use panweave_zcl::clusters::{
+    alarms, color_control, diagnostics, ias_zone, power_configuration, time,
+};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -35,6 +37,11 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     temperature::ID,
     occupancy::ID,
     color_control::ID,
+    diagnostics::ID,
+    alarms::ID,
+    time::ID,
+    power_configuration::ID,
+    ias_zone::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -49,6 +56,11 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     temperature::ID,
     occupancy::ID,
     color_control::ID,
+    diagnostics::ID,
+    alarms::ID,
+    time::ID,
+    power_configuration::ID,
+    ias_zone::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -100,6 +112,20 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
             (153, 500),
         )
         .ok(),
+        diagnostics::ID => diagnostics::server().ok(),
+        alarms::ID => alarms::server().ok(),
+        // Not a master clock (the network may set it), with the zone
+        // attributes.
+        time::ID => time::server(0, true).ok(),
+        power_configuration::ID => power_configuration::battery_server(30).ok(),
+        // A contact switch enrolling on the CIE's request.
+        ias_zone::ID => ias_zone::server(
+            ias_zone::zone_type::CONTACT_SWITCH,
+            0,
+            ias_zone::EnrollMode::AutoRequest,
+            None,
+        )
+        .ok(),
         _ => None,
     }
 }
@@ -120,6 +146,11 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
         temperature::ID => Some(temperature::client()),
         occupancy::ID => Some(occupancy::client()),
         color_control::ID => Some(color_control::client()),
+        diagnostics::ID => Some(diagnostics::client()),
+        alarms::ID => Some(alarms::client()),
+        time::ID => Some(time::client()),
+        power_configuration::ID => Some(power_configuration::client()),
+        ias_zone::ID => Some(ias_zone::client()),
         _ => None,
     }
 }

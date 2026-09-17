@@ -217,10 +217,10 @@ id = "PW-ZCL-GEN-010"
 section = "§3.15"
 summary = "Diagnostics cluster"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::diagnostics"
-tests = []
-
+tests = ["counters_land_in_attributes", "ias_zone_auto_enroll_request_and_status_notification"]
+notes = "Hardware and stack / network attribute definitions and a server holding the counters a Panweave stack maintains; Stack::refresh_diagnostics fills MAC unicast counts and failures, APS retries / failures, NWK and APS security drops, replays, policy drops, relayed unicasts, queue overflows, validation drops and the last frame's LQI / RSSI. Broadcast counters, neighbour / join / child-move counters, route discoveries initiated and the average MAC retry are not tracked by the stack yet (TODO(PW-ZCL-DIAG-COUNTERS))."
 [[requirement]]
 id = "PW-ZCL-GEN-011"
 section = "§3.16"
