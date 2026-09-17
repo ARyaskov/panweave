@@ -32,12 +32,12 @@ id = "PW-R23-GEN-003"
 section = "Annex I.4"
 summary = "Global TLVs 64–76 (manufacturer specific, supported key negotiation methods, PAN ID conflict report, next PAN ID/channel change, symmetric passphrase, router information, fragmentation parameters, joiner/beacon appendix encapsulation, configuration parameters, device capability extension)"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-nwk::tlv"
 tests = ["key_negotiation_methods_round_trip_and_min_length", "fixed_size_tlvs", "joiner_encapsulation_nesting"]
 
 # ---------------------------------------------------------------- NWK frames
-notes = "All 13 global TLVs decode/encode; BDB encapsulation (74) is opaque."
+notes = "All 13 global TLVs decode and encode; the BDB Encapsulation Global TLV (74) is carried opaquely, which is complete: BDB 3.1 section 14 defines no local TLVs inside it."
 [[requirement]]
 id = "PW-R23-NWK-001"
 section = "§3.3.1"
@@ -582,10 +582,10 @@ id = "PW-R23-APS-008"
 section = "§2.2.4.2"
 summary = "APSME management: bind/unbind, add/remove group, get/set AIB"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-aps::tables"
 tests = ["binding_table_bind_unbind", "group_table_membership"]
-notes = "Bind/unbind and group add/remove are table operations; APSME-GET/SET are direct field access on Aib. The ZDO front-ends (Bind_req etc.) belong to panweave-zdo."
+notes = "Bind / unbind and group add / remove are binding and group table operations (panweave-aps::tables, driven by the ZDO front-ends in panweave-zdo and the Groups cluster); APSME-GET / APSME-SET are direct field access on the public Aib struct, the sans-I/O equivalent of the attribute primitives."
 [[requirement]]
 id = "PW-R23-APS-009"
 section = "§2.2.9"
