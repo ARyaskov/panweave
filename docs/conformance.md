@@ -8,14 +8,14 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Document | Total | Implemented | Partial | Not implemented | N/A | HW validation | Clarification |
 |---|---|---|---|---|---|---|---|
-| BDB3.1 | 27 | 17 | 8 | 1 | 1 | 0 | 0 |
+| BDB3.1 | 27 | 18 | 8 | 0 | 1 | 0 | 0 |
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
 | ZCL8 | 36 | 24 | 11 | 1 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 19 | 7 | 2 | 0 | 0 |
-| **All** | 237 | 159 | 62 | 12 | 3 | 1 | 0 |
+| **All** | 237 | 160 | 62 | 11 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -30,7 +30,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-BDB-POL-006 | §6.7 | mandatory | implemented | `panweave-runtime::persist` | Persistent data set retained across power cycles | `end_device_and_coordinator_survive_reboots` |  |
 | PW-BDB-POL-007 | §6.10 | mandatory | implemented | `panweave-aps::layer` | APS acknowledgement and APS security usage rules for ZCL and ZDO traffic | `trust_center_join_and_link_key_update`, `bdb_formation_steering_finding_binding_and_rejoin` | Acknowledged and APS-secured requests are answered with matching ack request and security (ADR-0005); ZCL responses inherit the acknowledgement request of the command. |
 | PW-BDB-POL-008 | §6.11 | mandatory | implemented | `panweave-types::key::InstallCode, panweave-security::key_hierarchy` | Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets | `install_code_crc_known_answer`, `install_code_known_answer_from_bdb` |  |
-| PW-BDB-POL-009 | §6.12 | optional | not-implemented | `panweave-security::setup_code` | Short device setup codes | — |  |
+| PW-BDB-POL-009 | §6.12 | optional | implemented | `panweave-bdb::setup_code` | Short device setup codes | `example_of_6_12_2` | The §6.12.1 modified base32 alphabet, decoding of a displayed code to the little-endian, zero-padded 128-bit pass code of §6.12.2 (verified against the U4DXS2 example), the SPEKE view of the significant bytes, the display encoding and the 20–30 bit recommendation. Using the pass code as a Trust Center key-pair entry for SPEKE joins goes through the existing dynamic link key negotiation (PW-R23-SEC-* DLK items). |
 | PW-BDB-INIT-001 | §7.1 | mandatory | partially-implemented | `panweave-runtime::persist` | Initialization procedure: restore persistent data, if on a network attempt rejoin per §10.1 (routers resume, end devices rejoin), otherwise wait for commissioning | `end_device_and_coordinator_survive_reboots`, `factory_reset_erases_network_state` | Stack::restore + Stack::resume: routers and the coordinator resume on their network and re-announce, end devices perform a secured rejoin (falling back to a Trust Center rejoin is left to the application via JoinMode::TrustCenterRejoin); the BDB commissioning-mode dispatch that follows initialization is part of the pending panweave-bdb crate. |
 | PW-BDB-INIT-002 | §7.2 | mandatory | implemented | `panweave-runtime::pump` | On-network TCLK update procedure: after joining a centralized network request a unique TCLK (Request Key or DLK), verify it with Verify Key / Confirm Key, retry up to bdbTCLinkKeyExchangeAttemptsMax, leave on failure if required | `coordinator_and_end_device_full_stack` | After a join with a global key on a centralized network the joiner requests a unique TCLK (Request Key), verifies it (Verify Key) and receives Confirm Key; bdbTCLinkKeyExchangeAttemptsMax retries and the DLK variant are not implemented. |
 | PW-BDB-INIT-003 | §7.3 | conditional | partially-implemented | `panweave-runtime::keep_alive` | Ensuring TC connectivity via keep-alive cluster, poll control, or node descriptor polling | `router_keep_alive_detects_a_vanished_trust_center`, `poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode` | The Keep-Alive client (Match_Desc discovery of the Trust Center's cluster 0x0025, APS-secured attribute reads at the advertised base/jitter pacing, TrustCenterLost after three failures) and the Poll Control server / client are implemented in panweave-runtime; the Node Descriptor polling fallback of §7.3 for Trust Centers without either cluster is not (TODO(PW-BDB-TC-CONNECTIVITY)). |

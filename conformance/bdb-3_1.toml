@@ -89,10 +89,10 @@ id = "PW-BDB-POL-009"
 section = "§6.12"
 summary = "Short device setup codes"
 level = "optional"
-status = "not-implemented"
-module = "panweave-security::setup_code"
-tests = []
-
+status = "implemented"
+module = "panweave-bdb::setup_code"
+tests = ["example_of_6_12_2"]
+notes = "The §6.12.1 modified base32 alphabet, decoding of a displayed code to the little-endian, zero-padded 128-bit pass code of §6.12.2 (verified against the U4DXS2 example), the SPEKE view of the significant bytes, the display encoding and the 20–30 bit recommendation. Using the pass code as a Trust Center key-pair entry for SPEKE joins goes through the existing dynamic link key negotiation (PW-R23-SEC-* DLK items)."
 [[requirement]]
 id = "PW-BDB-INIT-001"
 section = "§7.1"

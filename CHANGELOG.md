@@ -371,6 +371,9 @@ Keep a Changelog; versions follow SemVer.
   `StackEvent::ApplicationLinkKey` on both devices; data frames under an
   application link key carry the extended nonce and the NWK records the
   originator of a single-hop secured frame in the address map.
+* `panweave-bdb::setup_code`: short device setup codes (BDB 3.1
+  §6.12) — the modified base32 alphabet, decoding to the padded pass
+  code used by SPEKE, and display encoding.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

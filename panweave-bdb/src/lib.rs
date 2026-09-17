@@ -28,6 +28,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod setup_code;
 pub mod touchlink;
 
 use heapless::Vec;
