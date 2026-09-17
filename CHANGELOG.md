@@ -176,6 +176,25 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Frequency agility (R23.2 Annex E): `panweave-runtime::agility` — a
+  router or coordinator whose unicast failure rate passes
+  `StackConfig::interference` runs an energy scan and, when its channel
+  is noisier than the quietest alternative, sends
+  Mgmt_NWK_Unsolicited_Enhanced_Update_notify to the network manager
+  (four an hour at most, counters restarted; `StackEvent::InterferenceReported`);
+  the manager receives `StackEvent::InterferenceReport` and
+  `Stack::change_network_channel` broadcasts the channel change
+  (nwkUpdateId incremented, the manager switching after
+  nwkNetworkBroadcastDeliveryTime, apsChannelTimer holding further
+  changes back). The simulator reports `Simulator::channel_energy` per
+  channel.
+* Mgmt_NWK_Enhanced_Update_req over multi-page channel lists follows
+  §2.4.3.3.9.2 with the single 2.4 GHz interface (one channel across
+  the pages for a change, the whole list into `apsChannelMaskList` —
+  now with `Aib::channel_mask_pages` — for an attribute change, single
+  page for an energy scan; the configuration bitmask no longer affects
+  energy scans) and Mgmt_NWK_Beacon_Survey_req runs an enhanced active
+  scan when asked (`Nwk::network_discovery_with`).
 * The Table 2-24 startup AIB attributes are kept: `apsDesignatedCoordinator`
   and `apsChannelMaskList` come from the configuration,
   `apsUseExtendedPANID` is learnt when a network is formed or joined

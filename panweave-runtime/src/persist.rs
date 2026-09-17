@@ -36,7 +36,7 @@ const BINDINGS_FORMAT: u8 = 1;
 /// Format version of the group record.
 const GROUPS_FORMAT: u8 = 1;
 /// Format version of the AIB record.
-const AIB_FORMAT: u8 = 2;
+const AIB_FORMAT: u8 = 3;
 /// Format version of the children record.
 const CHILDREN_FORMAT: u8 = 1;
 
@@ -229,7 +229,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         // storage trait has no enumeration. Format 2 appends the startup
         // attributes of Table 2-24 (apsDesignatedCoordinator,
         // apsChannelMaskList, apsUseExtendedPANID, apsUseInsecureJoin).
-        let mut buf = [0u8; 16 + 8 * 8 + 16];
+        let mut buf = [0u8; 16 + 8 * 8 + 16 + 16];
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(AIB_FORMAT);
         let _ = w.u64_le(self.aps.aib.trust_center_address.0);
@@ -243,6 +243,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let _ = w.u32_le(aib.channel_mask.0);
         let _ = w.u64_le(aib.use_extended_pan_id.0);
         let _ = w.u8(u8::from(aib.use_insecure_join));
+        // Format 3: the other channel pages of apsChannelMaskList.
+        #[allow(clippy::cast_possible_truncation)]
+        let _ = w.u8(aib.channel_mask_pages.len() as u8);
+        for m in &aib.channel_mask_pages {
+            let _ = w.u32_le(m.0);
+        }
         let n = w.position();
         self.storage.store(Key::single(Kind::Aib), &buf[..n])
     }
@@ -405,7 +411,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if let Some(aib) = record(&mut self.storage, Key::single(Kind::Aib))? {
             let mut r = Reader::new(&aib);
             let format = r.u8().ok();
-            if matches!(format, Some(1 | AIB_FORMAT))
+            if matches!(format, Some(1..=AIB_FORMAT))
                 && let Ok(tc) = r.u64_le()
             {
                 self.aps.aib.trust_center_address = ExtendedAddress(tc);
@@ -414,7 +420,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     let Ok(p) = r.u64_le() else { break };
                     let _ = partners.push(p);
                 }
-                if format == Some(AIB_FORMAT)
+                if format >= Some(2)
                     && let (Ok(dc), Ok(mask), Ok(epid), Ok(insecure)) =
                         (r.u8(), r.u32_le(), r.u64_le(), r.u8())
                 {
@@ -422,6 +428,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     self.aps.aib.channel_mask = ChannelMask(mask);
                     self.aps.aib.use_extended_pan_id = ExtendedAddress(epid);
                     self.aps.aib.use_insecure_join = insecure != 0;
+                }
+                if format >= Some(3)
+                    && let Ok(pages) = r.u8()
+                {
+                    self.aps.aib.channel_mask_pages.clear();
+                    for _ in 0..pages {
+                        let Ok(m) = r.u32_le() else { break };
+                        let _ = self.aps.aib.channel_mask_pages.push(ChannelMask(m));
+                    }
                 }
             }
         }

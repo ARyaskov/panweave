@@ -779,7 +779,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     self.push_event(StackEvent::PanIdChanged { pan_id });
                 }
                 NwkEvent::EnergyScanConfirm { channels, energy } => {
-                    self.on_energy_scan_confirm(channels, &energy);
+                    let now = self.now;
+                    if !self.on_interference_scan(&energy, now) {
+                        self.on_energy_scan_confirm(channels, &energy);
+                    }
                 }
                 NwkEvent::LinkPowerDelta {
                     src,
@@ -1135,28 +1138,80 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         req: &MgmtNwkEnhancedUpdateReq,
         broadcast: bool,
     ) {
-        let enhanced_scan = req
-            .configuration
-            .is_none_or(|c| c & MgmtNwkEnhancedUpdateReq::ENHANCED_SCAN != 0);
-        let simple = req.as_update_req();
-        let refuse = simple.is_none() || (enhanced_scan && req.scan_duration <= 0x05);
-        match simple {
-            Some(update) if !refuse => {
-                self.on_nwk_update_request_inner(src, seq, &update, broadcast, true);
+        // §2.4.3.3.9.2 over a Channel List Structure: this device has a
+        // single 2.4 GHz interface, so only the page 0 entry can be acted
+        // on; the multi-page rules of steps 3b, 4c and 5c apply.
+        let page0 = req
+            .channels
+            .pages
+            .iter()
+            .find(|m| m.page().0 == 0)
+            .copied()
+            .unwrap_or(ChannelMask(0));
+        let refuse = |me: &mut Self| {
+            if !broadcast {
+                let notify = MgmtNwkUpdateNotify {
+                    status: ZdpStatus::InvalidRequestType,
+                    scanned_channels: req.channels.first().unwrap_or(ChannelMask(0)),
+                    total_transmissions: 0,
+                    transmission_failures: 0,
+                    energy: &[],
+                };
+                me.zdo.nwk_enhanced_update_notify(src, seq, &notify);
             }
-            _ => {
-                if !broadcast {
-                    let notify = MgmtNwkUpdateNotify {
-                        status: ZdpStatus::InvalidRequestType,
-                        scanned_channels: req.channels.first().unwrap_or(ChannelMask(0)),
-                        total_transmissions: 0,
-                        transmission_failures: 0,
-                        energy: &[],
-                    };
-                    self.zdo.nwk_enhanced_update_notify(src, seq, &notify);
+        };
+        let total_channels: u32 = req
+            .channels
+            .pages
+            .iter()
+            .map(|m| m.channels_only().len())
+            .sum();
+        match req.scan_duration {
+            MgmtNwkUpdateReq::CHANNEL_CHANGE => {
+                // Step 3b: exactly one channel across the pages, on a
+                // supported page (3c).
+                if total_channels != 1 || page0.channels_only().is_empty() {
+                    refuse(self);
+                    return;
                 }
             }
+            MgmtNwkUpdateReq::ATTRIBUTE_CHANGE => {
+                // Step 4c: the whole list becomes apsChannelMaskList.
+                let Some(manager) = req.manager else {
+                    refuse(self);
+                    return;
+                };
+                if !self.aps.aib.is_distributed() && manager != ShortAddress::COORDINATOR {
+                    return;
+                }
+                self.aps.aib.set_channel_mask_list(&req.channels.pages);
+                self.nwk.nib.manager_addr = manager;
+                let _ = self.persist_nib();
+                let _ = self.persist_link_keys();
+                return;
+            }
+            0x00..=0x05 => {
+                // Step 5c: a single page; 5b: one this device supports.
+                if req.channels.pages.len() != 1 || page0.channels_only().is_empty() {
+                    if !broadcast {
+                        refuse(self);
+                    }
+                    return;
+                }
+            }
+            _ => {
+                refuse(self);
+                return;
+            }
         }
+        let update = MgmtNwkUpdateReq {
+            scan_channels: page0,
+            scan_duration: req.scan_duration,
+            scan_count: req.scan_count,
+            update_id: req.update_id,
+            manager: req.manager,
+        };
+        self.on_nwk_update_request_inner(src, seq, &update, broadcast, true);
     }
 
     /// Mgmt_NWK_Beacon_Survey_req (§2.4.3.3.12.3): a coordinator refuses
@@ -1177,10 +1232,6 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             fail(self, ZdpStatus::NotPermitted);
             return;
         }
-        if req.enhanced() {
-            fail(self, ZdpStatus::InvalidRequestType);
-            return;
-        }
         let channels = req
             .channels
             .first()
@@ -1190,11 +1241,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             fail(self, ZdpStatus::InvalidRequestType);
             return;
         }
+        // The configuration bitmask picks an enhanced or a legacy
+        // active scan (Annex D enhanced beacons either way).
         if self.beacon_survey.is_some()
             || !matches!(self.phase, Phase::Operating | Phase::Idle)
             || self
                 .nwk
-                .network_discovery(channels, self.config.scan_duration, false)
+                .network_discovery_with(
+                    channels,
+                    self.config.scan_duration,
+                    false,
+                    Some(req.enhanced()),
+                )
                 .is_err()
         {
             fail(self, ZdpStatus::TemporaryFailure);
@@ -2107,6 +2165,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
                 ZdoEvent::BeaconSurveyRequest { src, seq, req } => {
                     self.on_beacon_survey_request(src, seq, &req);
+                }
+                ZdoEvent::InterferenceReport { src, notify } => {
+                    let channel = notify
+                        .channel_in_use
+                        .channels_only()
+                        .first()
+                        .unwrap_or(self.nwk.nib.channel);
+                    self.push_event(StackEvent::InterferenceReport {
+                        src,
+                        channel,
+                        tx_total: notify.tx_total,
+                        tx_failures: notify.tx_failures,
+                        tx_retries: notify.tx_retries,
+                        period_minutes: notify.period_minutes,
+                    });
                 }
                 ZdoEvent::JoiningListUpdated => {
                     self.push_event(StackEvent::JoiningListUpdated);

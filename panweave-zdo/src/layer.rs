@@ -25,11 +25,11 @@ use crate::zdp::{
     ActiveEpReq, AddrRequestType, AddrRsp, BindReq, ClearAllBindingsReq, DeviceAnnce,
     EndpointListRsp, IeeeAddrReq, MatchDescReq, MgmtBindReq, MgmtLeaveReq, MgmtLqiReq,
     MgmtNwkBeaconSurveyReq, MgmtNwkBeaconSurveyRsp, MgmtNwkEnhancedUpdateReq,
-    MgmtNwkIeeeJoiningListReq, MgmtNwkIeeeJoiningListRsp, MgmtNwkUpdateNotify, MgmtNwkUpdateReq,
-    MgmtPermitJoiningReq, MgmtRtgReq, NeighborRecord, NodeDescReq, NodeDescRsp, NwkAddrReq,
-    ParentAnnce, ParentAnnceRsp, PowerDescReq, PowerDescRsp, RouteRecord, SimpleDescReq,
-    SimpleDescRsp, StatusRsp, SystemServerDiscoveryReq, SystemServerDiscoveryRsp, TableRsp,
-    U16List, ZdpFrame, ZdpStatus, cluster,
+    MgmtNwkIeeeJoiningListReq, MgmtNwkIeeeJoiningListRsp, MgmtNwkUnsolicitedEnhancedUpdateNotify,
+    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, MgmtPermitJoiningReq, MgmtRtgReq, NeighborRecord,
+    NodeDescReq, NodeDescRsp, NwkAddrReq, ParentAnnce, ParentAnnceRsp, PowerDescReq, PowerDescRsp,
+    RouteRecord, SimpleDescReq, SimpleDescRsp, StatusRsp, SystemServerDiscoveryReq,
+    SystemServerDiscoveryRsp, TableRsp, U16List, ZdpFrame, ZdpStatus, cluster,
 };
 
 /// Largest ZDP frame (transaction data) built by the ZDO. Unfragmented
@@ -247,6 +247,15 @@ pub enum ZdoEvent {
         req: MgmtNwkEnhancedUpdateReq,
         /// The request was broadcast (no error responses).
         broadcast: bool,
+    },
+    /// A Mgmt_NWK_Unsolicited_Enhanced_Update_notify (§2.4.4.3.12): a
+    /// device reports interference on its channel to this network
+    /// manager (Annex E).
+    InterferenceReport {
+        /// The reporting device.
+        src: ShortAddress,
+        /// The report.
+        notify: MgmtNwkUnsolicitedEnhancedUpdateNotify,
     },
     /// A unicast Mgmt_NWK_Beacon_Survey_req (§2.4.3.3.12): run the scan
     /// and reply with [`Zdo::beacon_survey_rsp`].
@@ -677,7 +686,7 @@ impl<const EPS: usize> Zdo<EPS> {
     pub fn unsolicited_enhanced_update_notify(
         &mut self,
         manager: ShortAddress,
-        notify: &crate::zdp::MgmtNwkUnsolicitedEnhancedUpdateNotify,
+        notify: &MgmtNwkUnsolicitedEnhancedUpdateNotify,
     ) -> Result<TransactionSequence, ZdoError> {
         self.send_unsolicited(
             manager,
@@ -1300,6 +1309,13 @@ impl<const EPS: usize> Zdo<EPS> {
                     req,
                     broadcast,
                 });
+            }
+            cluster::MGMT_NWK_UNSOLICITED_ENHANCED_UPDATE_NOTIFY => {
+                // Annex E: an interference report for the network manager;
+                // nothing is answered.
+                if let Ok(notify) = MgmtNwkUnsolicitedEnhancedUpdateNotify::decode_exact(data) {
+                    self.push_event(ZdoEvent::InterferenceReport { src, notify });
+                }
             }
             cluster::MGMT_NWK_IEEE_JOINING_LIST_REQ => {
                 // Step 1: broadcasts are dropped.

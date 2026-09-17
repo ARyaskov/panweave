@@ -25,6 +25,7 @@ use panweave_runtime::{Stack, StackConfig, StackEvent};
 use panweave_security::cipher::SoftwareAes;
 use panweave_storage::MemoryStorage;
 use panweave_testkit::{TestRng, VirtualClock, VirtualMedium};
+use panweave_types::Channel;
 use panweave_types::time::{Duration, Instant};
 use panweave_zcl::frame::ZclStatus;
 
@@ -159,6 +160,8 @@ pub struct Simulator {
     pub trace: Vec<TraceEntry>,
     /// Frames transmitted.
     pub frames: u64,
+    /// Energy detect level reported per channel (index = channel number).
+    pub channel_energy: [u8; 27],
     /// Radio used by [`Simulator::inject`] (a device without a stack,
     /// e.g. a Green Power Device).
     phantom: Option<usize>,
@@ -181,6 +184,7 @@ impl Simulator {
             trace_enabled: false,
             trace: Vec::new(),
             frames: 0,
+            channel_energy: [0; 27],
             phantom: None,
         }
     }
@@ -405,7 +409,21 @@ impl Simulator {
                 let radio = self.nodes[i].radio;
                 self.medium.set_channel(radio, channel);
             }
-            MacAction::EnergyDetect { .. } => self.nodes[i].stack.on_energy_result(0),
+            MacAction::EnergyDetect { .. } => {
+                // The channel's configured energy (0 unless the test set
+                // `channel_energy`).
+                let radio = self.nodes[i].radio;
+                let channel = self
+                    .medium
+                    .radio(radio)
+                    .map_or(Channel::DEFAULT_2_4GHZ, |r| r.channel);
+                let level = self
+                    .channel_energy
+                    .get(usize::from(channel.raw()))
+                    .copied()
+                    .unwrap_or(0);
+                self.nodes[i].stack.on_energy_result(level);
+            }
             MacAction::Configure(_) | MacAction::SetPending { .. } => {}
         }
     }

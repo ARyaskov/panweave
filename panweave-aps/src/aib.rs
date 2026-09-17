@@ -65,8 +65,11 @@ const MAX_ASDU_U16: u16 = {
 pub struct Aib {
     /// `apsDesignatedCoordinator` (0xc2).
     pub designated_coordinator: bool,
-    /// `apsChannelMaskList` (0xc3), one mask per page (page 0 only here).
+    /// `apsChannelMaskList` (0xc3), the page 0 entry.
     pub channel_mask: ChannelMask,
+    /// `apsChannelMaskList` (0xc3) entries for other channel pages
+    /// (each mask carries its page in the top bits).
+    pub channel_mask_pages: heapless::Vec<ChannelMask, 3>,
     /// `apsUseExtendedPANID` (0xc4); zero means "any".
     pub use_extended_pan_id: ExtendedAddress,
     /// `apsUseInsecureJoin` (0xc8).
@@ -106,6 +109,21 @@ pub struct Aib {
 }
 
 impl Aib {
+    /// Sets `apsChannelMaskList` from a Channel List Structure: the
+    /// page 0 entry becomes [`Aib::channel_mask`], the others are kept
+    /// beside it (at most three).
+    pub fn set_channel_mask_list(&mut self, list: &[ChannelMask]) {
+        self.channel_mask = ChannelMask(0);
+        self.channel_mask_pages.clear();
+        for m in list {
+            if m.page().0 == 0 {
+                self.channel_mask = *m;
+            } else {
+                let _ = self.channel_mask_pages.push(*m);
+            }
+        }
+    }
+
     /// The distributed-security marker for `apsTrustCenterAddress`.
     pub const NO_TRUST_CENTER: ExtendedAddress = ExtendedAddress(u64::MAX);
 
@@ -113,6 +131,7 @@ impl Aib {
     pub const fn new() -> Self {
         Aib {
             designated_coordinator: false,
+            channel_mask_pages: heapless::Vec::new(),
             channel_mask: ChannelMask::ALL_2_4GHZ,
             use_extended_pan_id: ExtendedAddress::ZERO,
             use_insecure_join: false,

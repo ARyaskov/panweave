@@ -38,9 +38,14 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
     let mut cfg = StackConfig::new(role, ieee);
     cfg.trust_center_policy.allow_joins = true;
     cfg.scan_duration = 1;
+    // Routers answer enhanced beacon requests (Annex D) so an enhanced
+    // beacon survey finds them.
     SimStack::new(
         cfg,
-        MacServiceConfig::default(),
+        MacServiceConfig {
+            enhanced_beacons: true,
+            ..MacServiceConfig::default()
+        },
         TestRng::seed(seed),
         MemoryStorage::new(),
     )
@@ -238,16 +243,71 @@ fn enhanced_update_scans_a_single_page_and_end_device_surveys_beacons() {
     assert_eq!(n.status, ZdpStatus::Success);
     assert_eq!(n.energy.len(), 2);
     sim.take_events(c);
-    // An enhanced active scan is not offered by this MAC.
+    // An energy scan over two pages is refused (§2.4.3.3.9.2 step 5c);
+    // the configuration bitmask does not matter for an energy scan.
+    let mut two_pages = ChannelList::single(mask);
+    two_pages
+        .pages
+        .push(ChannelMask(0x0000_00ff).with_page(panweave_types::ChannelPage(28)))
+        .unwrap();
     sim.stack(c)
         .zdp_request(
             router_short,
             cluster::MGMT_NWK_ENHANCED_UPDATE_REQ,
             &MgmtNwkEnhancedUpdateReq {
-                channels: ChannelList::single(mask),
+                channels: two_pages.clone(),
                 scan_duration: 1,
                 scan_count: Some(1),
                 update_id: None,
+                manager: None,
+                configuration: None,
+            },
+        )
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        zdp(x.events(c), notify_cluster).is_some()
+    }));
+    let data = zdp(sim.events(c), notify_cluster).unwrap();
+    assert_eq!(
+        MgmtNwkUpdateNotify::decode_exact(&data).unwrap().status,
+        ZdpStatus::InvalidRequestType
+    );
+    sim.take_events(c);
+    // A two-page apsChannelMaskList is stored whole (step 4c): page 0
+    // in apsChannelMaskList's first entry, the other page beside it.
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_ENHANCED_UPDATE_REQ,
+            &MgmtNwkEnhancedUpdateReq {
+                channels: two_pages,
+                scan_duration: 0xff,
+                scan_count: None,
+                update_id: Some(0),
+                manager: Some(ShortAddress::COORDINATOR),
+                configuration: None,
+            },
+        )
+        .unwrap();
+    sim.run_for(Duration::from_secs(5));
+    assert_eq!(sim.stack(r).aps.aib.channel_mask, mask);
+    assert_eq!(sim.stack(r).aps.aib.channel_mask_pages.len(), 1);
+    assert_eq!(
+        sim.stack(r).aps.aib.channel_mask_pages[0].page(),
+        panweave_types::ChannelPage(28)
+    );
+    // A channel change naming a channel on an unsupported page is refused.
+    sim.stack(c)
+        .zdp_request(
+            router_short,
+            cluster::MGMT_NWK_ENHANCED_UPDATE_REQ,
+            &MgmtNwkEnhancedUpdateReq {
+                channels: ChannelList::single(
+                    ChannelMask(0x0000_0001).with_page(panweave_types::ChannelPage(28)),
+                ),
+                scan_duration: 0xfe,
+                scan_count: None,
+                update_id: Some(1),
                 manager: None,
                 configuration: None,
             },
@@ -268,9 +328,11 @@ fn enhanced_update_scans_a_single_page_and_end_device_surveys_beacons() {
     // the current parent and the other as a potential one.
     let survey_cluster = cluster::response_of(cluster::MGMT_NWK_BEACON_SURVEY_REQ);
     let channel = sim.stack(e).nwk.nib.channel;
+    // The enhanced scan bit asks for an enhanced active scan (Annex D
+    // enhanced beacons), which the routers answer.
     let req = MgmtNwkBeaconSurveyReq {
         channels: ChannelList::single(ChannelMask::EMPTY.with(channel)),
-        configuration: 0,
+        configuration: 1,
     };
     sim.stack(c)
         .zdp_request(ed_short, cluster::MGMT_NWK_BEACON_SURVEY_REQ, &req)

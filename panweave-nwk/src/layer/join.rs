@@ -158,6 +158,19 @@ impl<
         duration: u8,
         only_permit_join: bool,
     ) -> Result<(), NwkError> {
+        self.network_discovery_with(channels, duration, only_permit_join, None)
+    }
+
+    /// [`Self::network_discovery`] with the scan type chosen: `Some(true)`
+    /// an enhanced active scan, `Some(false)` a legacy one, `None` per
+    /// the configuration and interface table.
+    pub fn network_discovery_with(
+        &mut self,
+        channels: ChannelMask,
+        duration: u8,
+        only_permit_join: bool,
+        enhanced_scan: Option<bool>,
+    ) -> Result<(), NwkError> {
         if self.scan.is_some() {
             return Err(NwkError::Busy);
         }
@@ -179,11 +192,13 @@ impl<
         });
         // Annex D.11.1: a joining device filters on permit joining, a
         // rejoining one on its extended PAN ID.
-        let enhanced_scan = self.config.enhanced_beacon_requests
-            || self
-                .interfaces
-                .enabled()
-                .any(|i| i.scan_type == crate::interface::ScanType::EnhancedActive);
+        let enhanced_scan = enhanced_scan.unwrap_or(
+            self.config.enhanced_beacon_requests
+                || self
+                    .interfaces
+                    .enabled()
+                    .any(|i| i.scan_type == crate::interface::ScanType::EnhancedActive),
+        );
         let enhanced = if !enhanced_scan {
             None
         } else if self.nib.extended_pan_id != ExtendedAddress::ZERO && !only_permit_join {

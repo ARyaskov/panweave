@@ -28,6 +28,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod agility;
 mod bdb;
 mod context;
 mod dlk;

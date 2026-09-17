@@ -13,7 +13,7 @@ use panweave_security::trust_center::TrustCenterPolicy;
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
+    Channel, ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
     KeySequenceNumber, LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId,
     ShortAddress, TransactionSequence,
 };
@@ -93,6 +93,8 @@ pub struct StackConfig {
     /// of ZCL8 §3.18.4 (Match_Desc for the Keep-Alive server, periodic
     /// APS-encrypted reads, `TrustCenterLost` after three failures).
     pub keep_alive: bool,
+    /// Interference reporting to the network manager (R23.2 Annex E).
+    pub interference: crate::agility::InterferencePolicy,
 }
 
 impl StackConfig {
@@ -119,6 +121,7 @@ impl StackConfig {
             fast_poll_interval: Duration::from_millis(100),
             fast_polls: 3,
             keep_alive: true,
+            interference: crate::agility::InterferencePolicy::default(),
         }
     }
 
@@ -468,6 +471,32 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// A device reported interference on its channel to this network
+    /// manager (Mgmt_NWK_Unsolicited_Enhanced_Update_notify, R23.2 Annex
+    /// E); the application decides whether to move the network with
+    /// [`Stack::change_network_channel`].
+    InterferenceReport {
+        /// The reporting device.
+        src: ShortAddress,
+        /// Its channel in use.
+        channel: Channel,
+        /// Unicast transmissions in the period.
+        tx_total: u16,
+        /// Failed unicast transactions.
+        tx_failures: u16,
+        /// MAC retries.
+        tx_retries: u16,
+        /// Length of the period in minutes.
+        period_minutes: u8,
+    },
+    /// This device's channel was found noisier than the alternatives and
+    /// an interference report went to the network manager (Annex E).
+    InterferenceReported {
+        /// The network manager.
+        manager: ShortAddress,
+        /// Energy measured on the channel in use.
+        energy: u8,
+    },
     /// Move to Closest Frequency set `CurrentFrequency` of the Level
     /// Control or Pulse Width Modulation server on `endpoint` (ZCL8
     /// §3.10.2.3.5), in 10 Hz units.
@@ -697,6 +726,13 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) factory_reset_pending: bool,
     /// OTA upgrade server discovery in progress (ZCL8 §11.8).
     pub(crate) ota_discovery: Option<crate::ota::OtaDiscovery>,
+    /// Interference reporting state (Annex E).
+    pub(crate) interference: crate::agility::Interference,
+    /// A channel change this network manager broadcast, applied after
+    /// `nwkNetworkBroadcastDeliveryTime`.
+    pub(crate) pending_channel_change: Option<crate::agility::PendingChannelChange>,
+    /// `apsChannelTimer`: no further channel change before this instant.
+    pub(crate) channel_change_lockout: Option<Instant>,
     /// A Restart Device accepted by the Commissioning server on the
     /// endpoint, due at the instant: install the startup set or restart
     /// with the running configuration (ZCL8 §13.2.2.3.1).
@@ -841,6 +877,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             factory_reset_pending: false,
             tclk_update: None,
             ota_discovery: None,
+            interference: crate::agility::Interference::default(),
+            pending_channel_change: None,
+            channel_change_lockout: None,
             pending_restart: None,
             parent_annce: None,
             parent_link_failures: 0,
@@ -1252,6 +1291,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         self.poll_parent_annce(now);
         self.poll_ota_discovery(now);
+        self.poll_agility(now);
         self.poll_pending_restart(now);
         self.poll_parent_loss_rejoin(now);
         #[cfg(feature = "green-power")]
@@ -1326,6 +1366,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.key_update.map(|(_, at)| at),
             self.tclk_update,
             self.ota_discovery.and_then(|d| d.deadline()),
+            self.agility_deadline(),
             self.pending_restart.map(|(at, _, _)| at),
             self.parent_annce.map(|(at, _)| at),
             self.rejoin_due,

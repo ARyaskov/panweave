@@ -815,10 +815,10 @@ id = "PW-R23-ZDP-015"
 section = "§2.4.3.3.10, §2.4.3.3.11, §2.4.3.3.12"
 summary = "Mgmt_NWK_Enhanced_Update, Mgmt_NWK_IEEE_Joining_List, Mgmt_NWK_Beacon_Survey and responses"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::zdp"
-tests = ["network_management_r23_codecs", "joining_list_gates_association_and_is_read_and_pushed", "enhanced_update_scans_a_single_page_and_end_device_surveys_beacons"]
-notes = "Codecs for Mgmt_NWK_Enhanced_Update_req / _notify (with the Channel List Structure of §3.2.2.2.1), Mgmt_NWK_IEEE_Joining_List_req / _rsp, Mgmt_NWK_Unsolicited_Enhanced_Update_notify and Mgmt_NWK_Beacon_Survey_req / _rsp with their TLVs. The ZDO answers the joining list request from the joining policy and IEEE list held by the NWK layer (INVALID_INDEX past the end, broadcasts dropped, unsolicited broadcast supported), applies received responses per §2.4.4.3.11.2, and the policy gates association and initial commissioning joins. The runtime services a single-page Enhanced Update like Mgmt_NWK_Update_req and a Beacon Survey with an active scan counting beacons (results, potential parents ordered by LQA, PAN ID conflict report; coordinators refuse with NOT_PERMITTED, a missing TLV is MISSING_TLV). Not done: multi-page channel lists (single 2.4 GHz interface), enhanced active scans (no enhanced beacons, refused INV_REQUESTTYPE), sending the unsolicited notify on a schedule (TODO(PW-R23-NWK-UNSOLICITED-NOTIFY))."
+tests = ["network_management_r23_codecs", "joining_list_gates_association_and_is_read_and_pushed", "enhanced_update_scans_a_single_page_and_end_device_surveys_beacons", "router_reports_interference_and_the_manager_moves_the_network"]
+notes = "Codecs for Mgmt_NWK_Enhanced_Update_req / _notify (with the Channel List Structure of §3.2.2.2.1), Mgmt_NWK_IEEE_Joining_List_req / _rsp, Mgmt_NWK_Unsolicited_Enhanced_Update_notify and Mgmt_NWK_Beacon_Survey_req / _rsp with their TLVs. The ZDO answers the joining list request from the joining policy and IEEE list held by the NWK layer (INVALID_INDEX past the end, broadcasts dropped, unsolicited broadcast supported), applies received responses per §2.4.4.3.11.2, and the policy gates association and initial commissioning joins. The runtime services Mgmt_NWK_Enhanced_Update_req per §2.4.3.3.9.2 over the channel list of its single 2.4 GHz interface (channel change: one channel across all pages on a supported page; attribute change: the whole list into apsChannelMaskList; energy scan: a single supported page; INV_REQUESTTYPE otherwise) and a Beacon Survey with a legacy or, per the configuration bitmask, enhanced active scan counting beacons (results, potential parents ordered by LQA, PAN ID conflict report; coordinators refuse with NOT_PERMITTED, a missing TLV is MISSING_TLV). Mgmt_NWK_Unsolicited_Enhanced_Update_notify is sent by the Annex E interference reporting and delivered to a network manager as StackEvent::InterferenceReport."
 [[requirement]]
 id = "PW-R23-ZDP-016"
 section = "§2.4.3.4.1, §2.4.4.4.1"
@@ -1222,10 +1222,10 @@ id = "PW-R23-MAC-005"
 section = "Annex E, Annex F"
 summary = "Network manager as channel manager for interference reporting; multiple frequency band usage"
 level = "optional"
-status = "not-implemented"
-module = "panweave-nwk::network_manager"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::agility"
+tests = ["router_reports_interference_and_the_manager_moves_the_network"]
+notes = "Annex E: routers and coordinators judge their unicast failure rate (nwkTxTotal / nwkTxFailures against StackConfig::interference) every ten minutes, run an energy scan across the 2.4 GHz band and report a noisier-than-alternatives channel to nwkManagerAddr with Mgmt_NWK_Unsolicited_Enhanced_Update_notify (no more than four an hour, counters restarted); the network manager surfaces reports as StackEvent::InterferenceReport (the channel-change decision is the application's, as the annex leaves it to implementers) and Stack::change_network_channel broadcasts Mgmt_NWK_Update_req with ScanDuration 0xfe, increments nwkUpdateId, switches after nwkNetworkBroadcastDeliveryTime and enforces apsChannelTimer (1 hour by default). Receivers change channel per §2.4.3.3.9.2. Annex F (multiple frequency bands, sub-GHz PHYs) is not implemented: one 2.4 GHz interface."
 [[requirement]]
 id = "PW-R23-MAC-006"
 section = "Annex K"
