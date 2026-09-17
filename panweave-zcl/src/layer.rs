@@ -5,17 +5,18 @@
 //! destinations (§2.5.11).
 
 use heapless::{Deque, Vec};
-use panweave_aps::layer::{DataIndication, Delivery};
+use panweave_aps::layer::{DataIndication, Delivery, SecurityStatus};
 use panweave_aps::{Destination, TxOptions};
 use panweave_codec::{Decode, Encode, Writer};
-use panweave_types::time::Instant;
+use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ClusterId, CommandId, Endpoint, ManufacturerCode, ProfileId, ShortAddress, TransactionSequence,
+    ClusterId, CommandId, Endpoint, GroupAddress, ManufacturerCode, ProfileId, ShortAddress,
+    TransactionSequence,
 };
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
-use crate::clusters::identify;
+use crate::clusters::{basic, identify, level, on_off, poll_control, scenes};
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
 
@@ -37,6 +38,8 @@ pub struct EndpointInstance<const C: usize, const A: usize> {
     pub profile: ProfileId,
     /// Clusters.
     pub clusters: Vec<ClusterInstance<A>, C>,
+    /// Scene table of the endpoint's Scenes server (§3.7.2.3).
+    pub scenes: scenes::SceneTable,
 }
 
 impl<const C: usize, const A: usize> EndpointInstance<C, A> {
@@ -46,6 +49,7 @@ impl<const C: usize, const A: usize> EndpointInstance<C, A> {
             endpoint,
             profile,
             clusters: Vec::new(),
+            scenes: scenes::SceneTable::new(),
         }
     }
 
@@ -65,7 +69,9 @@ impl<const C: usize, const A: usize> EndpointInstance<C, A> {
         self.clusters.last_mut().ok_or(ZclError::Busy)
     }
 
-    /// Adds a pre-built cluster instance.
+    /// Adds a pre-built cluster instance; the instance is handed back when
+    /// the endpoint already has that cluster / role or is full.
+    #[allow(clippy::result_large_err)]
     pub fn add_instance(&mut self, c: ClusterInstance<A>) -> Result<(), ClusterInstance<A>> {
         if self.cluster(c.def.id, c.role).is_some() {
             return Err(c);
@@ -131,6 +137,71 @@ pub enum ZclEvent {
         /// Effect variant.
         variant: u8,
     },
+    /// `OnOff` of the On/Off server on `endpoint` changed (§3.8.2.3).
+    OnOff {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// New state.
+        on: bool,
+    },
+    /// Off With Effect received (§3.8.2.3.4): the device is off; the
+    /// effect is the application's to render.
+    OffWithEffect {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Effect identifier.
+        effect: u8,
+        /// Effect variant.
+        variant: u8,
+    },
+    /// `CurrentLevel` of the Level Control server changed (§3.10).
+    Level {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// New level.
+        level: u8,
+        /// The transition completed.
+        done: bool,
+    },
+    /// A scene was recalled on `endpoint` (§3.7.2.4.7).
+    SceneRecalled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Group.
+        group: u16,
+        /// Scene.
+        scene: u8,
+    },
+    /// Poll Control server on `endpoint`: fast poll mode starts or ends
+    /// (§3.16.4.1.4); poll at `ShortPollInterval` while `fast`.
+    FastPoll {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Fast poll mode active.
+        fast: bool,
+        /// Interval to poll at (short or long).
+        interval: Duration,
+    },
+    /// Poll Control server on `endpoint`: `LongPollInterval` changed.
+    LongPollInterval {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// New interval.
+        interval: Duration,
+    },
+    /// Poll Control client on `endpoint` received a Check-in from `src`
+    /// and answered it with its policy (§3.16.5.3).
+    CheckIn {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The server's address.
+        src: ShortAddress,
+        /// The server's endpoint.
+        src_endpoint: Endpoint,
+    },
+    /// Reset to Factory Defaults received (§3.2.2.3.1): every attribute
+    /// of every cluster was restored.
+    FactoryReset,
 }
 
 /// Where a received command came from (for replies).
@@ -151,6 +222,20 @@ pub struct Origin {
     pub header: Header,
     /// Delivered by broadcast or group (no Default Responses).
     pub broadcast: bool,
+    /// Protected with APS link-key security: replies are protected the
+    /// same way.
+    pub aps_secured: bool,
+}
+
+impl Origin {
+    /// Transmit options for a reply: acknowledged, APS-secured when the
+    /// request was.
+    pub const fn reply_options(&self) -> TxOptions {
+        TxOptions {
+            security: self.aps_secured,
+            ..TxOptions::ACKED
+        }
+    }
 }
 
 /// A received ZCL frame for the application.
@@ -228,6 +313,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     }
 
     /// Registers an endpoint.
+    #[allow(clippy::result_large_err)]
     pub fn add_endpoint(
         &mut self,
         ep: EndpointInstance<C, A>,
@@ -437,7 +523,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             origin.endpoint,
             &header,
             payload,
-            TxOptions::ACKED,
+            origin.reply_options(),
         )
     }
 
@@ -502,6 +588,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 cluster: ind.cluster,
                 header: frame.header,
                 broadcast,
+                aps_secured: ind.security == SecurityStatus::LinkKey,
             };
             let role = match frame.header.control.direction {
                 Direction::ToServer => Role::Server,
@@ -570,7 +657,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                     cluster: ind.cluster,
                                     src_endpoint: ep,
                                     frame: fr,
-                                    options: TxOptions::ACKED,
+                                    options: origin.reply_options(),
                                 });
                             }
                         }
@@ -584,18 +671,46 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     }
                 }
                 FrameType::ClusterSpecific => {
-                    if ind.cluster == identify::ID && role == Role::Server {
-                        self.handle_identify(i, &origin, frame.header.command, frame.payload);
+                    let cmd = frame.header.command;
+                    let payload = frame.payload;
+                    if role == Role::Server {
+                        match ind.cluster {
+                            identify::ID => {
+                                self.handle_identify(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            groups::ID => {
+                                self.handle_groups(i, &origin, cmd, payload, groups);
+                                continue;
+                            }
+                            on_off::ID => {
+                                self.handle_on_off(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            level::ID => {
+                                self.handle_level(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            scenes::ID => {
+                                self.handle_scenes(i, &origin, cmd, payload, groups);
+                                continue;
+                            }
+                            poll_control::ID => {
+                                self.handle_poll_control(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            basic::ID if cmd == basic::CMD_RESET_TO_FACTORY_DEFAULTS => {
+                                self.factory_reset();
+                                let _ = self.default_response(&origin, ZclStatus::Success);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    } else if ind.cluster == poll_control::ID {
+                        self.handle_poll_control(i, &origin, cmd, payload);
                         continue;
                     }
-                    if ind.cluster == groups::ID && role == Role::Server {
-                        self.handle_groups(i, &origin, frame.header.command, frame.payload, groups);
-                        continue;
-                    }
-                    result.get_or_insert(ZclIndication::Command {
-                        origin,
-                        payload: frame.payload,
-                    });
+                    result.get_or_insert(ZclIndication::Command { origin, payload });
                 }
                 FrameType::Reserved(_) => {
                     let _ = self.default_response(&origin, ZclStatus::MalformedCommand);
@@ -639,7 +754,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                         cluster: identify::ID,
                         src_endpoint: endpoint,
                         frame: fr,
-                        options: TxOptions::ACKED,
+                        options: origin.reply_options(),
                     });
                 }
             }
@@ -705,7 +820,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                         cluster: groups::ID,
                         src_endpoint: endpoint,
                         frame: fr,
-                        options: TxOptions::ACKED,
+                        options: origin.reply_options(),
                     });
                 }
             }
@@ -713,6 +828,498 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 let _ = self.default_response(origin, status);
             }
             groups::Outcome::None => {}
+        }
+    }
+
+    /// Sends a cluster-specific response to `origin` built from `payload`.
+    fn reply_cluster_specific(&mut self, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let header = origin.header.response(cmd, FrameType::ClusterSpecific);
+        if let Ok(fr) = Self::build(&header, payload) {
+            self.push_action(ZclAction::Send {
+                destination: Destination::Short {
+                    address: origin.src,
+                    endpoint: origin.src_endpoint,
+                },
+                profile: origin.profile,
+                cluster: origin.cluster,
+                src_endpoint: origin.endpoint,
+                frame: fr,
+                options: origin.reply_options(),
+            });
+        }
+    }
+
+    /// On/Off server commands are executed by the layer (§3.8.2.3); the
+    /// Level Control coupling (Table 3-55) and the global scene
+    /// (§3.8.2.2.2) are applied across the endpoint's clusters.
+    fn handle_on_off(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let now = self.now;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(on_off::ID, Role::Server))
+        else {
+            return;
+        };
+        let before = on_off::is_on(c);
+        match on_off::handle(c, cmd, payload, now) {
+            on_off::Outcome::Set(on) => {
+                self.after_on_off(ep_index, before, on, true);
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            on_off::Outcome::OffWithEffect {
+                effect,
+                variant,
+                store_global_scene,
+            } => {
+                if store_global_scene {
+                    self.store_global_scene(ep_index);
+                }
+                if let Some(c) = self
+                    .endpoints
+                    .get_mut(ep_index)
+                    .and_then(|e| e.cluster_mut(on_off::ID, Role::Server))
+                {
+                    on_off::turn_off_with_effect(c, now);
+                }
+                self.after_on_off(ep_index, before, false, true);
+                self.push_event(ZclEvent::OffWithEffect {
+                    endpoint: origin.endpoint,
+                    effect,
+                    variant,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            on_off::Outcome::RecallGlobalScene => {
+                let entry = self.endpoints.get_mut(ep_index).and_then(|e| {
+                    let t = &e.scenes;
+                    e.clusters
+                        .iter_mut()
+                        .find(|c| c.def.id == scenes::ID && c.role == Role::Server)
+                        .and_then(|c| scenes::global(c, t))
+                });
+                match entry {
+                    Some(e) => {
+                        self.apply_scene(ep_index, &e.fields, e.tenths());
+                        self.push_event(ZclEvent::SceneRecalled {
+                            endpoint: origin.endpoint,
+                            group: 0,
+                            scene: 0,
+                        });
+                    }
+                    // No global scene stored: plain On (§3.8.2.3.5.1).
+                    None => self.set_on_off_at(ep_index, true),
+                }
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            on_off::Outcome::Discarded => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            on_off::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// Bookkeeping after `OnOff` was (re)written on endpoint `ep_index`:
+    /// the change event, the Level Control fade (Table 3-55, on a change
+    /// only) and scene invalidation.
+    fn after_on_off(&mut self, ep_index: usize, before: bool, on: bool, level_effect: bool) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        if before == on {
+            return;
+        }
+        if level_effect && let Some(l) = ep.cluster_mut(level::ID, Role::Server) {
+            level::on_off_effect(l, on, now);
+        }
+        if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
+            scenes::invalidate(sc);
+        }
+        self.push_event(ZclEvent::OnOff { endpoint, on });
+        if level_effect {
+            self.service_level(ep_index);
+        }
+    }
+
+    fn set_on_off_at(&mut self, ep_index: usize, on: bool) {
+        let now = self.now;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(on_off::ID, Role::Server))
+        else {
+            return;
+        };
+        let before = on_off::is_on(c);
+        on_off::set_on(c, on, now);
+        self.after_on_off(ep_index, before, on, true);
+    }
+
+    /// Application-side On/Off change (a local switch): applies the
+    /// same coupling as a received command. Returns whether it changed.
+    pub fn set_on_off(&mut self, endpoint: Endpoint, on: bool) -> Result<bool, ZclError> {
+        let i = self
+            .endpoints
+            .iter()
+            .position(|e| e.endpoint == endpoint)
+            .ok_or(ZclError::NotFound)?;
+        let now = self.now;
+        let c = self
+            .endpoints
+            .get_mut(i)
+            .and_then(|e| e.cluster_mut(on_off::ID, Role::Server))
+            .ok_or(ZclError::NotFound)?;
+        let before = on_off::is_on(c);
+        on_off::set_on(c, on, now);
+        self.after_on_off(i, before, on, true);
+        Ok(before != on)
+    }
+
+    /// Level Control server commands (§3.10.2.3).
+    fn handle_level(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let on_off_state = ep.cluster(on_off::ID, Role::Server).map(on_off::is_on);
+        let Some(c) = ep.cluster_mut(level::ID, Role::Server) else {
+            return;
+        };
+        match level::handle(c, cmd, payload, on_off_state, now) {
+            level::Outcome::Applied { turn_on } => {
+                if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
+                    scenes::invalidate(sc);
+                }
+                if turn_on && on_off_state == Some(false) {
+                    // §3.10.2.3.6 / §3.10.2.1.3: no Table 3-55 fade, the
+                    // level command drives the transition.
+                    if let Some(oc) = ep.cluster_mut(on_off::ID, Role::Server) {
+                        on_off::set_on(oc, true, now);
+                    }
+                    self.after_on_off(ep_index, false, true, false);
+                }
+                self.service_level(ep_index);
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            level::Outcome::Suppressed => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            level::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// Runs the Level Control transition engine of one endpoint once.
+    fn service_level(&mut self, ep_index: usize) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        let Some(c) = ep.cluster_mut(level::ID, Role::Server) else {
+            return;
+        };
+        let Some(t) = level::tick(c, now) else {
+            return;
+        };
+        if t.changed || t.done {
+            self.push_event(ZclEvent::Level {
+                endpoint,
+                level: t.level,
+                done: t.done,
+            });
+        }
+        if t.turn_off {
+            self.set_on_off_at(ep_index, false);
+        }
+    }
+
+    /// Current extension field sets of the endpoint (§3.7.2.4.2.1).
+    fn scene_fields(&self, ep_index: usize) -> Vec<u8, { scenes::MAX_EXTENSION_BYTES }> {
+        let mut buf = [0u8; scenes::MAX_EXTENSION_BYTES];
+        let mut w = Writer::new(&mut buf);
+        if let Some(ep) = self.endpoints.get(ep_index) {
+            if let Some(c) = ep.cluster(on_off::ID, Role::Server) {
+                scenes::write_field_set(&mut w, on_off::ID, &on_off::scene_fields(c));
+            }
+            if let Some(c) = ep.cluster(level::ID, Role::Server) {
+                scenes::write_field_set(&mut w, level::ID, &level::scene_fields(c));
+            }
+        }
+        let n = w.position();
+        Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
+    }
+
+    fn store_global_scene(&mut self, ep_index: usize) {
+        let fields = self.scene_fields(ep_index);
+        if let Some(ep) = self.endpoints.get_mut(ep_index) {
+            let t = &mut ep.scenes;
+            if let Some(c) = ep
+                .clusters
+                .iter_mut()
+                .find(|c| c.def.id == scenes::ID && c.role == Role::Server)
+            {
+                scenes::store_global(c, t, &fields);
+            }
+        }
+    }
+
+    /// Applies extension field sets to the endpoint's clusters over
+    /// `tenths` tenths of a second (§3.7.2.4.7.2 step 4).
+    fn apply_scene(&mut self, ep_index: usize, fields: &[u8], tenths: u16) {
+        let now = self.now;
+        let has_level = scenes::FieldSets(fields).any(|(c, _)| c == level::ID);
+        for (cluster, f) in scenes::FieldSets(fields) {
+            let Some(ep) = self.endpoints.get_mut(ep_index) else {
+                return;
+            };
+            if cluster == on_off::ID
+                && let Some(c) = ep.cluster_mut(on_off::ID, Role::Server)
+            {
+                let before = on_off::is_on(c);
+                if let Some(on) = on_off::apply_scene_fields(c, f, now) {
+                    self.after_on_off(ep_index, before, on, !has_level);
+                }
+            } else if cluster == level::ID
+                && let Some(c) = ep.cluster_mut(level::ID, Role::Server)
+            {
+                level::apply_scene_fields(c, f, tenths, now);
+                self.service_level(ep_index);
+            }
+        }
+        // The recalled scene is what the device shows now.
+        if let Some(sc) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(scenes::ID, Role::Server))
+        {
+            sc.set_bool(scenes::SCENE_VALID.id, true);
+        }
+    }
+
+    /// Scenes server commands are executed by the layer against the
+    /// instance's scene table (§3.7.2.4).
+    fn handle_scenes(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+        groups: &mut impl GroupStore,
+    ) {
+        let endpoint = origin.endpoint;
+        let unicast = !origin.broadcast;
+        let member = |g: u16| groups.contains(GroupAddress(g), endpoint);
+        let mut out = [0u8; MAX_ZCL];
+        let mut w = Writer::new(&mut out);
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let t = &mut ep.scenes;
+        let Some(c) = ep
+            .clusters
+            .iter_mut()
+            .find(|c| c.def.id == scenes::ID && c.role == Role::Server)
+        else {
+            return;
+        };
+        let outcome = scenes::handle(c, t, cmd, payload, unicast, &member, &mut w);
+        let outcome = match outcome {
+            scenes::Outcome::Store { group, scene } => {
+                let fields = self.scene_fields(ep_index);
+                let Some(ep) = self.endpoints.get_mut(ep_index) else {
+                    return;
+                };
+                let t = &mut ep.scenes;
+                match ep
+                    .clusters
+                    .iter_mut()
+                    .find(|c| c.def.id == scenes::ID && c.role == Role::Server)
+                {
+                    Some(c) => scenes::complete_store(c, t, group, scene, &fields, unicast, &mut w),
+                    None => return,
+                }
+            }
+            scenes::Outcome::Recall {
+                group,
+                scene,
+                tenths,
+            } => {
+                let fields = self
+                    .endpoints
+                    .get(ep_index)
+                    .and_then(|e| e.scenes.get(group, scene).map(|e| e.fields.clone()));
+                if let Some(f) = fields {
+                    self.apply_scene(ep_index, &f, tenths);
+                }
+                self.push_event(ZclEvent::SceneRecalled {
+                    endpoint,
+                    group,
+                    scene,
+                });
+                scenes::Outcome::Default(ZclStatus::Success)
+            }
+            other => other,
+        };
+        let n = w.position();
+        match outcome {
+            scenes::Outcome::Response(rsp) => {
+                if let Some(payload) = out.get(..n) {
+                    self.reply_cluster_specific(origin, rsp, payload);
+                }
+            }
+            scenes::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+            scenes::Outcome::None
+            | scenes::Outcome::Store { .. }
+            | scenes::Outcome::Recall { .. } => {}
+        }
+    }
+
+    /// Poll Control commands on a server (§3.16.5) or client (Check-in,
+    /// §3.16.4.4) instance.
+    fn handle_poll_control(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let now = self.now;
+        let role = match origin.header.control.direction {
+            Direction::ToServer => Role::Server,
+            Direction::ToClient => Role::Client,
+        };
+        let endpoint = origin.endpoint;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(poll_control::ID, role))
+        else {
+            return;
+        };
+        let long = poll_control::long_poll_interval(c);
+        let short = poll_control::short_poll_interval(c);
+        match poll_control::handle(c, cmd, payload, now) {
+            poll_control::Outcome::FastPoll(_) => {
+                self.push_event(ZclEvent::FastPoll {
+                    endpoint,
+                    fast: true,
+                    interval: short,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            poll_control::Outcome::FastPollEnded => {
+                self.push_event(ZclEvent::FastPoll {
+                    endpoint,
+                    fast: false,
+                    interval: long,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            poll_control::Outcome::LongPollInterval(interval) => {
+                self.push_event(ZclEvent::LongPollInterval { endpoint, interval });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            poll_control::Outcome::ShortPollInterval(_) => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            poll_control::Outcome::CheckInResponse(p) => {
+                self.reply_cluster_specific(origin, poll_control::CMD_CHECK_IN_RESPONSE, &p);
+                self.push_event(ZclEvent::CheckIn {
+                    endpoint,
+                    src: origin.src,
+                    src_endpoint: origin.src_endpoint,
+                });
+            }
+            poll_control::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// Reset to Factory Defaults (§3.2.2.3.1): every attribute of every
+    /// cluster on every endpoint returns to its default; network state,
+    /// bindings and groups are untouched.
+    pub fn factory_reset(&mut self) {
+        let now = self.now;
+        for ep in &mut self.endpoints {
+            for c in &mut ep.clusters {
+                c.reset_to_defaults(now);
+            }
+        }
+        self.push_event(ZclEvent::FactoryReset);
+    }
+
+    /// Runs the cluster timers of every endpoint (Identify, On/Off timed
+    /// off, Level Control transitions, Poll Control check-ins).
+    fn service_cluster_timers(&mut self, now: Instant) {
+        for i in 0..self.endpoints.len() {
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            let (endpoint, profile) = (ep.endpoint, ep.profile);
+            if let Some(c) = ep.cluster_mut(identify::ID, Role::Server)
+                && let Some(seconds) = identify::tick(c, now)
+            {
+                self.push_event(ZclEvent::Identify { endpoint, seconds });
+            }
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(on_off::ID, Role::Server)
+                && let Some(on) = on_off::tick(c, now)
+            {
+                self.after_on_off(i, !on, on, true);
+            }
+            self.service_level(i);
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(poll_control::ID, Role::Server) {
+                let long = poll_control::long_poll_interval(c);
+                let short = poll_control::short_poll_interval(c);
+                match poll_control::tick(c, now) {
+                    Some(poll_control::Tick::CheckIn) => {
+                        let seq = self.next_seq();
+                        let header = Header::cluster_specific(
+                            seq,
+                            poll_control::CMD_CHECK_IN,
+                            Direction::ToClient,
+                        )
+                        .disable_default_response(true);
+                        if let Ok(frame) = Self::build(&header, &[]) {
+                            self.push_action(ZclAction::Send {
+                                destination: Destination::Bound,
+                                profile,
+                                cluster: poll_control::ID,
+                                src_endpoint: endpoint,
+                                frame,
+                                options: TxOptions::ACKED,
+                            });
+                        }
+                        self.push_event(ZclEvent::FastPoll {
+                            endpoint,
+                            fast: true,
+                            interval: short,
+                        });
+                    }
+                    Some(poll_control::Tick::FastPollEnded) => {
+                        self.push_event(ZclEvent::FastPoll {
+                            endpoint,
+                            fast: false,
+                            interval: long,
+                        });
+                    }
+                    None => {}
+                }
+            }
         }
     }
 
@@ -732,18 +1339,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     /// attributes towards bound destinations (§2.5.11, Table 2-4).
     pub fn poll_timers(&mut self, now: Instant) {
         self.now = now;
-        // Identify countdowns (§3.5.2.2.1).
-        for i in 0..self.endpoints.len() {
-            let Some(ep) = self.endpoints.get_mut(i) else {
-                break;
-            };
-            let endpoint = ep.endpoint;
-            if let Some(c) = ep.cluster_mut(identify::ID, Role::Server)
-                && let Some(seconds) = identify::tick(c, now)
-            {
-                self.push_event(ZclEvent::Identify { endpoint, seconds });
-            }
-        }
+        self.service_cluster_timers(now);
         let n_eps = self.endpoints.len();
         for i in 0..n_eps {
             let n_clusters = self.endpoints.get(i).map_or(0, |e| e.clusters.len());

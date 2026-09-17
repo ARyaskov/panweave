@@ -218,6 +218,7 @@ fn end_device_and_coordinator_survive_reboots() {
     fresh.poll(sim.clock.now());
     fresh.resume().unwrap();
     let d2 = sim.add_stack("ed2", fresh, Box::new(OnOffApp::default()));
+    sim.block(d, d2);
     assert!(
         sim.run_until(Duration::from_secs(60), |x| joined(x, d2, true)),
         "secured rejoin failed: {:?}",
@@ -250,6 +251,9 @@ fn end_device_and_coordinator_survive_reboots() {
     fresh.poll(sim.clock.now());
     fresh.resume().unwrap();
     let c2 = sim.add_stack("coord2", fresh, Box::new(OnOffApp::default()));
+    // The old instance is gone for good: not even its last broadcast
+    // retries reach the rebooted one.
+    sim.block(c, c2);
     sim.run_for(Duration::from_secs(5));
     assert!(sim.stack(c2).is_operating());
     // Traffic in both directions with the rebooted coordinator.

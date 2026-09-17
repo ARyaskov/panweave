@@ -136,10 +136,10 @@ id = "PW-ZCL-GEN-001"
 section = "§3.2"
 summary = "Basic cluster attributes and Reset to Factory Defaults command"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-zcl::clusters"
-tests = ["read_write_and_discover_attributes"]
-notes = "Attributes and the Reset to Factory Defaults identifier are defined; the reset behaviour is application-defined."
+status = "implemented"
+module = "panweave-zcl::clusters::basic"
+tests = ["read_write_and_discover_attributes", "reset_to_factory_defaults_restores_attributes_and_reporting"]
+notes = "Reset to Factory Defaults is executed by the endpoint dispatcher: every attribute of every cluster on every endpoint returns to its initial value and default reporting configuration, transient cluster state is cleared, and the application is told with ZclEvent::FactoryReset; network state, bindings and groups are untouched (§3.2.2.3.1)."
 [[requirement]]
 id = "PW-ZCL-GEN-002"
 section = "§3.3"
@@ -172,28 +172,28 @@ id = "PW-ZCL-GEN-005"
 section = "§3.7"
 summary = "Scenes cluster with scene table, extension fields, transitions"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::scenes"
-tests = []
-
+tests = ["scenes_store_recall_and_the_global_scene"]
+notes = "Scene table of 16 entries per endpoint with the On/Off and Level Control extension field sets; Add/View/Remove/Remove All/Store/Recall/Get Scene Membership, Enhanced Add/View (tenths) and Copy Scene with the §3.7.2.4 status rules; groupcast/broadcast deliveries generate no response; scene names are not supported (NameSupport bit 7 clear); recall applies the field sets over the transition time through the Level Control engine; SceneValid tracks On/Off and Level changes; the global scene (0/0) backs Off With Effect / On With Recall Global Scene. LastConfiguredBy is not kept."
 [[requirement]]
 id = "PW-ZCL-GEN-006"
 section = "§3.8"
 summary = "On/Off cluster: OnOff, GlobalSceneControl, OnTime, OffWaitTime, StartUpOnOff; Off/On/Toggle/Off With Effect/On With Recall Global Scene/On With Timed Off"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-zcl::clusters"
-tests = ["default_responses_and_cluster_specific_commands", "reporting_configuration_and_reports"]
-notes = "OnOff attribute with Off/On/Toggle semantics and reporting; the optional attributes and timed/effect commands are defined but not executed."
+status = "implemented"
+module = "panweave-zcl::clusters::on_off"
+tests = ["default_responses_and_cluster_specific_commands", "on_with_timed_off_counts_down_and_guards_the_off_state", "scenes_store_recall_and_the_global_scene"]
+notes = "Executed by the endpoint dispatcher: Off/On/Toggle with the OnTime/OffWaitTime rules, Off With Effect (global scene stored, effect surfaced as ZclEvent::OffWithEffect), On With Recall Global Scene, On With Timed Off with the 100 ms countdown read literally from §3.8.2.3.6.4 (an expired OnTime clears OffWaitTime; an Off command during the timed-on period keeps the guard), GlobalSceneControl per §3.8.2.2.2, StartUpOnOff applied by on_off::start_up when the application supplies the previous value (attributes are not persisted by the stack). OnOff carries the BDB default reporting configuration."
 [[requirement]]
 id = "PW-ZCL-GEN-007"
 section = "§3.10"
 summary = "Level Control cluster: CurrentLevel and related attributes; Move to Level, Move, Step, Stop (with/without On/Off), transitions and rate semantics"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::level"
-tests = []
-
+tests = ["level_transitions_run_on_the_tick_and_couple_with_on_off", "scenes_store_recall_and_the_global_scene"]
+notes = "Move to Level / Move / Step / Stop and the with-On/Off variants with OptionsMask/OptionsOverride and ExecuteIfOff processing; linear transitions driven by the dispatcher's 100 ms tick with RemainingTime; Rate 0xff uses DefaultMoveRate; clamped steps shorten proportionally; with-On/Off commands set OnOff (and GlobalSceneControl) per §3.10.2.3.6; Table 3-55 On/Off fades with OnLevel/On-/OffTransitionTime and restoration of the stored level (applied on a change of OnOff only); CurrentFrequency / Move to Closest Frequency are not implemented; StartUpCurrentLevel is applied by level::start_up on the application's request."
 [[requirement]]
 id = "PW-ZCL-GEN-008"
 section = "§3.11"
@@ -226,10 +226,10 @@ id = "PW-ZCL-GEN-011"
 section = "§3.16"
 summary = "Poll Control cluster: check-in, fast polling, long/short poll intervals"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::poll_control"
-tests = []
-
+tests = ["poll_control_server_checks_in_and_fast_polls", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
+notes = "Server: Table 3-132 attributes with the CheckInInterval/FastPollTimeout write validation, Check-in to the bound clients at a constant CheckInInterval (§3.16.6.1, re-armed when the attribute changes), temporary fast poll mode for 7.68 s awaiting responses, Check-in Response (longest timeout wins, INVALID_FIELD above FastPollTimeoutMax, FAILURE when late), Fast Poll Stop, Set Long/Short Poll Interval with the §3.16.4.2 relationships; the runtime switches the MAC poll rate on ZclEvent::FastPoll / LongPollInterval. Client: answers Check-ins with a configured policy and raises ZclEvent::CheckIn. The 'unbound client → FAILURE' SHOULD is not enforced (the dispatcher does not see the binding table)."
 [[requirement]]
 id = "PW-ZCL-MEAS-001"
 section = "§4.2–§4.8"

@@ -51,6 +51,25 @@ pub enum GlobalOutcome {
     Default(ZclStatus),
 }
 
+/// Validates a write from the network to a cluster attribute beyond the
+/// generic type / access checks (cluster-specific ranges and
+/// relationships, e.g. Poll Control §3.16.4.1). Returns the status for
+/// the Write Attributes Response record.
+pub type WriteGuard<const A: usize> = fn(&AttributeTable<A>, AttributeId, &Value<'_>) -> ZclStatus;
+
+/// Cluster-specific runtime state of the clusters executed by the
+/// endpoint dispatcher.
+#[derive(Clone, Debug, Default)]
+pub enum ClusterState {
+    /// No state.
+    #[default]
+    None,
+    /// Level Control transition (§3.10).
+    Level(crate::clusters::level::Transition),
+    /// Poll Control server / client state (§3.16).
+    PollControl(crate::clusters::poll_control::State),
+}
+
 /// A cluster instance.
 #[derive(Clone, Debug)]
 pub struct ClusterInstance<const A: usize> {
@@ -63,6 +82,10 @@ pub struct ClusterInstance<const A: usize> {
     /// Cluster-specific periodic timer (e.g. the Identify countdown),
     /// serviced by the endpoint dispatcher.
     pub tick: Option<Instant>,
+    /// Cluster-specific state.
+    pub state: ClusterState,
+    /// Cluster-specific validation of network writes.
+    pub write_guard: Option<WriteGuard<A>>,
 }
 
 impl<const A: usize> ClusterInstance<A> {
@@ -82,6 +105,8 @@ impl<const A: usize> ClusterInstance<A> {
             role,
             attributes,
             tick: None,
+            state: ClusterState::None,
+            write_guard: None,
         }
     }
 
@@ -92,6 +117,89 @@ impl<const A: usize> ClusterInstance<A> {
         initial: &Value<'_>,
     ) -> Result<(), ZclStatus> {
         self.attributes.add(def, initial)
+    }
+
+    /// Adds an attribute with its initial value and a default reporting
+    /// configuration (BDB 3.1 §6.5).
+    pub fn add_reported_attribute(
+        &mut self,
+        def: AttributeDef,
+        initial: &Value<'_>,
+        reporting: crate::attribute::DefaultReporting,
+    ) -> Result<(), ZclStatus> {
+        let a = crate::attribute::Attribute::new(def, initial)?
+            .with_default_reporting(reporting, Instant::from_millis(0));
+        self.attributes.add_attribute(a)
+    }
+
+    /// Restores the factory defaults of every attribute and clears the
+    /// transient state (§3.2.2.3.1).
+    pub fn reset_to_defaults(&mut self, now: Instant) {
+        self.attributes.reset_to_defaults(now);
+        self.tick = None;
+        self.state = match self.state {
+            ClusterState::Level(_) => {
+                ClusterState::Level(crate::clusters::level::Transition::default())
+            }
+            ClusterState::PollControl(_) => {
+                ClusterState::PollControl(crate::clusters::poll_control::State::default())
+            }
+            ClusterState::None => ClusterState::None,
+        };
+    }
+
+    /// Unsigned value of a standard attribute (`None` when absent).
+    pub fn u64(&self, id: AttributeId) -> Option<u64> {
+        self.attributes.u64(id)
+    }
+
+    /// 8-bit unsigned value of a standard attribute.
+    pub fn u8(&self, id: AttributeId) -> Option<u8> {
+        self.u64(id).and_then(|v| u8::try_from(v).ok())
+    }
+
+    /// 16-bit unsigned value of a standard attribute.
+    pub fn u16(&self, id: AttributeId) -> Option<u16> {
+        self.u64(id).and_then(|v| u16::try_from(v).ok())
+    }
+
+    /// Boolean value of a standard attribute (`false` when absent or
+    /// invalid).
+    pub fn bool(&self, id: AttributeId) -> bool {
+        matches!(self.attributes.value(id), Some(Value::Bool(Some(true))))
+    }
+
+    /// Application-side write of a standard attribute; returns whether
+    /// the value changed.
+    pub fn set(&mut self, id: AttributeId, v: &Value<'_>) -> bool {
+        self.attributes.set(id, v).unwrap_or(false)
+    }
+
+    /// Application-side write of an unsigned 8-bit attribute.
+    pub fn set_u8(&mut self, id: AttributeId, value: u8) -> bool {
+        self.set(
+            id,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(value),
+            },
+        )
+    }
+
+    /// Application-side write of an unsigned 16-bit attribute.
+    pub fn set_u16(&mut self, id: AttributeId, value: u16) -> bool {
+        self.set(
+            id,
+            &Value::Uint {
+                width: 2,
+                value: u64::from(value),
+            },
+        )
+    }
+
+    /// Application-side write of a boolean attribute.
+    pub fn set_bool(&mut self, id: AttributeId, value: bool) -> bool {
+        self.set(id, &Value::Bool(Some(value)))
     }
 
     /// Processes a global command addressed to this instance; the
@@ -338,6 +446,12 @@ impl<const A: usize> ClusterInstance<A> {
         }
         if rec.value.encoded_len() > crate::attribute::MAX_ATTRIBUTE_BYTES {
             return Err(ZclStatus::InvalidValue);
+        }
+        if let Some(guard) = self.write_guard {
+            let status = guard(&self.attributes, rec.id, &rec.value);
+            if !status.is_success() {
+                return Err(status);
+            }
         }
         Ok(())
     }

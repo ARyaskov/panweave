@@ -109,12 +109,29 @@ impl ReportState {
     }
 }
 
+/// A default reporting configuration (BDB 3.1 §6.5): applied when the
+/// instance is created and restored by Reset to Factory Defaults.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct DefaultReporting {
+    /// Minimum reporting interval (seconds).
+    pub min: u16,
+    /// Maximum reporting interval (seconds; 0 = change-only).
+    pub max: u16,
+    /// Reportable change (analog types).
+    pub change: u64,
+}
+
 /// An attribute with its current value.
 #[derive(Clone, Debug)]
 pub struct Attribute {
     /// Definition.
     pub def: AttributeDef,
     value: Vec<u8, MAX_ATTRIBUTE_BYTES>,
+    /// Factory default (the initial value).
+    default: Vec<u8, MAX_ATTRIBUTE_BYTES>,
+    /// Default reporting configuration, if any.
+    default_reporting: Option<DefaultReporting>,
     /// Reporting state when configured.
     pub reporting: Option<ReportState>,
 }
@@ -125,10 +142,36 @@ impl Attribute {
         let mut a = Attribute {
             def,
             value: Vec::new(),
+            default: Vec::new(),
+            default_reporting: None,
             reporting: None,
         };
         a.store(initial)?;
+        a.default = a.value.clone();
         Ok(a)
+    }
+
+    /// Installs the default reporting configuration (BDB 3.1 §6.5) and
+    /// activates it now.
+    pub fn with_default_reporting(mut self, cfg: DefaultReporting, now: Instant) -> Self {
+        self.default_reporting = Some(cfg);
+        self.configure_reporting(cfg.min, cfg.max, cfg.change, now);
+        self
+    }
+
+    /// The default reporting configuration.
+    pub const fn default_reporting(&self) -> Option<DefaultReporting> {
+        self.default_reporting
+    }
+
+    /// Restores the factory default value and reporting configuration
+    /// (Basic Reset to Factory Defaults, ZCL8 §3.2.2.3.1).
+    pub fn reset_to_default(&mut self, now: Instant) {
+        self.value = self.default.clone();
+        match self.default_reporting {
+            Some(cfg) => self.configure_reporting(cfg.min, cfg.max, cfg.change, now),
+            None => self.reporting = None,
+        }
     }
 
     /// The raw encoded value.
@@ -310,8 +353,28 @@ impl<const N: usize> AttributeTable<N> {
         if self.get(def.id, def.manufacturer).is_some() {
             return Err(ZclStatus::DuplicateExists);
         }
-        let a = Attribute::new(def, initial)?;
+        self.add_attribute(Attribute::new(def, initial)?)
+    }
+
+    /// Adds a prepared attribute.
+    pub fn add_attribute(&mut self, a: Attribute) -> Result<(), ZclStatus> {
+        if self.get(a.def.id, a.def.manufacturer).is_some() {
+            return Err(ZclStatus::DuplicateExists);
+        }
         self.attrs.push(a).map_err(|_| ZclStatus::InsufficientSpace)
+    }
+
+    /// Restores every attribute's factory default (§3.2.2.3.1).
+    pub fn reset_to_defaults(&mut self, now: Instant) {
+        for a in &mut self.attrs {
+            a.reset_to_default(now);
+        }
+    }
+
+    /// Typed read of an unsigned integer / enumeration / bitmap / bool
+    /// attribute as `u64` (`None` when absent or of another type).
+    pub fn u64(&self, id: AttributeId) -> Option<u64> {
+        self.value(id).and_then(|v| v.as_u64())
     }
 
     /// Looks up an attribute.

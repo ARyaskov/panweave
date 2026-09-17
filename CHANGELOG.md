@@ -72,6 +72,18 @@ Keep a Changelog; versions follow SemVer.
   `StackEvent::PanIdConflictReport`, and the PAN ID changes only through
   `Stack::change_pan_id()`; receivers gate the Network Update by a staged
   `nwkNextPanId`.
+* ZCL general clusters executed by the endpoint dispatcher: the full
+  On/Off server (timed off, Off With Effect, global scene), Level Control
+  with 100 ms transitions and the Table 3-55 On/Off coupling, Scenes with
+  a 16-entry table per endpoint and the On/Off / Level extension field
+  sets, Poll Control server and client wired to the sleepy end device's
+  MAC poll rate, the Keep-Alive server plus the routers' Trust Center
+  keep-alive client (`StackEvent::TrustCenterLost`), Basic Reset to
+  Factory Defaults, BDB §6.5 default reporting configurations, and
+  APS-secured replies to APS-secured requests. `ZclEvent` / `StackEvent`
+  gained `OnOff`, `OffWithEffect`, `Level`, `SceneRecalled`, `CheckIn`,
+  `FactoryReset`; facade endpoint builders for the Dimmable Light, Dimmer
+  Switch, the Trust Center utility endpoint and `with_poll_control`.
 * ZDO configuration attributes (`panweave_zdo::ConfigAttributes`, Table
   2-135 defaults) in `StackConfig::zdo`; discovery repeats
   `:Config_NWK_Scan_Attempts` times, `:Config_NWK_Time_btwn_Scans` apart,
@@ -85,3 +97,10 @@ Keep a Changelog; versions follow SemVer.
   `Node` (stack + commissioning machine) with the BDB initialization
   procedure, ready-made endpoints, the `two_nodes` example and an
   end-to-end facade test.
+
+### Changed
+
+* On/Off commands are no longer delivered to the application as
+  `StackEvent::ZclCommand`: the stack applies them and reports
+  `StackEvent::OnOff`; `on_off::apply` takes the current time and
+  `panweave_sim::OnOffApp` mirrors the events.

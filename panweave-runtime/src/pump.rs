@@ -238,7 +238,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     if cluster == cluster::response_of(cluster::SECURITY_CHALLENGE_REQ) {
                         self.on_challenge_response(data);
                     }
-                    if let Ok(data) = Vec::from_slice(data) {
+                    let keep_alive_match = cluster == cluster::response_of(cluster::MATCH_DESC_REQ)
+                        && self.on_keep_alive_match(seq, data);
+                    if !keep_alive_match && let Ok(data) = Vec::from_slice(data) {
                         self.push_event(StackEvent::Zdp(ZdpData {
                             src,
                             seq,
@@ -273,6 +275,19 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Some(ZclIndication::Command { origin, payload }) => Vec::from_slice(payload)
                 .ok()
                 .map(|payload| StackEvent::ZclCommand(ZclFrame { origin, payload })),
+            Some(ZclIndication::Response { origin, payload })
+                if origin.cluster == crate::keep_alive::CLUSTER
+                    && origin.header.command
+                        == panweave_zcl::global::command::READ_ATTRIBUTES_RESPONSE
+                    && self.on_keep_alive_response(
+                        origin.src,
+                        origin.header.seq,
+                        ind.security == SecurityStatus::LinkKey,
+                        payload,
+                    ) =>
+            {
+                None
+            }
             Some(ZclIndication::Response { origin, payload }) => Vec::from_slice(payload)
                 .ok()
                 .map(|payload| StackEvent::ZclResponse(ZclFrame { origin, payload })),
@@ -573,6 +588,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             ShortAddress::NO_SHORT_ADDRESS,
                             DeviceState::NotJoined,
                         );
+                        self.stop_keep_alive();
+                        self.fast_poll_mode = None;
                         self.push_event(StackEvent::Left { rejoin });
                     }
                     Some(ieee) => {
@@ -697,6 +714,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             pan_id: self.nwk.nib.pan_id,
             rejoin,
         });
+        self.start_keep_alive();
     }
 
     /// NLME-JOIN.indication at a parent (§4.6.3.2.1).
@@ -1466,6 +1484,56 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     effect,
                     variant,
                 },
+                ZclEvent::OnOff { endpoint, on } => StackEvent::OnOff { endpoint, on },
+                ZclEvent::OffWithEffect {
+                    endpoint,
+                    effect,
+                    variant,
+                } => StackEvent::OffWithEffect {
+                    endpoint,
+                    effect,
+                    variant,
+                },
+                ZclEvent::Level {
+                    endpoint,
+                    level,
+                    done,
+                } => StackEvent::Level {
+                    endpoint,
+                    level,
+                    done,
+                },
+                ZclEvent::SceneRecalled {
+                    endpoint,
+                    group,
+                    scene,
+                } => StackEvent::SceneRecalled {
+                    endpoint,
+                    group,
+                    scene,
+                },
+                ZclEvent::CheckIn {
+                    endpoint,
+                    src,
+                    src_endpoint,
+                } => StackEvent::CheckIn {
+                    endpoint,
+                    src,
+                    src_endpoint,
+                },
+                ZclEvent::FactoryReset => StackEvent::FactoryReset,
+                ZclEvent::FastPoll { fast, interval, .. } => {
+                    // Poll Control server: switch the MAC poll rate.
+                    self.fast_poll_mode = fast.then_some(interval);
+                    if self.config.sleepy {
+                        self.next_poll = Some(self.now);
+                    }
+                    continue;
+                }
+                ZclEvent::LongPollInterval { interval, .. } => {
+                    self.config.poll_interval = interval;
+                    continue;
+                }
             });
         }
         any

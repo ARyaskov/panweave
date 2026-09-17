@@ -6,6 +6,11 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
 
 pub mod groups;
+pub mod keep_alive;
+pub mod level;
+pub mod on_off;
+pub mod poll_control;
+pub mod scenes;
 
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
@@ -250,69 +255,5 @@ pub mod identify {
             },
             _ => Outcome::Default(ZclStatus::UnsupportedClusterCommand),
         }
-    }
-}
-
-/// On/Off cluster (ZCL8 §3.8), revision 2.
-pub mod on_off {
-    use super::*;
-
-    /// Cluster identifier.
-    pub const ID: ClusterId = ClusterId(0x0006);
-    /// `OnOff` (reportable, scene).
-    pub const ON_OFF: AttributeDef = AttributeDef::new(0x0000, DataType::Bool, Access::RO_REPORT);
-    /// `GlobalSceneControl`.
-    pub const GLOBAL_SCENE_CONTROL: AttributeDef =
-        AttributeDef::new(0x4000, DataType::Bool, Access::RO);
-    /// `OnTime`.
-    pub const ON_TIME: AttributeDef = AttributeDef::new(0x4001, DataType::Uint(2), Access::RW);
-    /// `OffWaitTime`.
-    pub const OFF_WAIT_TIME: AttributeDef =
-        AttributeDef::new(0x4002, DataType::Uint(2), Access::RW);
-    /// `StartUpOnOff`.
-    pub const START_UP_ON_OFF: AttributeDef =
-        AttributeDef::new(0x4003, DataType::Enum8, Access::RW);
-
-    /// Off command.
-    pub const CMD_OFF: CommandId = CommandId(0x00);
-    /// On command.
-    pub const CMD_ON: CommandId = CommandId(0x01);
-    /// Toggle command.
-    pub const CMD_TOGGLE: CommandId = CommandId(0x02);
-    /// Off With Effect command.
-    pub const CMD_OFF_WITH_EFFECT: CommandId = CommandId(0x40);
-    /// On With Recall Global Scene command.
-    pub const CMD_ON_WITH_RECALL_GLOBAL_SCENE: CommandId = CommandId(0x41);
-    /// On With Timed Off command.
-    pub const CMD_ON_WITH_TIMED_OFF: CommandId = CommandId(0x42);
-
-    /// Cluster definition (mandatory commands only).
-    pub const DEF: ClusterDef = ClusterDef {
-        id: ID,
-        revision: 2,
-        received: &[CMD_OFF, CMD_ON, CMD_TOGGLE],
-        generated: &[],
-    };
-
-    /// Builds a server instance with `OnOff` = false.
-    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
-        let mut c = ClusterInstance::new(DEF, Role::Server);
-        c.add_attribute(ON_OFF, &Value::Bool(Some(false)))?;
-        Ok(c)
-    }
-
-    /// Applies an Off / On / Toggle command to the server's `OnOff`
-    /// attribute (§3.8.2.3.1–§3.8.2.3.3). Returns the new state or
-    /// `None` for an unsupported command.
-    pub fn apply<const A: usize>(c: &mut ClusterInstance<A>, command: CommandId) -> Option<bool> {
-        let current = matches!(c.attributes.value(ON_OFF.id), Some(Value::Bool(Some(true))));
-        let next = match command {
-            CMD_OFF => false,
-            CMD_ON => true,
-            CMD_TOGGLE => !current,
-            _ => return None,
-        };
-        let _ = c.attributes.set(ON_OFF.id, &Value::Bool(Some(next)));
-        Some(next)
     }
 }

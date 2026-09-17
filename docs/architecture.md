@@ -174,6 +174,23 @@ checked in so that consumers do not need the generator; `cargo xtask codegen
 `panweave-zcl/src/clusters/`; a metadata-driven generator for the full
 library is planned.
 
+## Cluster execution
+
+The endpoint dispatcher (`panweave-zcl::layer`) executes the general
+clusters whose semantics are fully specified — Identify, Groups, Scenes,
+On/Off, Level Control, Poll Control and the Basic Reset to Factory Defaults
+— and hands everything else to the application as `ZclIndication::Command`.
+Executed clusters keep their state in the cluster instance (`ClusterState`,
+the 100 ms `tick`) or the endpoint (the scene table), and inform the
+application through `ZclEvent`s (`OnOff`, `Level`, `SceneRecalled`,
+`FastPoll`, …) that the runtime re-exports as `StackEvent`s; the
+application never re-implements a command's effect on the attributes. The
+cross-cluster rules (Level Control ↔ On/Off, Table 3-55; the global scene of
+§3.8.2.2.2; scene extension field sets) live in the dispatcher because only
+it sees every cluster of an endpoint. Replies inherit the APS security of
+the request. Reportable mandatory attributes are created with their BDB
+§6.5 default reporting configuration.
+
 ## Conformance tracking
 
 `conformance/*.toml` is the requirement inventory; `cargo xtask conformance`

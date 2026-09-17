@@ -31,6 +31,7 @@ extern crate alloc;
 mod bdb;
 mod context;
 mod dlk;
+mod keep_alive;
 mod persist;
 mod pump;
 mod stack;

@@ -22,7 +22,7 @@ use panweave_zcl::global::{
     DiscoverAttributesResponse, ReadAttributeStatus, Records, ReportingConfig,
     WriteAttributeStatus, command,
 };
-use panweave_zcl::layer::{EndpointInstance, Zcl, ZclAction, ZclIndication};
+use panweave_zcl::layer::{EndpointInstance, Zcl, ZclAction, ZclEvent, ZclIndication};
 use panweave_zcl::types::DataType;
 use panweave_zcl::{Role, Value as V};
 
@@ -45,6 +45,17 @@ fn server() -> Node {
     .unwrap();
     ep.add_instance(identify::server().unwrap()).unwrap();
     ep.add_instance(on_off::server().unwrap()).unwrap();
+    // An application-executed cluster (Temperature Measurement server).
+    ep.add_cluster(
+        panweave_zcl::ClusterDef {
+            id: ClusterId(0x0402),
+            revision: 1,
+            received: &[],
+            generated: &[],
+        },
+        Role::Server,
+    )
+    .unwrap();
     zcl.add_endpoint(ep).unwrap();
     zcl.poll_timers(Instant::from_millis(1000));
     zcl
@@ -265,7 +276,8 @@ fn default_responses_and_cluster_specific_commands() {
     );
     assert!(zcl.next_action().is_none());
 
-    // On command: delivered to the application.
+    // On command: executed by the layer, reported as an event and
+    // answered with a Default Response.
     let header = Header::cluster_specific(
         panweave_types::TransactionSequence(8),
         on_off::CMD_ON,
@@ -273,17 +285,16 @@ fn default_responses_and_cluster_specific_commands() {
     );
     let bytes = frame(&header, &[]);
     let out = zcl.on_data(&ind(on_off::ID, &bytes, false), &mut GroupTable::<4>::new());
-    let Some(ZclIndication::Command { origin, payload }) = out else {
-        panic!("expected command");
-    };
-    assert!(payload.is_empty());
-    assert_eq!(origin.header.command, on_off::CMD_ON);
-    assert_eq!(origin.endpoint, SERVER_EP);
-    let c = zcl
-        .cluster_mut(SERVER_EP, on_off::ID, Role::Server)
-        .unwrap();
-    assert_eq!(on_off::apply(c, on_off::CMD_ON), Some(true));
-    zcl.default_response(&origin, ZclStatus::Success).unwrap();
+    assert!(out.is_none(), "On/Off is executed by the layer");
+    let c = zcl.cluster(SERVER_EP, on_off::ID, Role::Server).unwrap();
+    assert!(on_off::is_on(c));
+    assert_eq!(
+        zcl.next_event(),
+        Some(ZclEvent::OnOff {
+            endpoint: SERVER_EP,
+            on: true
+        })
+    );
     let ZclAction::Send { frame: f, .. } = zcl.next_action().unwrap();
     let (h, n) = Header::decode_prefix(&f).unwrap();
     assert_eq!(h.seq.0, 8);
@@ -294,11 +305,29 @@ fn default_responses_and_cluster_specific_commands() {
     // With Disable Default Response set and success: nothing.
     let header = header.disable_default_response(true);
     let bytes = frame(&header, &[]);
-    let Some(ZclIndication::Command { origin, .. }) =
+    assert!(
         zcl.on_data(&ind(on_off::ID, &bytes, false), &mut GroupTable::<4>::new())
-    else {
-        panic!()
+            .is_none()
+    );
+    assert!(zcl.next_action().is_none());
+    assert!(zcl.next_event().is_none(), "no change, no event");
+    // A cluster-specific command for a cluster the layer does not
+    // execute reaches the application.
+    let header = Header::cluster_specific(
+        panweave_types::TransactionSequence(10),
+        CommandId(0x00),
+        Direction::ToServer,
+    )
+    .disable_default_response(true);
+    let bytes = frame(&header, &[1, 2]);
+    let Some(ZclIndication::Command { origin, payload }) = zcl.on_data(
+        &ind(ClusterId(0x0402), &bytes, false),
+        &mut GroupTable::<4>::new(),
+    ) else {
+        panic!("expected command");
     };
+    assert_eq!(payload, &[1, 2]);
+    assert_eq!(origin.endpoint, SERVER_EP);
     zcl.default_response(&origin, ZclStatus::Success).unwrap();
     assert!(zcl.next_action().is_none());
     zcl.default_response(&origin, ZclStatus::InvalidField)
@@ -418,10 +447,8 @@ fn reporting_configuration_and_reports() {
     // No report yet; a change reports after the minimum interval.
     zcl.poll_timers(Instant::from_millis(1500));
     assert!(zcl.next_action().is_none());
-    let c = zcl
-        .cluster_mut(SERVER_EP, on_off::ID, Role::Server)
-        .unwrap();
-    on_off::apply(c, on_off::CMD_TOGGLE);
+    zcl.set_on_off(SERVER_EP, true).unwrap();
+    let _ = zcl.next_event();
     zcl.poll_timers(Instant::from_millis(1900));
     assert!(zcl.next_action().is_none(), "minimum interval");
     zcl.poll_timers(Instant::from_millis(2000));
@@ -489,16 +516,27 @@ fn group_delivery_targets_member_endpoints_only() {
         .add(panweave_types::GroupAddress(1), Endpoint(2))
         .unwrap();
     let out = zcl.on_data(&i, &mut groups);
-    let Some(ZclIndication::Command { origin, .. }) = out else {
-        panic!()
-    };
-    assert_eq!(origin.endpoint, Endpoint(2));
-    assert!(origin.broadcast);
+    assert!(out.is_none(), "On/Off is executed by the layer");
+    assert_eq!(
+        zcl.next_event(),
+        Some(ZclEvent::OnOff {
+            endpoint: Endpoint(2),
+            on: true
+        })
+    );
+    assert!(zcl.next_event().is_none(), "endpoint 1 is not a member");
+    assert!(
+        !on_off::is_on(zcl.cluster(SERVER_EP, on_off::ID, Role::Server).unwrap()),
+        "endpoint 1 untouched"
+    );
+    assert!(
+        zcl.next_action().is_none(),
+        "no Default Response to a groupcast"
+    );
 }
 
 #[test]
 fn identify_server_countdown_and_query() {
-    use panweave_zcl::layer::ZclEvent;
     let mut zcl = server();
     let now = Instant::from_millis(1000);
     let cs = |seq: u8, cmd: CommandId| {
@@ -597,7 +635,8 @@ fn identify_server_countdown_and_query() {
             seconds: 0
         })
     );
-    assert_eq!(zcl.next_deadline(), None);
+    // Only the OnOff default report (5 min after construction) remains.
+    assert_eq!(zcl.next_deadline(), Some(Instant::from_millis(300_000)));
     assert!(
         zcl.on_data(&ind(identify::ID, &q, true), &mut GroupTable::<4>::new())
             .is_none()

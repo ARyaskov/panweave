@@ -144,10 +144,10 @@ id = "PW-SE-CL-008"
 section = "Annex A.3, §6.1.6"
 summary = "Keep-Alive cluster"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::keep_alive"
-tests = []
-
+tests = ["router_keep_alive_detects_a_vanished_trust_center"]
+notes = "The ZCL8 §3.18 cluster (TCKeepAliveBase / TCKeepAliveJitter server, router client behaviour with three-failure detection) is implemented; the Smart Energy Trust Center swap-out procedure that follows a lost Trust Center is not."
 [[requirement]]
 id = "PW-SE-CL-009"
 section = "Annex B"

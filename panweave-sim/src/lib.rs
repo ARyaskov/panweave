@@ -26,8 +26,6 @@ use panweave_security::cipher::SoftwareAes;
 use panweave_storage::MemoryStorage;
 use panweave_testkit::{TestRng, VirtualClock, VirtualMedium};
 use panweave_types::time::{Duration, Instant};
-use panweave_zcl::Role;
-use panweave_zcl::clusters::on_off;
 use panweave_zcl::frame::ZclStatus;
 
 /// The stack type simulated.
@@ -45,44 +43,32 @@ pub trait App: Any {
     }
 }
 
-/// Default application: executes On/Off commands on any server endpoint
-/// and answers with Default Responses.
+/// Default application: mirrors the On/Off servers executed by the
+/// stack (a lamp driver would switch the load here) and answers any
+/// other cluster-specific command with UNSUPPORTED_CLUSTER_COMMAND.
 #[derive(Debug, Default)]
 pub struct OnOffApp {
-    /// Last applied state per endpoint number.
+    /// Last state per endpoint number.
     pub state: Vec<(u8, bool)>,
 }
 
 impl App for OnOffApp {
     fn on_event(&mut self, stack: &mut SimStack, event: &StackEvent) {
-        let StackEvent::ZclCommand(f) = event else {
-            return;
-        };
-        if f.origin.cluster != on_off::ID {
-            return;
-        }
-        let status = match stack
-            .zcl
-            .cluster_mut(f.origin.endpoint, on_off::ID, Role::Server)
-        {
-            Some(c) => match on_off::apply(c, f.origin.header.command) {
-                Some(s) => {
-                    match self
-                        .state
-                        .iter_mut()
-                        .find(|(e, _)| *e == f.origin.endpoint.0)
-                    {
-                        Some(e) => e.1 = s,
-                        None => self.state.push((f.origin.endpoint.0, s)),
-                    }
-                    ZclStatus::Success
+        match event {
+            StackEvent::OnOff { endpoint, on } => {
+                match self.state.iter_mut().find(|(e, _)| *e == endpoint.0) {
+                    Some(e) => e.1 = *on,
+                    None => self.state.push((endpoint.0, *on)),
                 }
-                None => ZclStatus::UnsupportedClusterCommand,
-            },
-            None => ZclStatus::UnsupportedCluster,
-        };
-        let _ = stack.zcl.default_response(&f.origin, status);
-        stack.flush();
+            }
+            StackEvent::ZclCommand(f) => {
+                let _ = stack
+                    .zcl
+                    .default_response(&f.origin, ZclStatus::UnsupportedClusterCommand);
+                stack.flush();
+            }
+            _ => {}
+        }
     }
 }
 

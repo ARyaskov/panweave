@@ -35,19 +35,19 @@ id = "PW-BDB-POL-003"
 section = "§6.4"
 summary = "Minimum requirements: mandatory ZDO services, identify cluster, groups where required, APS ack usage, node descriptor fields, stack compliance revision"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime"
-tests = ["bdb_formation_steering_finding_binding_and_rejoin"]
-notes = "Profile 0x0104, Identify client for initiators, Groups server with the group table, simple descriptors per endpoint, stack compliance revision 23 are supported; the Keep Alive server / Poll Control client required on a Trust Center are not implemented."
+tests = ["bdb_formation_steering_finding_binding_and_rejoin", "router_keep_alive_detects_a_vanished_trust_center"]
+notes = "Profile 0x0104, Identify client for initiators, Groups server with the group table, simple descriptors per endpoint, stack compliance revision 23; the Trust Center's Keep-Alive server and Poll Control client are provided by panweave::endpoints::trust_center_utility and routers run the keep-alive client of ZCL8 §3.18.4 (Match_Desc discovery, APS-encrypted reads, TrustCenterLost after three failures)."
 [[requirement]]
 id = "PW-BDB-POL-004"
 section = "§6.5"
 summary = "Default reporting configuration for reportable attributes"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zcl::reporting"
-tests = []
-
+status = "implemented"
+module = "panweave-zcl::attribute"
+tests = ["reporting_configuration_and_reports", "reset_to_factory_defaults_restores_attributes_and_reporting"]
+notes = "DefaultReporting installed at instance creation (OnOff: change-based plus 300 s; CurrentLevel: 1 s minimum, 300 s, change 1) and restored by Reset to Factory Defaults; reports go to bound destinations without further configuration and a Configure Reporting overrides it."
 [[requirement]]
 id = "PW-BDB-POL-005"
 section = "§6.6"

@@ -433,6 +433,7 @@ dependencies = [
  "panweave-codec",
  "panweave-mac",
  "panweave-nwk",
+ "panweave-pcap",
  "panweave-runtime",
  "panweave-security",
  "panweave-sim",

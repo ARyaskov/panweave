@@ -38,6 +38,7 @@ panweave-security = { workspace = true, features = ["crypto-software", "dlk"] }
 panweave-runtime = { path = ".", features = ["dlk"] }
 panweave-testkit = { workspace = true }
 panweave-sim = { workspace = true }
+panweave-pcap = { workspace = true }
 
 [lints]
 workspace = true

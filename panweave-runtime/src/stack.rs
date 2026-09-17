@@ -89,6 +89,10 @@ pub struct StackConfig {
     pub fast_poll_interval: Duration,
     /// Number of fast polls after each transmission.
     pub fast_polls: u8,
+    /// Routers on a centralized network run the Trust Center keep-alive
+    /// of ZCL8 §3.18.4 (Match_Desc for the Keep-Alive server, periodic
+    /// APS-encrypted reads, `TrustCenterLost` after three failures).
+    pub keep_alive: bool,
 }
 
 impl StackConfig {
@@ -114,6 +118,7 @@ impl StackConfig {
             poll_interval: Duration::from_secs(3),
             fast_poll_interval: Duration::from_millis(100),
             fast_polls: 3,
+            keep_alive: true,
         }
     }
 
@@ -268,6 +273,57 @@ pub enum StackEvent {
         /// Effect variant.
         variant: u8,
     },
+    /// The On/Off server on `endpoint` changed state (ZCL8 §3.8).
+    OnOff {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// New state.
+        on: bool,
+    },
+    /// Off With Effect received on `endpoint`: render the effect.
+    OffWithEffect {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Effect identifier.
+        effect: u8,
+        /// Effect variant.
+        variant: u8,
+    },
+    /// The Level Control server on `endpoint` changed level (ZCL8
+    /// §3.10); `done` marks the end of a transition.
+    Level {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// New level.
+        level: u8,
+        /// Transition complete.
+        done: bool,
+    },
+    /// A scene was recalled on `endpoint` (ZCL8 §3.7).
+    SceneRecalled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Group.
+        group: u16,
+        /// Scene.
+        scene: u8,
+    },
+    /// A Poll Control client on `endpoint` received a Check-in from
+    /// `src` and answered with its policy (ZCL8 §3.16.5.3).
+    CheckIn {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The polling device.
+        src: ShortAddress,
+        /// Its endpoint.
+        src_endpoint: Endpoint,
+    },
+    /// Reset to Factory Defaults received: all cluster attributes were
+    /// restored (ZCL8 §3.2.2.3.1).
+    FactoryReset,
+    /// Three successive keep-alive reads of the Trust Center failed
+    /// (ZCL8 §3.18.4): it is no longer reachable.
+    TrustCenterLost,
 }
 
 /// The endpoint could not be registered (duplicate number, endpoint 0 or
@@ -351,6 +407,10 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) next_scan: Option<(Instant, ChannelMask, u8)>,
     /// Channels and duration of the discovery in progress.
     pub(crate) last_scan: (ChannelMask, u8),
+    /// Poll Control fast poll mode: the short poll interval while active.
+    pub(crate) fast_poll_mode: Option<Duration>,
+    /// Trust Center keep-alive client.
+    pub(crate) keep_alive: crate::keep_alive::KeepAlive,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -437,6 +497,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             scan_attempts_left: 0,
             next_scan: None,
             last_scan: (ChannelMask::EMPTY, 0),
+            fast_poll_mode: None,
+            keep_alive: crate::keep_alive::KeepAlive::default(),
             dropped_events: 0,
         }
     }
@@ -738,6 +800,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 self.push_event(StackEvent::JoinFailed(NwkStatus::NoNetworks));
             }
         }
+        self.poll_keep_alive(now);
         self.service_polling(now);
         self.pump();
     }
@@ -753,6 +816,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 if self.fast_polls_left > 0 {
                     self.fast_polls_left -= 1;
                     self.next_poll = Some(now.saturating_add(self.config.fast_poll_interval));
+                } else if let Some(short) = self.fast_poll_mode {
+                    // Poll Control fast poll mode (ZCL8 §3.16.4.1.4).
+                    self.next_poll = Some(now.saturating_add(short));
                 } else {
                     self.next_poll = Some(now.saturating_add(self.config.poll_interval));
                 }
@@ -785,6 +851,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.dlk_deadline(),
             self.challenge.map(|c| c.deadline),
             self.next_scan.map(|(at, _, _)| at),
+            self.keep_alive.deadline(),
             self.next_poll
                 .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]
