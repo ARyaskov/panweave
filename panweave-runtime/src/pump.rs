@@ -226,6 +226,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 is_trust_center: is_tc,
                 bindings_changed: false,
                 joining_list_changed: false,
+                max_bind: config.zdo.max_bind,
                 dlk,
             };
             let out = zdo.on_data(&borrowed, &mut ctx);
@@ -611,6 +612,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                                 Ok(()) => self.phase = Phase::Joining(mode),
                                 Err(_) => {
                                     self.phase = Phase::Idle;
+                                    self.note_parent_loss_rejoin(false);
                                     self.push_event(StackEvent::JoinFailed(
                                         NwkStatus::InvalidRequest,
                                     ));
@@ -626,6 +628,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             self.next_scan = Some((at, self.last_scan.0, self.last_scan.1));
                         } else {
                             self.phase = Phase::Idle;
+                            self.note_parent_loss_rejoin(false);
                             self.push_event(StackEvent::JoinFailed(status));
                         }
                     }
@@ -652,6 +655,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         }
                     } else {
                         self.phase = Phase::Idle;
+                        self.note_parent_loss_rejoin(false);
                         self.push_event(StackEvent::JoinFailed(status));
                     }
                 }
@@ -672,6 +676,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     self.phase = Phase::Idle;
                     self.aps
                         .set_network_state(ShortAddress::NO_SHORT_ADDRESS, DeviceState::NotJoined);
+                    self.note_parent_loss_rejoin(false);
                     self.push_event(StackEvent::JoinFailed(NwkStatus::NoKey));
                 }
                 NwkEvent::LeaveIndication {
@@ -727,10 +732,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         && self.config.role == LogicalDeviceType::EndDevice
                         && self.phase == Phase::Operating
                     {
-                        // §3.6.1.4.2 / BDB 3.1 §10.1: rejoin after losing
-                        // the parent.
-                        self.next_poll = None;
-                        let _ = self.join(crate::JoinMode::SecuredRejoin);
+                        // §2.5.5.5.6.x: count failures against
+                        // :Config_Parent_Link_Retry_Threshold, then rejoin
+                        // (§3.6.1.4.2 / BDB 3.1 §10.1) no sooner than
+                        // :Config_Rejoin_Interval after the previous
+                        // attempt.
+                        self.parent_link_failures = self.parent_link_failures.saturating_add(1);
+                        if self.parent_link_failures > self.config.zdo.parent_link_retry_threshold {
+                            self.parent_link_failures = 0;
+                            self.start_parent_loss_rejoin();
+                        }
                     }
                     if code == panweave_nwk::command::NetworkStatusCode::NetworkAddressUpdate
                         && address == self.nwk.nib.network_address
@@ -789,6 +800,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Finishes joining once the network key is active (§4.6.3.2.3.2).
     fn complete_join(&mut self, rejoin: bool) {
         self.phase = Phase::Operating;
+        self.parent_link_failures = 0;
+        self.note_parent_loss_rejoin(true);
         self.aps.set_authorized();
         self.next_poll = Some(self.now);
         self.fast_polls_left = self.config.fast_polls;
@@ -1705,6 +1718,57 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// Rejoin after losing the parent, paced by `:Config_Rejoin_Interval`
+    /// (§2.5.5.5.6.x): starts now when the interval since the last
+    /// attempt has passed, otherwise when it will have.
+    pub(crate) fn start_parent_loss_rejoin(&mut self) {
+        let interval = Duration::from_secs(u64::from(self.rejoin_interval_secs.max(1)));
+        let earliest = self
+            .last_rejoin_attempt
+            .map_or(self.now, |t| t.saturating_add(interval));
+        if self.now.has_reached(earliest) {
+            self.next_poll = None;
+            self.last_rejoin_attempt = Some(self.now);
+            self.parent_loss_rejoin = true;
+            let _ = self.join(crate::JoinMode::SecuredRejoin);
+        } else {
+            self.rejoin_due = Some(earliest);
+        }
+    }
+
+    /// The paced rejoin is due.
+    pub(crate) fn poll_parent_loss_rejoin(&mut self, now: Instant) {
+        if self.rejoin_due.is_some_and(|t| now.has_reached(t))
+            && self.config.role == LogicalDeviceType::EndDevice
+            && matches!(self.phase, Phase::Operating | Phase::Idle)
+        {
+            self.rejoin_due = None;
+            self.start_parent_loss_rejoin();
+        }
+    }
+
+    /// A parent-loss rejoin ended: on failure the interval grows (up to
+    /// `:Config_Max_Rejoin_Interval`) and the next attempt is scheduled;
+    /// on success it returns to `:Config_Rejoin_Interval`.
+    pub(crate) fn note_parent_loss_rejoin(&mut self, success: bool) {
+        if !core::mem::take(&mut self.parent_loss_rejoin) {
+            return;
+        }
+        if success {
+            self.rejoin_interval_secs = self.config.zdo.rejoin_interval_secs;
+            self.rejoin_due = None;
+        } else {
+            self.rejoin_interval_secs = self
+                .rejoin_interval_secs
+                .saturating_mul(2)
+                .min(self.config.zdo.max_rejoin_interval_secs)
+                .max(self.config.zdo.rejoin_interval_secs);
+            self.rejoin_due = self.last_rejoin_attempt.map(|t| {
+                t.saturating_add(Duration::from_secs(u64::from(self.rejoin_interval_secs)))
+            });
+        }
     }
 
     /// Arms `apsParentAnnounceTimer` (§2.4.3.1.12.1): base timer plus a

@@ -889,12 +889,12 @@ id = "PW-R23-ZDO-002"
 section = "§2.5.5"
 summary = "ZDO configuration attributes (permit join duration, network manager address, scan attempts, timeouts, etc.)"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::config"
-tests = ["defaults_follow_table_2_135", "discovery_repeats_config_nwk_scan_attempts_times"]
+tests = ["defaults_follow_table_2_135", "discovery_repeats_config_nwk_scan_attempts_times", "rejoins_after_the_threshold_and_paces_retries", "bind_requests_are_capped_at_config_max_bind"]
 
 # ---------------------------------------------------------------- Security
-notes = "ConfigAttributes carries Table 2-135 defaults; :Config_NWK_Scan_Attempts and :Config_NWK_Time_btwn_Scans drive discovery retries in the runtime; :Config_Permit_Join_Duration, :Config_Max_Bind, :Config_Parent_Link_Retry_Threshold and the rejoin intervals are stored but the parent-loss rejoin back-off is driven by BDB and the NWK layer with their own timers (TODO(PW-ZDO-CFG): wire them)."
+notes = "ConfigAttributes carries the Table 2-135 defaults and the runtime applies them: :Config_NWK_Scan_Attempts and :Config_NWK_Time_btwn_Scans drive discovery retries; an end device counts parent link failures against :Config_Parent_Link_Retry_Threshold before rejoining and paces repeated parent-loss rejoins by :Config_Rejoin_Interval, doubling after each failure up to :Config_Max_Rejoin_Interval; Bind_req is refused with INSUFFICIENT_SPACE beyond :Config_Max_Bind; :Config_Permit_Join_Duration is the application default for Stack::permit_join_network. :Config_Max_Assoc is the NIB nwkMaxChildren."
 [[requirement]]
 id = "PW-R23-SEC-001"
 section = "§4.5.1"

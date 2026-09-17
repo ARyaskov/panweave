@@ -626,6 +626,18 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// broadcast the next Parent_annce and how many end device children
     /// earlier messages already covered.
     pub(crate) parent_annce: Option<(Instant, usize)>,
+    /// Parent link failures counted against
+    /// `:Config_Parent_Link_Retry_Threshold` (§2.5.5.5.6.x).
+    pub(crate) parent_link_failures: u8,
+    /// When the last parent-loss rejoin was started.
+    pub(crate) last_rejoin_attempt: Option<Instant>,
+    /// The current `:Config_Rejoin_Interval` (grows after failures up
+    /// to `:Config_Max_Rejoin_Interval`).
+    pub(crate) rejoin_interval_secs: u16,
+    /// A paced parent-loss rejoin waits for this instant.
+    pub(crate) rejoin_due: Option<Instant>,
+    /// The join in progress is a parent-loss rejoin.
+    pub(crate) parent_loss_rejoin: bool,
     /// The key being awaited completes a rejoin (not an initial join).
     pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
@@ -655,6 +667,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Builds a stack. `rng` must be cryptographically secure: it seeds
     /// NWK jitter and addresses and generates network and link keys.
     pub fn new(config: StackConfig, mac_config: MacServiceConfig, rng: R, storage: S) -> Self {
+        let rejoin_interval_secs = config.zdo.rejoin_interval_secs;
         let mac = MacService::new(mac_config, config.ieee);
         let mut nib = Nib::new(config.role, config.ieee);
         nib.rx_on_when_idle = !config.sleepy;
@@ -738,6 +751,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             factory_reset_pending: false,
             tclk_update: None,
             parent_annce: None,
+            parent_link_failures: 0,
+            last_rejoin_attempt: None,
+            rejoin_interval_secs,
+            rejoin_due: None,
+            parent_loss_rejoin: false,
             awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
@@ -1129,6 +1147,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     .is_err()
             {
                 self.phase = Phase::Idle;
+                self.note_parent_loss_rejoin(false);
                 self.push_event(StackEvent::JoinFailed(NwkStatus::NoNetworks));
             }
         }
@@ -1139,6 +1158,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.push_event(StackEvent::LinkKeyUpdateFailed);
         }
         self.poll_parent_annce(now);
+        self.poll_parent_loss_rejoin(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
         self.poll_touchlink(now);
@@ -1196,6 +1216,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.key_update.map(|(_, at)| at),
             self.tclk_update,
             self.parent_annce.map(|(at, _)| at),
+            self.rejoin_due,
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),

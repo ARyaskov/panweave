@@ -84,6 +84,9 @@ pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng> {
     /// Set when the joining policy or list changed (runtime mirrors it
     /// into the MAC PIB).
     pub joining_list_changed: bool,
+    /// `:Config_Max_Bind` (Table 2-135): binding entries this device
+    /// accepts through Bind_req.
+    pub max_bind: u8,
     /// Key negotiation state.
     pub dlk: &'a mut DlkState,
 }
@@ -207,6 +210,10 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
     }
 
     fn bind(&mut self, req: &BindReq) -> ZdpStatus {
+        // §2.5.5.5.x: no more than :Config_Max_Bind entries.
+        if self.aps.bindings.len() >= usize::from(self.max_bind) {
+            return ZdpStatus::InsufficientSpace;
+        }
         match self.aps.bindings.bind(BindingEntry {
             src_endpoint: req.src_endpoint,
             cluster: req.cluster,

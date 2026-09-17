@@ -445,6 +445,12 @@ Keep a Changelog; versions follow SemVer.
   coordinator announces its end device children after
   `apsParentAnnounceBaseTimer` plus jitter and drops the ones another
   router claims in Parent_annce_rsp (`StackEvent::ChildClaimed`).
+* ZDO configuration attributes in effect (R23.2 Table 2-135): an end
+  device counts parent link failures against
+  `:Config_Parent_Link_Retry_Threshold` before rejoining and paces
+  parent-loss rejoins by `:Config_Rejoin_Interval` (doubling up to
+  `:Config_Max_Rejoin_Interval`); Bind_req beyond `:Config_Max_Bind` is
+  refused with INSUFFICIENT_SPACE.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
