@@ -1,0 +1,16 @@
+[package]
+name = "panweave-pcap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Panweave Zigbee stack: pcap (host-side)"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+panweave-types = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "panweave-nwk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Panweave Zigbee stack: nwk"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+std = ["alloc", "panweave-types/std"]
+alloc = ["panweave-types/alloc"]
+serde = ["dep:serde", "panweave-types/serde"]
+defmt = ["dep:defmt", "panweave-types/defmt"]
+
+[dependencies]
+panweave-types = { workspace = true }
+serde = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+
+[lints]
+workspace = true

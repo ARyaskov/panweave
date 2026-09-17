@@ -1,0 +1,247 @@
+# Panweave conformance inventory: PRO Base Device Behavior v3.1 (22-65816-030).
+
+document = "BDB3.1"
+title = "PRO Base Device Behavior Specification v3.1"
+
+[[requirement]]
+id = "PW-BDB-CFG-001"
+section = "§5.1–§5.7"
+summary = "BDB constants (primary/secondary channel masks, scan durations, TCLK exchange attempts, min commissioning time, touchlink constants) and attributes (bdbNodeIsOnANetwork, bdbCommissioningMode, bdbCommissioningStatus, bdbJoiningNodeEui64, bdbNodeJoinLinkKeyType, bdbTCLinkKeyExchangeMethod, bdbTrustCenterRequireKeyExchange, join policy, node configuration)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::config"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-001"
+section = "§6.1, §6.2"
+summary = "Logical device types and centralized/distributed security models; coordinator forms centralized, router may form distributed"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::policy"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-002"
+section = "§6.3"
+summary = "Commissioning mode bitmask (touchlink, steering, formation, finding & binding) processed in the specified order; commissioning status reporting"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::commissioning"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-003"
+section = "§6.4"
+summary = "Minimum requirements: mandatory ZDO services, identify cluster, groups where required, APS ack usage, node descriptor fields, stack compliance revision"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::policy"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-004"
+section = "§6.5"
+summary = "Default reporting configuration for reportable attributes"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zcl::reporting"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-005"
+section = "§6.6"
+summary = "MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-runtime::end_device::poll"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-006"
+section = "§6.7"
+summary = "Persistent data set retained across power cycles"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-storage"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-007"
+section = "§6.10"
+summary = "APS acknowledgement and APS security usage rules for ZCL and ZDO traffic"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-008"
+section = "§6.11"
+summary = "Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::install_code"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-POL-009"
+section = "§6.12"
+summary = "Short device setup codes"
+level = "optional"
+status = "not-implemented"
+module = "panweave-security::setup_code"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-INIT-001"
+section = "§7.1"
+summary = "Initialization procedure: restore persistent data, if on a network attempt rejoin per §10.1 (routers resume, end devices rejoin), otherwise wait for commissioning"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::init"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-INIT-002"
+section = "§7.2"
+summary = "On-network TCLK update procedure: after joining a centralized network request a unique TCLK (Request Key or DLK), verify it with Verify Key / Confirm Key, retry up to bdbTCLinkKeyExchangeAttemptsMax, leave on failure if required"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::tclk"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-INIT-003"
+section = "§7.3"
+summary = "Ensuring TC connectivity via keep-alive cluster, poll control, or node descriptor polling"
+level = "conditional"
+status = "not-implemented"
+module = "panweave-bdb::keepalive"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-INIT-004"
+section = "§7.4"
+summary = "Application link keys with non-TC devices via Request Key"
+level = "optional"
+status = "not-implemented"
+module = "panweave-bdb::app_keys"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-FORM-001"
+section = "§8.1"
+summary = "Network formation: coordinator forms centralized network on primary then secondary channels; router forms distributed network with random extended PAN ID and network key; set permit join off; update commissioning status"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::formation"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-001"
+section = "§9.1"
+summary = "Network discovery procedure across primary then secondary channel masks with bdbScanDuration"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::steering::discovery"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-002"
+section = "§9.2, §9.3"
+summary = "Join using symmetric key exchange: select network with permit join, MAC associate, receive network key with preconfigured link key (global or install code), then TCLK update"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::steering::join"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-003"
+section = "§9.4, §9.5"
+summary = "Join using key negotiation (DLK) with Network Commissioning Request and Security_Start_Key_Negotiation"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::steering::dlk_join"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-004"
+section = "§9.6"
+summary = "Certificate-based TCLK exchange (CBKE) when supported"
+level = "optional"
+status = "not-implemented"
+module = "panweave-smart-energy::key_establishment"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-005"
+section = "§9.7"
+summary = "On-network steering: broadcast Mgmt_Permit_Joining_req with bdbcMinCommissioningTime, local permit join; local disabling"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::steering::on_network"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-006"
+section = "§9.8"
+summary = "Off-network steering: discovery, join attempt per network, on success TCLK update, broadcast permit joining, device announce"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::steering::off_network"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-STEER-007"
+section = "§9.9"
+summary = "Device interview procedure (R23): TC retrieves descriptors/configuration before authorising; joiner responds; timeouts"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::interview"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-REJOIN-001"
+section = "§10.1"
+summary = "Rejoin procedure: secured rejoin on current channel, then all channels, then unsecured TC rejoin if allowed, with back-off and attempt limits; end devices choose parent by link quality"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::rejoin"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-FB-001"
+section = "§11"
+summary = "Finding & binding: target identifies for bdbcMinCommissioningTime; initiator sends Identify Query broadcast, discovers simple descriptors of responders, creates bindings for matching clusters, optionally groups"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::finding_binding"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-TL-001"
+section = "§12"
+summary = "Touchlink initiator and target procedures (inter-PAN scan, identify, network start/join, key transport with touchlink key)"
+level = "optional"
+status = "not-implemented"
+module = "panweave-bdb::touchlink"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-RESET-001"
+section = "§13.1–§13.3"
+summary = "Reset to factory new via Basic cluster Reset to Factory Defaults, touchlink reset, or local action: leave network, clear persistent data"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::reset"
+tests = []
+
+[[requirement]]
+id = "PW-BDB-RESET-002"
+section = "§13.4, §13.5"
+summary = "Removing a node: TC uses Mgmt_Leave / Remove Device on centralized networks; any router on distributed"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-bdb::reset"
+tests = []

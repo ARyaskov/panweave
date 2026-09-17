@@ -1,0 +1,124 @@
+[workspace]
+resolver = "3"
+members = [
+    "panweave",
+    "panweave-types",
+    "panweave-codec",
+    "panweave-mac",
+    "panweave-nwk",
+    "panweave-security",
+    "panweave-aps",
+    "panweave-zdo",
+    "panweave-zcl",
+    "panweave-device-library",
+    "panweave-bdb",
+    "panweave-green-power",
+    "panweave-direct",
+    "panweave-smart-energy",
+    "panweave-storage",
+    "panweave-runtime",
+    "panweave-testkit",
+    "panweave-sim",
+    "panweave-pcap",
+    "panweave-cli",
+    "xtask",
+]
+exclude = ["fuzz", "examples/esp32c6-temperature-sensor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/andreiriaskov/panweave"
+authors = ["Panweave contributors"]
+keywords = ["zigbee", "ieee802154", "embedded", "no_std", "iot"]
+categories = ["embedded", "network-programming", "no-std"]
+
+[workspace.dependencies]
+panweave-types = { path = "panweave-types", version = "0.1.0", default-features = false }
+panweave-codec = { path = "panweave-codec", version = "0.1.0", default-features = false }
+panweave-mac = { path = "panweave-mac", version = "0.1.0", default-features = false }
+panweave-nwk = { path = "panweave-nwk", version = "0.1.0", default-features = false }
+panweave-security = { path = "panweave-security", version = "0.1.0", default-features = false }
+panweave-aps = { path = "panweave-aps", version = "0.1.0", default-features = false }
+panweave-zdo = { path = "panweave-zdo", version = "0.1.0", default-features = false }
+panweave-zcl = { path = "panweave-zcl", version = "0.1.0", default-features = false }
+panweave-device-library = { path = "panweave-device-library", version = "0.1.0", default-features = false }
+panweave-bdb = { path = "panweave-bdb", version = "0.1.0", default-features = false }
+panweave-green-power = { path = "panweave-green-power", version = "0.1.0", default-features = false }
+panweave-direct = { path = "panweave-direct", version = "0.1.0", default-features = false }
+panweave-smart-energy = { path = "panweave-smart-energy", version = "0.1.0", default-features = false }
+panweave-storage = { path = "panweave-storage", version = "0.1.0", default-features = false }
+panweave-runtime = { path = "panweave-runtime", version = "0.1.0", default-features = false }
+panweave-testkit = { path = "panweave-testkit", version = "0.1.0", default-features = false }
+panweave-sim = { path = "panweave-sim", version = "0.1.0", default-features = false }
+panweave-pcap = { path = "panweave-pcap", version = "0.1.0", default-features = false }
+panweave = { path = "panweave", version = "0.1.0", default-features = false }
+
+heapless = { version = "0.9.3", default-features = false }
+aes = { version = "0.9.3", default-features = false }
+cipher = { version = "0.5.2", default-features = false }
+x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets"] }
+curve25519-dalek = { version = "5.0.0", default-features = false }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "arithmetic"] }
+sha2 = { version = "0.11.0", default-features = false }
+hmac = { version = "0.13.0", default-features = false }
+rand_core = { version = "0.10.1", default-features = false }
+zeroize = { version = "1.9.0", default-features = false, features = ["derive"] }
+subtle = { version = "2.6.1", default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+defmt = { version = "1.1.1" }
+log = { version = "0.4.34" }
+tracing = { version = "0.1.44", default-features = false }
+arbitrary = { version = "1.4.2", features = ["derive"] }
+proptest = { version = "1.11.0" }
+criterion = { version = "0.8.2", default-features = false }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+toml = { version = "1.1.6" }
+thiserror = { version = "2.0.20", default-features = false }
+hex = { version = "0.4.3", default-features = false }
+crc = { version = "3.4.0", default-features = false }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+debug = false
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+doc_markdown = "allow"
+return_self_not_must_use = "allow"
+needless_pass_by_value = "allow"
+wildcard_imports = "allow"
+enum_glob_use = "allow"
+match_same_arms = "allow"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+indexing_slicing = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"

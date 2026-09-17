@@ -1,0 +1,85 @@
+# Panweave conformance inventory: Green Power Basic v1.1.2 (14-0563-19).
+
+document = "GP1.1.2"
+title = "Green Power feature specification, Basic functionality set, v1.1.2"
+
+[[requirement]]
+id = "PW-GP-FRAME-001"
+section = "A.1.4.1"
+summary = "GPDF: 802.15.4 MAC header, NWK frame control (frame type, protocol version 3, auto-commissioning, NWK FC extension), extended NWK frame control (application id, security level, security key, rx-after-tx, direction), GPD SrcID or IEEE+endpoint, security frame counter, command id, payload, MIC"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::frame"
+tests = []
+
+[[requirement]]
+id = "PW-GP-FRAME-002"
+section = "A.1.4.2"
+summary = "Frame types: data and maintenance (channel request/configuration)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::frame"
+tests = []
+
+[[requirement]]
+id = "PW-GP-SEC-001"
+section = "A.1.5.3–A.1.5.12, R23.2 Annex H"
+summary = "GP stub security: security levels 0/2/3, nonce construction per application id, key types (shared/individual, derived from GPD key with AES-MMO/CCM), TC-LK protected key transport, frame counter freshness; test vectors"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::security"
+tests = []
+
+[[requirement]]
+id = "PW-GP-GPD-001"
+section = "A.1.6, A.4"
+summary = "GPD addressing (reserved SrcIDs, application ids 0b000/0b010), bidirectional operation, GPD command ids (switch, sensor, level, color, scenes, commissioning, decommissioning, channel request, success, manufacturer specific)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::commands"
+tests = []
+
+[[requirement]]
+id = "PW-GP-CL-001"
+section = "A.3.3, A.3.4"
+summary = "Green Power cluster 0x0021 server (sink) and client (proxy) attributes and commands: GP Notification, GP Pairing Search, GP Tunneling Stop, GP Commissioning Notification, GP Sink Commissioning Mode, GP Translation Table Update/Request/Response, GP Pairing Configuration, GP Sink Table Request/Response, GP Proxy Table Request/Response, GP Notification Response, GP Pairing, GP Proxy Commissioning Mode, GP Response"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::cluster"
+tests = []
+
+[[requirement]]
+id = "PW-GP-PROXY-001"
+section = "A.3.2.8, A.3.6.3, A.3.8.1"
+summary = "Proxy basic: proxy table, receive GPDF, duplicate filter, security check per proxy table entry, tunnel as GP Notification (unicast/groupcast/derived group, with alias), commissioning mode entered via GP Proxy Commissioning Mode, forward commissioning frames as GP Commissioning Notification"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::proxy"
+tests = []
+
+[[requirement]]
+id = "PW-GP-SINK-001"
+section = "A.3.2.9, A.3.6.2, A.3.8.2"
+summary = "Sink (combo basic): sink table, commissioning (unidirectional and bidirectional), key derivation/delivery, GP Pairing distribution to proxies, translation of GPD commands to ZCL, security and freshness checks"
+level = "conditional"
+status = "not-implemented"
+module = "panweave-green-power::sink"
+tests = []
+
+[[requirement]]
+id = "PW-GP-COMM-001"
+section = "A.3.9"
+summary = "Commissioning procedure: sink commissioning mode window, proxy commissioning window, channel request handling, commissioning reply, success"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::commissioning"
+tests = []
+
+[[requirement]]
+id = "PW-GP-EP-001"
+section = "A.2.4, A.2.5"
+summary = "Green Power endpoint 242 with profile 0xA1E0; proxy alias addressing"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-green-power::endpoint"
+tests = []

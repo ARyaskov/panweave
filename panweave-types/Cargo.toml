@@ -1,0 +1,30 @@
+[package]
+name = "panweave-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core strongly typed protocol values for the Panweave Zigbee stack"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+std = ["alloc"]
+alloc = []
+serde = ["dep:serde"]
+defmt = ["dep:defmt"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+rand_core = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

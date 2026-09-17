@@ -1,0 +1,167 @@
+# Panweave conformance inventory: Smart Energy 1.4a.
+
+document = "SE1.4a"
+title = "Zigbee Smart Energy Standard 1.4a"
+
+[[requirement]]
+id = "PW-SE-PROF-001"
+section = "§5.2, §5.3"
+summary = "Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::profile"
+tests = []
+
+[[requirement]]
+id = "PW-SE-SEC-001"
+section = "§5.4.1–§5.4.3"
+summary = "Joining with preinstalled TCLKs (install codes), rejoin policy, leaving"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::security"
+tests = []
+
+[[requirement]]
+id = "PW-SE-SEC-002"
+section = "§5.4.4, §5.4.5"
+summary = "Network key and link key update policies; key retirement"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::security"
+tests = []
+
+[[requirement]]
+id = "PW-SE-SEC-003"
+section = "§5.4.6"
+summary = "Cluster usage of security keys: APS link-key encryption mandatory for listed clusters"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::security::policy"
+tests = []
+
+[[requirement]]
+id = "PW-SE-SEC-004"
+section = "§5.4.7, Annex C"
+summary = "Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::key_establishment"
+tests = []
+notes = "Requires ECMQV over binary curves; no vetted no_std Rust implementation exists. Tracked as blocked pending a reviewed dependency or in-tree implementation."
+
+[[requirement]]
+id = "PW-SE-SEC-005"
+section = "§5.4.8, §5.13"
+summary = "Trust Center swap-out, keep-alive, coexistence rules"
+level = "optional"
+status = "not-implemented"
+module = "panweave-smart-energy::security"
+tests = []
+
+[[requirement]]
+id = "PW-SE-COMM-001"
+section = "§5.5"
+summary = "Commissioning: formation, commissioning modes, service discovery and binding"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::commissioning"
+tests = []
+
+[[requirement]]
+id = "PW-SE-DEV-001"
+section = "§6.3"
+summary = "SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::devices"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-001"
+section = "Annex D.2"
+summary = "Demand Response and Load Control cluster"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::drlc"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-002"
+section = "Annex D.3"
+summary = "Metering cluster"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::metering"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-003"
+section = "Annex D.4"
+summary = "Price cluster"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::price"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-004"
+section = "Annex D.5"
+summary = "Messaging cluster"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::messaging"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-005"
+section = "Annex D.6"
+summary = "Tunneling cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::tunneling"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-006"
+section = "Annex D.7"
+summary = "Prepayment cluster"
+level = "optional"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters::prepayment"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-007"
+section = "Annex D.9, D.10, D.11, D.12, D.13, D.14"
+summary = "Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters"
+level = "optional"
+status = "not-implemented"
+module = "panweave-smart-energy::clusters"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-008"
+section = "Annex A.3, §6.1.6"
+summary = "Keep-Alive cluster"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zcl::clusters::keep_alive"
+tests = []
+
+[[requirement]]
+id = "PW-SE-CL-009"
+section = "Annex B"
+summary = "Enhanced inter-PAN transmission"
+level = "optional"
+status = "not-implemented"
+module = "panweave-aps::interpan"
+tests = []
+
+[[requirement]]
+id = "PW-SE-EV-001"
+section = "Annex E"
+summary = "Overlapping DRLC event rules"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-smart-energy::events"
+tests = []

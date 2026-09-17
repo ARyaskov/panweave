@@ -1,0 +1,7 @@
+/target
+**/target
+*.pcap
+*.pcapng
+fuzz/artifacts
+fuzz/corpus
+fuzz/coverage

@@ -1,0 +1,1193 @@
+# Panweave conformance inventory: Zigbee Specification R23.2 (05-3474-23).
+# Entries paraphrase requirements; they do not reproduce specification text.
+# status: implemented | partially-implemented | not-implemented | not-applicable
+#         | requires-hardware-validation | requires-clarification
+# level:  mandatory | optional | conditional | deprecated | informative
+
+document = "R23.2"
+title = "Zigbee Specification, Revision 23.2"
+
+# ---------------------------------------------------------------- general
+
+[[requirement]]
+id = "PW-R23-GEN-001"
+section = "§1.2.5"
+summary = "Malformed Zigbee/802.15.4 frames are discarded without response and without state change"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::rx, panweave-aps::rx"
+tests = []
+
+[[requirement]]
+id = "PW-R23-GEN-002"
+section = "§1.2.6, Annex I.1–I.2"
+summary = "TLV encoding: tag, length-minus-one, value; unknown tags skipped; malformed TLVs invalidate the message; global tag range 64–255"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-codec::tlv"
+tests = []
+
+[[requirement]]
+id = "PW-R23-GEN-003"
+section = "Annex I.4"
+summary = "Global TLVs 64–76 (manufacturer specific, supported key negotiation methods, PAN ID conflict report, next PAN ID/channel change, symmetric passphrase, router information, fragmentation parameters, joiner/beacon appendix encapsulation, configuration parameters, device capability extension)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-types::tlv::global"
+tests = []
+
+# ---------------------------------------------------------------- NWK frames
+
+[[requirement]]
+id = "PW-R23-NWK-001"
+section = "§3.3.1"
+summary = "General NPDU header layout: 16-bit frame control, destination and source short addresses, radius, sequence number, optional destination/source IEEE addresses, optional source-route subframe"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::frame"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-002"
+section = "§3.3.1.1"
+summary = "Frame control sub-fields: frame type (data, command, inter-PAN; one reserved), protocol version, discover route, deprecated multicast flag, security, source route, dst/src IEEE presence, end-device initiator; reserved bits"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::frame::FrameControl"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-003"
+section = "§3.3.1.8"
+summary = "Source route subframe: relay count, relay index (initialised to count-1 and decremented per hop), relay list ordered nearest-destination first"
+level = "conditional"
+status = "not-implemented"
+module = "panweave-nwk::frame::SourceRoute"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-004"
+section = "§3.3.2.2, §3.4"
+summary = "NWK command frame: command identifier octet followed by command payload; command frames suppress route discovery and use originator source address"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-005"
+section = "§3.4.1"
+summary = "Route Request command: command options (many-to-one, dst IEEE present, multicast deprecated), route request identifier, destination address, path cost, optional destination IEEE address, optional TLVs"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::RouteRequest"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-006"
+section = "§3.4.2"
+summary = "Route Reply command: options (originator/responder IEEE presence, multicast deprecated), identifier, originator and responder addresses, path cost, optional IEEE addresses"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::RouteReply"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-007"
+section = "§3.4.3"
+summary = "Network Status command: status code and destination address; defined status codes incl. no route available, tree link failure, non-tree link failure, low battery, no routing capacity, no indirect capacity, indirect transaction expiry, target device unavailable, target address unallocated, parent link failure, validate route, source route failure, many-to-one route failure, address conflict, verify addresses, PAN identifier update, network address update, bad frame counter, bad key sequence number, unknown command"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::NetworkStatus"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-008"
+section = "§3.4.4"
+summary = "Leave command: options rejoin, request, remove children"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::Leave"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-009"
+section = "§3.4.5"
+summary = "Route Record command: relay count and relay list accumulated toward the concentrator"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::RouteRecord"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-010"
+section = "§3.4.6, §3.4.7"
+summary = "Rejoin Request (capability information) and Rejoin Response (short address, status) commands"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::{RejoinRequest, RejoinResponse}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-011"
+section = "§3.4.8"
+summary = "Link Status command: options (entry count, first frame, last frame) and list of neighbor address with incoming/outgoing cost"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::LinkStatus"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-012"
+section = "§3.4.9, §3.4.10"
+summary = "Network Report (PAN ID conflict report with list of PAN IDs) and Network Update (PAN ID update with update id and new PAN ID) commands"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::{NetworkReport, NetworkUpdate}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-013"
+section = "§3.4.11, §3.4.12"
+summary = "End Device Timeout Request (requested timeout enumeration, configuration) and Response (status, parent information bitmask)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::{EndDeviceTimeoutRequest, EndDeviceTimeoutResponse}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-014"
+section = "§3.4.13"
+summary = "Link Power Delta command: type (notification, request, response), list of device address and power delta"
+level = "optional"
+status = "not-implemented"
+module = "panweave-nwk::command::LinkPowerDelta"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-015"
+section = "§3.4.14, §3.4.15"
+summary = "Network Commissioning Request (association type, capability information, TLVs) and Response (status, short address, TLVs)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::command::{CommissioningRequest, CommissioningResponse}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-016"
+section = "§3.5.1, §3.5.2"
+summary = "NWK constants (protocol version, max depth, discovery retry backoff, route discovery time, RREQ retries/retry interval, min RREQ jitter, initial RREQ retries) and NIB attributes with defaults and ranges"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::nib"
+tests = []
+
+# ---------------------------------------------------------------- NWK maintenance
+
+[[requirement]]
+id = "PW-R23-NWK-020"
+section = "§3.6.1.1"
+summary = "Network discovery: active scan over requested channels, collect beacons with Zigbee payload into a network descriptor list; report to NLME-NETWORK-DISCOVERY.confirm"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::discovery"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-021"
+section = "§3.6.1.2"
+summary = "Network formation by coordinator (or distributed router): energy scan + active scan, select channel with least energy/fewest networks, select PAN ID not in use, choose extended PAN ID, set short address 0x0000 (or random for distributed), start MAC"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::formation"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-022"
+section = "§3.6.1.3"
+summary = "Permit joining: router/coordinator enables MAC association for the given duration (0x00 disables, 0xFF deprecated → bounded), permit duration timer, beacon association-permit bit reflects state"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::permit_join"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-023"
+section = "§3.6.1.4.1"
+summary = "Joining via MAC association: parent selection from neighbor table (permit joining, depth, link cost, end-device capacity), MAC associate, receive short address, update NIB and neighbor table, report to NLME-JOIN.confirm"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::join::association"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-024"
+section = "§3.6.1.4.2"
+summary = "Parent processing of association: accept only when permit joining, capacity available, assign stochastic short address, add child to neighbor table with relationship child and keep-alive state, respond with association response"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::join::parent"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-025"
+section = "§3.6.1.4.3"
+summary = "Rejoin: NWK-layer Rejoin Request to a selected parent (secured with NWK key when available, unsecured otherwise), Rejoin Response with address/status, retries and timeout"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::join::rejoin"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-026"
+section = "§3.6.1.4.4"
+summary = "Parent processing of Rejoin Request: verify capacity/permission, allocate or keep address, respond with Rejoin Response, notify higher layer (NLME-JOIN.indication with rejoin flag and secure flag)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::join::parent"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-027"
+section = "§3.6.1.4.5, §3.4.14"
+summary = "Joining via Network Commissioning Request (R23): NWK-layer association carrying capability information and TLVs, response with status and allocated address"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::join::commissioning"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-028"
+section = "§3.6.1.7"
+summary = "Stochastic network address assignment: random 16-bit address in the unicast range, avoiding 0x0000, reserved and broadcast ranges and known addresses"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::addressing"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-029"
+section = "§3.6.1.9"
+summary = "Address conflict detection and resolution: detect conflicting short/IEEE pairs from any frame, send Network Status (address conflict), re-assign own address when local conflict, handle child conflicts via Unicast Rejoin Response"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::conflict::address"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-030"
+section = "§3.6.1.10"
+summary = "Leave: locally initiated (NLME-LEAVE.request) sends Leave command with rejoin/remove-children options and resets NIB; remotely received Leave with request flag from parent (and per nwkLeaveRequestAllowed policy) causes leave; children removed when remove-children is set"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::leave"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-031"
+section = "§3.6.1.11"
+summary = "Reset of NWK layer: warm reset preserves persisted NIB attributes; cold reset clears tables"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::reset"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-032"
+section = "§3.6.1.12"
+summary = "Neighbor table contents: extended/short address, device type, rx-on-when-idle, relationship, transmit failure, LQI, outgoing cost, age, incoming beacon timestamp, keep-alive/timeout fields, MAC interface"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::neighbor"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-033"
+section = "§3.6.1.13"
+summary = "PAN ID conflict: detection from beacons with same PAN ID and different extended PAN ID, Network Report to network manager, network manager selects new PAN ID and broadcasts Network Update, all devices switch after nwkNetworkBroadcastDeliveryTime"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::conflict::pan_id"
+tests = []
+
+# ---------------------------------------------------------------- NWK transmission / reception
+
+[[requirement]]
+id = "PW-R23-NWK-040"
+section = "§3.6.2.1"
+summary = "Data transmission: construct NPDU with radius (default 2×nwkMaxDepth), sequence number, addressing, security per nwkSecurityLevel, routing decision (neighbor, routing table, route discovery, many-to-one, source route) and MAC data request with ack for unicast"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::tx"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-041"
+section = "§3.6.2.2"
+summary = "Reception and relay: validate header, decrement radius, discard when radius zero, verify end-device initiator and source consistency, deliver to NLDE when destined locally, relay otherwise; unknown frame types dropped"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::rx"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-042"
+section = "§3.6.2.3"
+summary = "Sequence number handling: incremented per new transmitted frame, seeded randomly"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::nib"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-043"
+section = "§3.6.3"
+summary = "Link cost estimation from LQI: 1–7 with 7 for unusable; incoming cost from local measurement, outgoing cost from Link Status"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::neighbor::cost"
+tests = []
+
+# ---------------------------------------------------------------- NWK routing
+
+[[requirement]]
+id = "PW-R23-NWK-050"
+section = "§3.6.4.1, §3.6.4.2"
+summary = "Routing table and route discovery table entries with status enumeration (active, discovery underway, discovery failed, inactive, validation underway), many-to-one flags, route record required flag, expiry"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::table"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-051"
+section = "§3.6.4.3"
+summary = "Route discovery initiation: create RDT entry, broadcast Route Request with radius, retry nwkcInitialRREQRetries then nwkcRREQRetries with jitter, expire after nwkcRouteDiscoveryTime"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::discovery"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-052"
+section = "§3.6.4.5.2"
+summary = "Route Request processing at intermediate/destination: path cost accumulation, RDT update on better cost, rebroadcast with jitter, destination (or neighbor of destination) generates Route Reply"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::request"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-053"
+section = "§3.6.4.5.3"
+summary = "Route Reply processing: forward along RDT sender toward originator with cost accumulation, update routing table to active at originator"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::reply"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-054"
+section = "§3.6.4.4"
+summary = "Many-to-one route discovery from concentrator: Route Request with many-to-one flag, no Route Reply, routers install route to concentrator and mark route record required when concentrator has no memory"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::many_to_one"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-055"
+section = "§3.6.4.5.4, §3.4.5"
+summary = "Route Record: originator sends Route Record before data when route record required; relays append their address; concentrator stores source route"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::route_record"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-056"
+section = "§3.6.4.6"
+summary = "Source routing: originator inserts relay list; relays forward to next relay by index; source route failure reported with Network Status"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::source_route"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-057"
+section = "§3.6.4.7"
+summary = "Route maintenance: count transmission failures per neighbor, initiate route repair / Network Status (no route available) toward originator on failure, route expiry after nwkRouteExpiryTime"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::routing::maintenance"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-058"
+section = "§3.6.6"
+summary = "Broadcast: broadcast transaction table with sequence/source, passive acknowledgement from neighbors, retransmission up to nwkMaxBroadcastRetries with nwkPassiveAckTimeout, jitter, radius handling, broadcast address semantics (0xFFFF all, 0xFFFD rx-on, 0xFFFC routers, 0xFFFB low-power routers)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::broadcast"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-059"
+section = "§3.6.7"
+summary = "NWK multicast (deprecated in R23): frames with multicast flag are treated per deprecation rules"
+level = "deprecated"
+status = "not-implemented"
+module = "panweave-nwk::rx"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-060"
+section = "§3.6.8"
+summary = "Beacon payload: protocol id, stack profile, protocol version, router/end-device capacity, device depth, extended PAN ID, tx offset, update id; optional beacon appendix TLVs"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::beacon"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-061"
+section = "§3.6.9"
+summary = "Persistent NIB data set survives reset"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-storage"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-062"
+section = "§3.6.10"
+summary = "End-device aging: child timeout negotiated with End Device Timeout Request/Response; parent ages children on keep-alive (data poll / timeout request) and removes children on expiry; end device sends keep-alive at nwkEndDeviceTimeout / 3 or per parent info"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::child"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-063"
+section = "§3.4.8, §3.6.1.12"
+summary = "Link Status periodic transmission every nwkLinkStatusPeriod by routers with all router neighbors; outgoing cost updated from received link status; neighbor age incremented and entries with age > nwkRouterAgeLimit dropped"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::link_status"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-064"
+section = "§3.6.11"
+summary = "Power negotiation via Link Power Delta"
+level = "optional"
+status = "not-implemented"
+module = "panweave-nwk::power"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-065"
+section = "§3.6.12"
+summary = "Multiple MAC interfaces table"
+level = "optional"
+status = "not-implemented"
+module = "panweave-nwk::interface"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-066"
+section = "§3.6.13"
+summary = "Unknown NWK command identifiers are silently discarded (router responds with Network Status unknown command where specified)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-nwk::rx"
+tests = []
+
+[[requirement]]
+id = "PW-R23-NWK-067"
+section = "§3.7"
+summary = "NWK status values"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-types::status::NwkStatus"
+tests = []
+
+# ---------------------------------------------------------------- APS
+
+[[requirement]]
+id = "PW-R23-APS-001"
+section = "§2.2.5.1"
+summary = "APS frame header: frame control (frame type, delivery mode, ack format, security, ack request, extended header), destination endpoint, group address, cluster id, profile id, source endpoint, APS counter, extended header (fragmentation, block number, ack bitfield)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::frame"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-002"
+section = "§2.2.5.2"
+summary = "Data, command and acknowledgement frame layouts"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::frame"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-003"
+section = "§2.2.7"
+summary = "APS constants and AIB attributes (ack wait duration, max frame retries, fragmentation parameters, binding/group tables, interframe delay, max window size)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::aib"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-004"
+section = "§2.2.8.4.2"
+summary = "Reliable unicast: APS ack request, retransmission up to apscMaxFrameRetries with apscAckWaitDuration, confirm with status"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::ack"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-005"
+section = "§2.2.8.4.5"
+summary = "Fragmentation and reassembly: block numbers, window size, ack bitfield, interframe delay, reassembly timeout, per-transaction state"
+level = "conditional"
+status = "not-implemented"
+module = "panweave-aps::fragment"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-006"
+section = "§2.2.8.4.3"
+summary = "Duplicate rejection using source address + APS counter within apsDuplicateRejectionTimeout"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::dedup"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-007"
+section = "§2.2.8.2, §2.2.8.3"
+summary = "Binding table and indirect (bound) transmission to unicast/group destinations; group table membership and group delivery to endpoints"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::{binding, group}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-008"
+section = "§2.2.4.2"
+summary = "APSME management: bind/unbind, add/remove group, get/set AIB"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::management"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-009"
+section = "§2.2.9"
+summary = "APS status values"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-types::status::ApsStatus"
+tests = []
+
+[[requirement]]
+id = "PW-R23-APS-010"
+section = "Annex G"
+summary = "Inter-PAN transmission and reception with stub NWK header and inter-PAN APS header"
+level = "optional"
+status = "not-implemented"
+module = "panweave-aps::interpan"
+tests = []
+
+# ---------------------------------------------------------------- Application framework / descriptors
+
+[[requirement]]
+id = "PW-R23-AF-001"
+section = "§2.3.2.3"
+summary = "Node descriptor: logical type, complex/user descriptor availability (deprecated), APS flags, frequency band, MAC capability, manufacturer code, max buffer size, max incoming/outgoing transfer size, server mask (incl. stack compliance revision), descriptor capability"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::descriptors::NodeDescriptor"
+tests = []
+
+[[requirement]]
+id = "PW-R23-AF-002"
+section = "§2.3.2.4"
+summary = "Power descriptor: current mode, available sources, current source, current level"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::descriptors::PowerDescriptor"
+tests = []
+
+[[requirement]]
+id = "PW-R23-AF-003"
+section = "§2.3.2.5"
+summary = "Simple descriptor: endpoint, profile id, device id, device version, input and output cluster lists"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::descriptors::SimpleDescriptor"
+tests = []
+
+[[requirement]]
+id = "PW-R23-AF-004"
+section = "§2.3.4"
+summary = "Application behaviour on PAN ID conflict"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-runtime"
+tests = []
+
+# ---------------------------------------------------------------- ZDP
+
+[[requirement]]
+id = "PW-R23-ZDP-001"
+section = "§2.4.2, §2.4.5"
+summary = "ZDP frame: transaction sequence number followed by payload; cluster id = request, response = request | 0x8000; status enumeration"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::frame"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-002"
+section = "§2.4.3.1.1, §2.4.3.1.2, §2.4.4.1.1, §2.4.4.1.2"
+summary = "NWK_addr_req / IEEE_addr_req with single/extended request types and their responses including associated device list"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::discovery::address"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-003"
+section = "§2.4.3.1.3–§2.4.3.1.6, §2.4.4.1.3–§2.4.4.1.6"
+summary = "Node_Desc, Power_Desc, Simple_Desc, Active_EP requests and responses"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::discovery::descriptors"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-004"
+section = "§2.4.3.1.7, §2.4.4.1.7"
+summary = "Match_Desc_req/rsp with profile and cluster list matching; broadcast handling"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::discovery::match"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-005"
+section = "§2.4.3.1.11"
+summary = "Device_annce broadcast on join/rejoin with short address, IEEE address, capability; receivers update address map and detect conflicts"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::announce"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-006"
+section = "§2.4.3.1.12, §2.4.4.1.9"
+summary = "Parent_annce / Parent_annce_rsp for child address reconciliation after router restart"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::parent_announce"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-007"
+section = "§2.4.3.1.14, §2.4.4.1.10"
+summary = "System_Server_Discovery_req/rsp with server mask"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zdo::discovery::server"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-008"
+section = "§2.4.3.2.2, §2.4.3.2.3, §2.4.3.2.12, §2.4.4.2"
+summary = "Bind_req, Unbind_req, Clear_All_Bindings_req and responses with unicast/group destination address modes"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::binding"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-009"
+section = "§2.4.3.3.2, §2.4.4.3.2"
+summary = "Mgmt_Lqi_req/rsp neighbor table listing with start index and entry format"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::management::lqi"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-010"
+section = "§2.4.3.3.3, §2.4.4.3.3"
+summary = "Mgmt_Rtg_req/rsp routing table listing"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zdo::management::routing"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-011"
+section = "§2.4.3.3.4, §2.4.4.3.4"
+summary = "Mgmt_Bind_req/rsp binding table listing"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zdo::management::binding"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-012"
+section = "§2.4.3.3.5, §2.4.4.3.5"
+summary = "Mgmt_Leave_req/rsp with remove-children and rejoin flags; only accepted per policy (from TC or for self)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::management::leave"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-013"
+section = "§2.4.3.3.7, §2.4.4.3.7"
+summary = "Mgmt_Permit_Joining_req/rsp with duration and TC significance; broadcast to routers"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::management::permit_join"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-014"
+section = "§2.4.3.3.9, §2.4.4.3.9"
+summary = "Mgmt_NWK_Update_req/notify: energy scan request, channel change, network manager change, update id; energy scan results and counters"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::management::nwk_update"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-015"
+section = "§2.4.3.3.10, §2.4.3.3.11, §2.4.3.3.12"
+summary = "Mgmt_NWK_Enhanced_Update, Mgmt_NWK_IEEE_Joining_List, Mgmt_NWK_Beacon_Survey and responses"
+level = "optional"
+status = "not-implemented"
+module = "panweave-zdo::management::extended"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-016"
+section = "§2.4.3.4.1, §2.4.4.4.1"
+summary = "Security_Start_Key_Negotiation_req/rsp carrying key negotiation method and public point TLVs"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::security::key_negotiation"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-017"
+section = "§2.4.3.4.2, §2.4.4.4.2"
+summary = "Security_Retrieve_Authentication_Token_req/rsp"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::security::auth_token"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-018"
+section = "§2.4.3.4.3, §2.4.3.4.4, §2.4.4.4.3, §2.4.4.4.4"
+summary = "Security_Get_Authentication_Level_req/rsp, Security_Set_Configuration_req/rsp"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::security::config"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-019"
+section = "§2.4.3.4.5, §2.4.3.4.6, §2.4.3.4.7 and responses"
+summary = "Security_Get_Configuration, Security_Start_Key_Update, Security_Decommission"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::security::config"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-020"
+section = "§2.4.3.1.8–§2.4.3.1.10, §2.4.3.1.13–§2.4.3.1.23, §2.4.3.2.1, §2.4.3.2.4–§2.4.3.2.11, §2.4.3.3.1, §2.4.3.3.6, §2.4.3.3.8"
+summary = "Deprecated ZDP commands (complex/user descriptors, discovery cache, bind backups, end device bind, direct join, cache) are not generated; requests receive NOT_SUPPORTED where a response is defined"
+level = "deprecated"
+status = "not-implemented"
+module = "panweave-zdo::server"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDP-021"
+section = "§2.4.4"
+summary = "ZDP server: respond to unicast requests, respond to broadcast only when matching, apply NOT_SUPPORTED / INV_REQUESTTYPE / DEVICE_NOT_FOUND / INVALID_EP semantics"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::server"
+tests = []
+
+# ---------------------------------------------------------------- ZDO
+
+[[requirement]]
+id = "PW-R23-ZDO-001"
+section = "§2.5.2"
+summary = "Device and service discovery, network manager, binding manager, node manager, security manager objects with configuration attributes"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::objects"
+tests = []
+
+[[requirement]]
+id = "PW-R23-ZDO-002"
+section = "§2.5.5"
+summary = "ZDO configuration attributes (permit join duration, network manager address, scan attempts, timeouts, etc.)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-zdo::config"
+tests = []
+
+# ---------------------------------------------------------------- Security
+
+[[requirement]]
+id = "PW-R23-SEC-001"
+section = "§4.5.1"
+summary = "Auxiliary security header: security control (level, key identifier, extended nonce), frame counter, optional source address, optional key sequence number"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::aux_header"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-002"
+section = "Annex A"
+summary = "CCM* with 13-octet nonce (source address, frame counter, security control), security levels 0–7, M in {0,4,8,16}, L = 2"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::ccm"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-003"
+section = "Annex B.6, Annex C.5"
+summary = "AES-MMO (Matyas-Meyer-Oseas) 128-bit hash with specified padding; verified with Annex C vectors"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::mmo"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-004"
+section = "Annex B.1.4, Annex C.6"
+summary = "Keyed hash (HMAC construction over AES-MMO) used for key hashing and key verification"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::mmo::hmac"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-005"
+section = "§4.5.3"
+summary = "Key hierarchy: key-transport key and key-load key derived from link key by hashing with 0x00 and 0x02; hashed link key in transport-key protection"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::key_hierarchy"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-006"
+section = "§4.3.1"
+summary = "NWK frame security: outgoing frames secured with active key and nwkSecurityLevel, incoming frames decrypted with key matching sequence number, incoming frame counter freshness per source, security failure causes drop"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::nwk"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-007"
+section = "§4.3.4"
+summary = "Network frame counter requirements: monotonic outgoing counter persisted across resets, reset to zero only on key switch, incoming counters reset on key switch, request key update near exhaustion"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::frame_counter"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-008"
+section = "§4.4.1"
+summary = "APS frame security using link keys (data and command frames), key-transport/key-load key selection for transport key commands"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::aps"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-009"
+section = "§4.4.11.1"
+summary = "Transport Key command: standard network key (key, sequence number, destination and source addresses), trust center link key, application link key with partner and initiator flag"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::TransportKey"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-010"
+section = "§4.4.11.2"
+summary = "Update Device command: device address, short address, status (standard secured/unsecured rejoin, left, TC rejoin)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::UpdateDevice"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-011"
+section = "§4.4.11.3"
+summary = "Remove Device command with target address"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::RemoveDevice"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-012"
+section = "§4.4.11.4"
+summary = "Request Key command: key type (application link key, TC link key), partner address"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::RequestKey"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-013"
+section = "§4.4.11.5"
+summary = "Switch Key command with sequence number"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::SwitchKey"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-014"
+section = "§4.4.11.6"
+summary = "Tunnel command wrapping an APS command for a joining device via its parent"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::Tunnel"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-015"
+section = "§4.4.11.7, §4.4.11.8"
+summary = "Verify Key (key type, source address, initiator verify-key hash) and Confirm Key (status, key type, destination address)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::{VerifyKey, ConfirmKey}"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-016"
+section = "§4.4.11.9, §4.4.11.10"
+summary = "Relay Message Downstream/Upstream commands for relaying APS commands to/from joiners through a router"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-aps::security_commands::Relay"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-017"
+section = "§4.4.12, §4.4.13"
+summary = "Security AIB: device key pair set (apsDeviceKeyPairSet) with key attributes, incoming/outgoing frame counters, passphrase, TC address, trust center policies"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::material"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-018"
+section = "§4.6.3.2"
+summary = "Joining device authentication: after MAC association receive Transport Key (network key) protected with pre-configured/derived link key; start authentication timer; leave on failure"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::procedures::join"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-019"
+section = "§4.6.3.2, §4.7"
+summary = "Trust Center handling of Update Device: apply policy (allow joins, install code requirement, rejoin policy), send Transport Key (tunnelled via parent when joiner is not a neighbor), start TCLK exchange timer, Remove Device on rejection"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::trust_center::join"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-020"
+section = "§4.6.3.4"
+summary = "Network key update: TC broadcasts new key via Transport Key (nwkKeyType alternate), then Switch Key after nwkNetworkBroadcastDeliveryTime; devices store alternate key and switch on Switch Key; frame counters reset"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::procedures::key_update"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-021"
+section = "§4.6.3.5"
+summary = "Network key recovery: after Switch Key with unknown sequence number, request via Request Key"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::procedures::key_update"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-022"
+section = "§4.6.3.6"
+summary = "Device leave: TC sends Remove Device to parent, parent issues NWK Leave; device leaving reports Update Device (device left)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::procedures::leave"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-023"
+section = "§4.7.1, §4.7.3"
+summary = "Trust Center policies: allowJoins, allowRejoins, allowTrustCenterLinkKeyRequests, allowApplicationKeyRequests, useWhiteList/joining list, requireInstallCodesOrPresetPassphrase, allowRemoteTcPolicyChange, network key update method/period, allowVirtualDevices"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::trust_center::policy"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-024"
+section = "§4.7.2, §4.9.3, §4.9.4"
+summary = "Trust Center link keys: well-known global key, install-code derived keys, unique TCLK per device, key attributes provisional/unverified/verified, Verify Key / Confirm Key exchange after receiving a new TCLK"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::trust_center::link_keys"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-025"
+section = "§4.4.9, §4.9.6, Annex J"
+summary = "Dynamic Link Key negotiation: ECDHE (Curve25519) with SPEKE using passphrase or well-known passphrase, AES-MMO based KDF, key confirmation; results in unverified TCLK"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::dlk"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-026"
+section = "§4.9.7"
+summary = "Passphrase update after joining via Security_Set_Configuration / symmetric passphrase TLV"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::device::passphrase"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-027"
+section = "§4.8"
+summary = "Distributed security network: TC address 0xFFFF…FF, router issues network key on join, distributed global link key usage"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::distributed"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-028"
+section = "§4.7.4"
+summary = "Trust Center swap-out procedure"
+level = "optional"
+status = "not-implemented"
+module = "panweave-security::trust_center::swap_out"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-029"
+section = "§4.9.1"
+summary = "Joining device policies: preconfigured key type, TCLK requirement, behaviour on failed TCLK exchange"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::device"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-030"
+section = "Annex C"
+summary = "Cryptographic test vectors for AES-MMO, HMAC, CCM* and key agreement are used as known-answer tests"
+level = "informative"
+status = "not-implemented"
+module = "panweave-security tests"
+tests = []
+
+[[requirement]]
+id = "PW-R23-SEC-031"
+section = "§4.6.3.7, Annex I.4.12"
+summary = "Device interview state: TC withholds authorization until interview complete; device capability extension TLV"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-security::trust_center::interview"
+tests = []
+
+# ---------------------------------------------------------------- Annex D MAC
+
+[[requirement]]
+id = "PW-R23-MAC-001"
+section = "Annex D.2–D.9"
+summary = "MAC usage: beacon-order 15 non-beacon operation, association capability information, frame version, beacon payload placement, CSMA backoff exponent defaults, recommended scan duration"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-mac"
+tests = []
+
+[[requirement]]
+id = "PW-R23-MAC-002"
+section = "Annex D.11.1"
+summary = "Enhanced beacon request / enhanced beacon with Zigbee payload IE"
+level = "optional"
+status = "not-implemented"
+module = "panweave-mac::frame::ie"
+tests = []
+
+[[requirement]]
+id = "PW-R23-MAC-003"
+section = "Annex D.11.2"
+summary = "MAC power control support"
+level = "optional"
+status = "not-implemented"
+module = "panweave-mac"
+tests = []
+
+[[requirement]]
+id = "PW-R23-MAC-004"
+section = "Annex D.12–D.14"
+summary = "Sub-GHz FSK PHY/MAC (GB and regional): duty cycle, LBT"
+level = "optional"
+status = "not-applicable"
+module = "vendor radio backends"
+tests = []
+notes = "PHY-specific; outside the hardware-independent core."
+
+[[requirement]]
+id = "PW-R23-MAC-005"
+section = "Annex E, Annex F"
+summary = "Network manager as channel manager for interference reporting; multiple frequency band usage"
+level = "optional"
+status = "not-implemented"
+module = "panweave-nwk::network_manager"
+tests = []
+
+[[requirement]]
+id = "PW-R23-MAC-006"
+section = "Annex K"
+summary = "Provisional routing improvements (extended route information TLVs)"
+level = "optional"
+status = "not-implemented"
+module = "panweave-nwk::routing"
+tests = []
+notes = "Provisional; not planned until stabilised."

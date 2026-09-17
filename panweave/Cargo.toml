@@ -1,0 +1,23 @@
+[package]
+name = "panweave"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Independent Rust implementation of IEEE 802.15.4-based Zigbee protocol functionality"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+std = ["alloc", "panweave-types/std"]
+alloc = ["panweave-types/alloc"]
+serde = ["panweave-types/serde"]
+defmt = ["panweave-types/defmt"]
+
+[dependencies]
+panweave-types = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+# Panweave conformance inventory: Device Type Library Revision 2 (23-02016).
+
+document = "DTL2"
+title = "Device Type Library Specification, Revision 2"
+
+[[requirement]]
+id = "PW-DTL-GEN-001"
+section = "§1.9–§1.13"
+summary = "Device definition conventions: attribute lists, permitted transmission modes, device class, groups/scenes clarifications, cluster usage restrictions, transmission handling"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-device-library::model"
+tests = []
+
+[[requirement]]
+id = "PW-DTL-DEV-001"
+section = "§4–§40"
+summary = "Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-device-library::generated"
+tests = []
+
+[[requirement]]
+id = "PW-DTL-VAL-001"
+section = "§1.4, per-device cluster requirements"
+summary = "Validation of endpoint composition against device type requirements (required clusters, attributes, commands)"
+level = "mandatory"
+status = "not-implemented"
+module = "panweave-device-library::validate"
+tests = []
