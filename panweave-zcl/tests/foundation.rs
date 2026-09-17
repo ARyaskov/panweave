@@ -658,3 +658,112 @@ fn identify_server_countdown_and_query() {
         })
     );
 }
+
+/// Sends `header` to `cluster` and returns the Default Response status,
+/// or the response header when a real response came back.
+fn reply(zcl: &mut Node, cluster: ClusterId, header: &Header, payload: &[u8]) -> (Header, Vec<u8>) {
+    let bytes = frame(header, payload);
+    let _ = zcl.on_data(&ind(cluster, &bytes, false), &mut GroupTable::<4>::new());
+    let ZclAction::Send { frame, .. } = zcl.next_action().expect("a reply");
+    let (h, n) = Header::decode_prefix(&frame).unwrap();
+    (h, frame[n..].to_vec())
+}
+
+#[test]
+fn manufacturer_specific_clusters_need_their_code() {
+    use panweave_types::ManufacturerCode;
+    let mut zcl = Node::new();
+    let mut ep = EndpointInstance::new(SERVER_EP, ProfileId::HOME_AUTOMATION);
+    ep.add_instance(
+        basic::server(
+            basic::power_source::MAINS_SINGLE_PHASE,
+            b"Panweave",
+            b"Lamp",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    zcl.add_endpoint(ep).unwrap();
+    let ms = ClusterId(0xfc01);
+    let code = ManufacturerCode(0x1234);
+    // A manufacturer-specific cluster with one attribute.
+    let mut c: panweave_zcl::ClusterInstance<8> = panweave_zcl::ClusterInstance::new(
+        panweave_zcl::ClusterDef {
+            id: ms,
+            revision: 1,
+            received: &[CommandId(0)],
+            generated: &[],
+        },
+        Role::Server,
+    )
+    .manufacturer_specific(code);
+    c.add_attribute(
+        panweave_zcl::AttributeDef::new(0x0000, DataType::Uint(1), panweave_zcl::Access::RO),
+        &V::Uint { width: 1, value: 7 },
+    )
+    .unwrap();
+    zcl.endpoint_mut(SERVER_EP)
+        .unwrap()
+        .add_instance(c)
+        .unwrap();
+    let seq = panweave_types::TransactionSequence(9);
+    let mut ids = [0u8; 2];
+    let mut w = Writer::new(&mut ids);
+    global::write_attribute_ids(&mut w, &[AttributeId(0)]).unwrap();
+    // Without the manufacturer code the cluster is not there.
+    let (h, p) = reply(
+        &mut zcl,
+        ms,
+        &Header::global(seq, command::READ_ATTRIBUTES, Direction::ToServer),
+        &ids,
+    );
+    assert_eq!(h.command, command::DEFAULT_RESPONSE);
+    assert_eq!(
+        DefaultResponse::decode_exact(&p).unwrap().status,
+        ZclStatus::UnsupportedCluster
+    );
+    // Another manufacturer's code is not recognised.
+    let (h, p) = reply(
+        &mut zcl,
+        ms,
+        &Header::global(seq, command::READ_ATTRIBUTES, Direction::ToServer)
+            .with_manufacturer(ManufacturerCode(0x4321)),
+        &ids,
+    );
+    assert_eq!(h.command, command::DEFAULT_RESPONSE);
+    assert_eq!(
+        DefaultResponse::decode_exact(&p).unwrap().status,
+        ZclStatus::UnsupportedManufacturerGeneralCommand
+    );
+    let (h, p) = reply(
+        &mut zcl,
+        ms,
+        &Header::cluster_specific(seq, CommandId(0), Direction::ToServer)
+            .with_manufacturer(ManufacturerCode(0x4321)),
+        &[],
+    );
+    assert_eq!(h.command, command::DEFAULT_RESPONSE);
+    assert_eq!(
+        DefaultResponse::decode_exact(&p).unwrap().status,
+        ZclStatus::UnsupportedManufacturerClusterCommand
+    );
+    // The right code reads the attribute (the response echoes the code).
+    let (h, p) = reply(
+        &mut zcl,
+        ms,
+        &Header::global(seq, command::READ_ATTRIBUTES, Direction::ToServer).with_manufacturer(code),
+        &ids,
+    );
+    assert_eq!(h.command, command::READ_ATTRIBUTES_RESPONSE);
+    assert_eq!(h.manufacturer, Some(code));
+    let recs: Vec<ReadAttributeStatus> = Records::new(&p).map(Result::unwrap).collect();
+    assert_eq!(recs[0].value, Some(V::Uint { width: 1, value: 7 }));
+    // Standard clusters keep ignoring the code as before.
+    let (h, _) = reply(
+        &mut zcl,
+        basic::ID,
+        &Header::global(seq, command::READ_ATTRIBUTES, Direction::ToServer),
+        &ids,
+    );
+    assert_eq!(h.command, command::READ_ATTRIBUTES_RESPONSE);
+}

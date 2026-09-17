@@ -116,6 +116,10 @@ pub struct ClusterInstance<const A: usize> {
     pub write_guard: Option<WriteGuard<A>>,
     /// Cluster-specific follow-up to network writes.
     pub after_write: Option<AfterWrite<A>>,
+    /// Manufacturer code of a manufacturer-specific cluster (§2.3.3):
+    /// frames must carry it in their header, and only such frames reach
+    /// the instance.
+    pub manufacturer: Option<ManufacturerCode>,
     /// A multi-frame report is in progress: the previous Report
     /// Attributes ended with `AttributeReportingStatus` = Pending
     /// (§2.3.4.5.2).
@@ -142,8 +146,18 @@ impl<const A: usize> ClusterInstance<A> {
             state: ClusterState::None,
             write_guard: None,
             after_write: None,
+            manufacturer: None,
             report_pending: false,
         }
+    }
+
+    /// Marks the instance as the manufacturer-specific cluster of
+    /// `code` (identifiers 0xfc00–0xffff, §2.3.3); frames without the
+    /// manufacturer code, or with another one, are not carried out.
+    #[must_use]
+    pub fn manufacturer_specific(mut self, code: ManufacturerCode) -> Self {
+        self.manufacturer = Some(code);
+        self
     }
 
     /// Adds an attribute with its initial value.
@@ -322,7 +336,14 @@ impl<const A: usize> ClusterInstance<A> {
         out: &mut Writer<'_>,
         now: Instant,
     ) -> GlobalOutcome {
-        let manuf = header.manufacturer;
+        // In a manufacturer-specific cluster every attribute is the
+        // manufacturer's: the frame's code names the cluster, not a
+        // manufacturer-specific attribute of a standard cluster.
+        let manuf = if self.manufacturer.is_some() && header.manufacturer == self.manufacturer {
+            None
+        } else {
+            header.manufacturer
+        };
         match header.command {
             command::READ_ATTRIBUTES => {
                 for id in global::AttributeIds(payload) {

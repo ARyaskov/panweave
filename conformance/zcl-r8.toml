@@ -116,10 +116,10 @@ id = "PW-ZCL-FND-013"
 section = "§2.3.3, §2.4.2"
 summary = "Manufacturer-specific clusters, attributes, commands; command direction and server/client roles; unsupported cluster/attribute/command handling"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zcl::layer"
-tests = ["default_responses_and_cluster_specific_commands", "group_delivery_targets_member_endpoints_only"]
-notes = "Direction/role dispatch, UNSUPPORTED_CLUSTER and UNSUP_GENERAL_COMMAND are implemented; manufacturer-specific attributes are supported in the store, manufacturer-specific cluster registration is not distinguished from standard clusters."
+tests = ["default_responses_and_cluster_specific_commands", "group_delivery_targets_member_endpoints_only", "manufacturer_specific_clusters_need_their_code"]
+notes = "Direction / role dispatch, UNSUPPORTED_CLUSTER and UNSUP_GENERAL_COMMAND; manufacturer-specific attributes and commands of standard clusters carry the code per attribute / command; manufacturer-specific clusters are registered with ClusterInstance::manufacturer_specific and addressed only by frames carrying their code (UNSUPPORTED_CLUSTER without one, UNSUP_MANUF_GENERAL_COMMAND / UNSUP_MANUF_CLUSTER_COMMAND with another), the responses echoing the code."
 [[requirement]]
 id = "PW-ZCL-FND-014"
 section = "§2.3.2"

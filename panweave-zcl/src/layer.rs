@@ -798,6 +798,27 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 .endpoints
                 .get(i)
                 .is_some_and(|e| e.cluster(ind.cluster, role).is_some());
+            // §2.3.3: a manufacturer-specific cluster is addressed only
+            // by frames carrying its manufacturer code; a code the
+            // cluster does not recognise is not carried out.
+            let manufacturer_ok = self
+                .endpoints
+                .get(i)
+                .and_then(|e| e.cluster(ind.cluster, role))
+                .and_then(|c| c.manufacturer)
+                .is_none_or(|code| frame.header.manufacturer == Some(code));
+            if has_cluster && !manufacturer_ok {
+                let status = match (
+                    frame.header.manufacturer.is_some(),
+                    frame.header.control.frame_type,
+                ) {
+                    (false, _) => ZclStatus::UnsupportedCluster,
+                    (true, FrameType::Global) => ZclStatus::UnsupportedManufacturerGeneralCommand,
+                    (true, _) => ZclStatus::UnsupportedManufacturerClusterCommand,
+                };
+                let _ = self.default_response(&origin, status);
+                continue;
+            }
             if !has_cluster {
                 // Responses may still target a client instance that only
                 // sent the request; hand them up regardless.

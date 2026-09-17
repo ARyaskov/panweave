@@ -176,6 +176,12 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Manufacturer-specific clusters (ZCL8 §2.3.3):
+  `ClusterInstance::manufacturer_specific(code)` registers a cluster
+  that only frames carrying its manufacturer code reach (UNSUPPORTED_CLUSTER
+  without a code, UNSUP_MANUF_GENERAL / CLUSTER_COMMAND with another);
+  inside it the code names the cluster rather than manufacturer-specific
+  attributes.
 * The inter-PAN data service (R23.2 Annex G): `Stack::inter_pan_request`
   sends application frames to a broadcast, device, network-address or
   group target on any PAN, optionally secured with the shared link key,
