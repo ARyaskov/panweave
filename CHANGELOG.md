@@ -318,6 +318,12 @@ Keep a Changelog; versions follow SemVer.
   attributes, and builders for the ten Table 5-13 devices on profile
   0x0109 with the Table 6-1 common clusters, checked against the
   device's cluster rules.
+* `panweave-zcl::layer::Zcl::set_link_key_policy`: a per-profile
+  predicate naming the clusters whose frames must arrive APS link-key
+  secured; unsecured frames of those clusters are answered with a
+  Default Response FAILURE under the network key and dropped (the
+  FAILURE itself is exempt). `panweave-smart-energy::zcl_link_key_policy`
+  supplies the Table 5-12 rule.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

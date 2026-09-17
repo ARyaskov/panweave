@@ -35,10 +35,10 @@ id = "PW-SE-SEC-003"
 section = "§5.4.6"
 summary = "Cluster usage of security keys: APS link-key encryption mandatory for listed clusters"
 level = "mandatory"
-status = "requires-clarification"
+status = "partially-implemented"
 module = "panweave-smart-energy"
-tests = ["key_policy"]
-notes = "link_key_required encodes Table 5-12 for every readable row; the rows Power Configuration, Key Establishment and Keep-Alive are unreadable in the source extraction and follow ADR-0012 (all three treated as exempt, Key Establishment necessarily so). Enforcement (Default Response FAILURE for unsecured frames of clusters that require the link key) is not wired into the ZCL dispatcher yet (TODO(PW-SE-KEYPOLICY))."
+tests = ["key_policy", "unsecured_frames_of_link_key_clusters_are_refused_with_failure"]
+notes = "link_key_required encodes Table 5-12 for every readable row; the rows Power Configuration, Key Establishment and Keep-Alive are unreadable in the source extraction and follow ADR-0012 (all three treated as exempt, Key Establishment necessarily so). Enforcement is wired: Zcl::set_link_key_policy with panweave-smart-energy::zcl_link_key_policy answers an unsecured frame of a cluster that requires the link key with a Default Response FAILURE under the network key and does not process it, accepts secured frames of any cluster and answers them with the same security, and lets the FAILURE Default Response itself through; the simulator test shows all three cases between an IHD and an ESI. The three unreadable rows keep the item partial."
 [[requirement]]
 id = "PW-SE-SEC-004"
 section = "§5.4.7, Annex C"

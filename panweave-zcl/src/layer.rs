@@ -415,7 +415,16 @@ pub struct Zcl<const E: usize, const C: usize, const A: usize> {
     now: Instant,
     /// Actions or events dropped on overflow.
     pub dropped: u32,
+    /// Clusters whose frames must arrive APS link-key secured; an
+    /// unsecured frame for one of them is refused with a Default
+    /// Response FAILURE under the network key (SE 1.4a §5.4.6). `None`
+    /// accepts everything.
+    link_key_policy: Option<LinkKeyPolicy>,
 }
+
+/// A predicate naming the clusters that require APS link-key security
+/// on a profile (`(profile, cluster) -> required`).
+pub type LinkKeyPolicy = fn(ProfileId, ClusterId) -> bool;
 
 impl<const E: usize, const C: usize, const A: usize> Default for Zcl<E, C, A> {
     fn default() -> Self {
@@ -433,7 +442,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             events: Deque::new(),
             now: Instant::from_millis(0),
             dropped: 0,
+            link_key_policy: None,
         }
+    }
+
+    /// Installs the link-key policy: frames of clusters the predicate
+    /// names that arrive without APS link-key security are answered
+    /// with a Default Response FAILURE and not processed (SE 1.4a
+    /// §5.4.6). Frames secured beyond what is required are accepted and
+    /// their responses use the same security.
+    pub fn set_link_key_policy(&mut self, policy: Option<LinkKeyPolicy>) {
+        self.link_key_policy = policy;
     }
 
     /// Registers an endpoint.
@@ -714,6 +733,18 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 broadcast,
                 aps_secured: ind.security == SecurityStatus::LinkKey,
             };
+            // A Default Response is exempt: it is how a peer reports the
+            // refusal itself, under the network key.
+            let is_default_response = frame.header.control.frame_type == FrameType::Global
+                && frame.header.command == command::DEFAULT_RESPONSE;
+            if let Some(policy) = self.link_key_policy
+                && !origin.aps_secured
+                && !is_default_response
+                && policy(profile, ind.cluster)
+            {
+                let _ = self.default_response(&origin, ZclStatus::Failure);
+                continue;
+            }
             let role = match frame.header.control.direction {
                 Direction::ToServer => Role::Server,
                 Direction::ToClient => Role::Client,

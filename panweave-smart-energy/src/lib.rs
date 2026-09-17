@@ -103,6 +103,14 @@ pub const fn link_key_required(cluster: ClusterId) -> bool {
     )
 }
 
+/// The Table 5-12 rule as a ZCL layer link-key policy: on the Smart
+/// Energy profile, clusters that require the link key refuse unsecured
+/// frames with a Default Response FAILURE (§5.4.6); other profiles are
+/// left alone. Install with `Zcl::set_link_key_policy`.
+pub fn zcl_link_key_policy(profile: ProfileId, cluster: ClusterId) -> bool {
+    profile == PROFILE_ID && link_key_required(cluster)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

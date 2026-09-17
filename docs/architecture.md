@@ -114,6 +114,13 @@ command to the initiator or target machine of `panweave-bdb::touchlink`,
 which drives the stack (channel switches, key transport, network start /
 adoption / rejoin) through its `TouchlinkNode` view.
 
+Before the ZCL dispatcher touches a frame it applies the endpoint's
+link-key policy (`Zcl::set_link_key_policy`, a `(profile, cluster)`
+predicate): a frame of a cluster that must be APS link-key secured but
+arrived under the network key alone is answered with a Default Response
+FAILURE and dropped, so a Smart Energy endpoint enforces Table 5-12
+without the application seeing the frame.
+
 Transmit path builds frames outermost-last into a caller-provided buffer:
 the APS payload is written first at the correct offset, then the APS header,
 NWK header, security transform in place, then MAC header. No per-frame heap
