@@ -210,6 +210,17 @@ Keep a Changelog; versions follow SemVer.
   element replacement, set / bag add and remove, the Write Attributes
   Structured Response with the failing selector — executed by every
   cluster instance, with client codecs in `global`.
+* `panweave-zcl::clusters::commissioning`: the Commissioning cluster —
+  the startup attribute set with the join, end-device and concentrator
+  parameters (keys write-only and redacted), the Table 13-5
+  consistency check behind Restart Device (`ZclEvent::Restart`), Save /
+  Restore / Reset Startup Parameters over a bounded store — plus
+  `Stack::{startup_set, seed_startup_set, restart_from_startup_set}`
+  applying a set by forming, silently adopting, rejoining or
+  associating once the leave completes.
+* `Access::SECRET`: credential attributes answer NOT_AUTHORIZED to reads
+  and are redacted from `Attribute`'s `Debug` output (as are all
+  key128 attributes).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

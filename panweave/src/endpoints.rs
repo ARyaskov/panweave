@@ -16,7 +16,9 @@ use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
 use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
 };
-use panweave_zcl::clusters::{door_lock, electrical_measurement, ias_ace, ias_wd, window_covering};
+use panweave_zcl::clusters::{
+    commissioning, door_lock, electrical_measurement, ias_ace, ias_wd, window_covering,
+};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -51,6 +53,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     ias_ace::ID,
     ias_wd::ID,
     electrical_measurement::ID,
+    commissioning::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -77,6 +80,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     ias_ace::ID,
     ias_wd::ID,
     electrical_measurement::ID,
+    commissioning::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -160,6 +164,7 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
         electrical_measurement::ID => {
             electrical_measurement::server(electrical_measurement::Capability::AC).ok()
         }
+        commissioning::ID => commissioning::server(&commissioning::StartupSet::default()).ok(),
         _ => None,
     }
 }
@@ -192,6 +197,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
         ias_ace::ID => Some(ias_ace::client()),
         ias_wd::ID => Some(ias_wd::client()),
         electrical_measurement::ID => Some(electrical_measurement::client()),
+        commissioning::ID => Some(commissioning::client()),
         _ => None,
     }
 }

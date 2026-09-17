@@ -84,6 +84,8 @@ pub enum ClusterState {
     DoorLock(crate::clusters::door_lock::State),
     /// IAS ACE server state: the zone table and panel status (§8.3).
     IasAce(crate::clusters::ias_ace::Panel),
+    /// Commissioning server state: the saved startup sets (§13.2).
+    Commissioning(crate::clusters::commissioning::State),
 }
 
 /// A cluster instance.
@@ -198,6 +200,9 @@ impl<const A: usize> ClusterInstance<A> {
                     ..crate::clusters::ias_ace::Panel::default()
                 })
             }
+            ClusterState::Commissioning(_) => {
+                ClusterState::Commissioning(crate::clusters::commissioning::State::default())
+            }
             ClusterState::None => ClusterState::None,
         };
     }
@@ -294,9 +299,13 @@ impl<const A: usize> ClusterInstance<A> {
                             status: ZclStatus::Success,
                             value: Some(a.value()),
                         },
-                        Some(_) => ReadAttributeStatus {
+                        Some(a) => ReadAttributeStatus {
                             id,
-                            status: ZclStatus::WriteOnly,
+                            status: if a.def.access.has(Access::SECRET) {
+                                ZclStatus::NotAuthorized
+                            } else {
+                                ZclStatus::WriteOnly
+                            },
                             value: None,
                         },
                         None => ReadAttributeStatus {
@@ -394,7 +403,11 @@ impl<const A: usize> ClusterInstance<A> {
                         },
                         (Some(a), _) if !a.def.access.has(Access::READ) => ReadAttributeStatus {
                             id,
-                            status: ZclStatus::WriteOnly,
+                            status: if a.def.access.has(Access::SECRET) {
+                                ZclStatus::NotAuthorized
+                            } else {
+                                ZclStatus::WriteOnly
+                            },
                             value: None,
                         },
                         (Some(a), Ok(sel)) if sel.is_whole() => ReadAttributeStatus {

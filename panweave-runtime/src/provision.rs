@@ -14,7 +14,10 @@ use panweave_types::{
     KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
 };
 
-use crate::stack::{Phase, Stack};
+use panweave_zcl::Role;
+use panweave_zcl::clusters::commissioning::{self, StartupSet};
+
+use crate::stack::{JoinMode, Phase, Stack};
 
 /// Parameters of a provisioned network formation; `None` means "choose
 /// as NLME-NETWORK-FORMATION.request does".
@@ -208,6 +211,125 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let _ = self.persist_link_keys();
     }
 
+    /// The current startup set of the Commissioning server on
+    /// `endpoint` (ZCL8 §13.2), when present.
+    pub fn startup_set(&self, endpoint: Endpoint) -> Option<StartupSet> {
+        self.zcl
+            .cluster(endpoint, commissioning::ID, Role::Server)
+            .map(commissioning::load)
+    }
+
+    /// Seeds the Commissioning server on `endpoint` with the stack's
+    /// live network parameters (short address, extended PAN ID, PAN ID,
+    /// channel, Trust Center, key sequence; the keys stay unspecified).
+    pub fn seed_startup_set(&mut self, endpoint: Endpoint) -> bool {
+        let short = self.nwk.nib.network_address.0;
+        let epid = self.nwk.nib.extended_pan_id.0;
+        let pan = self.nwk.nib.pan_id.0;
+        let channel = self.nwk.nib.channel;
+        let tc = self.aps.aib.trust_center_address.0;
+        let seq = self.network_key_sequence.0;
+        let joined = self.phase == Phase::Operating;
+        let Some(c) = self
+            .zcl
+            .cluster_mut(endpoint, commissioning::ID, Role::Server)
+        else {
+            return false;
+        };
+        let mut set = commissioning::load(c);
+        if joined {
+            set.short_address = short;
+            set.extended_pan_id = epid;
+            set.pan_id = pan;
+            set.channel_mask = ChannelMask(0).with(channel).0;
+            set.trust_center_address = tc;
+            set.network_key_seq_num = seq;
+            set.startup_control = commissioning::startup_control::SILENT_JOIN;
+        }
+        commissioning::store(c, &set);
+        true
+    }
+
+    /// Runs the startup procedure of a Commissioning startup set
+    /// (ZCL8 Table 13-5): leaves the current network first when on one
+    /// (the set is applied once the leave completes, `StackEvent::Left`),
+    /// installs the preconfigured link key when given, then forms,
+    /// silently adopts, rejoins or associates per `StartupControl`.
+    pub fn restart_from_startup_set(&mut self, set: &StartupSet) -> Result<(), NwkStatus> {
+        if !set.is_consistent() {
+            return Err(NwkStatus::InvalidParameter);
+        }
+        if self.phase != Phase::Idle {
+            self.pending_startup = Some(set.clone());
+            return self.leave_with(false, false);
+        }
+        self.apply_startup_set(set)
+    }
+
+    /// Applies a startup set deferred by [`Self::restart_from_startup_set`].
+    pub(crate) fn apply_pending_startup(&mut self) {
+        if let Some(set) = self.pending_startup.take() {
+            let _ = self.apply_startup_set(&set);
+        }
+    }
+
+    fn apply_startup_set(&mut self, set: &StartupSet) -> Result<(), NwkStatus> {
+        let channels = ChannelMask(set.channel_mask & ChannelMask::ALL_2_4GHZ.0);
+        let key_given = set.network_key.as_bytes().iter().any(|b| *b != 0);
+        let link_key_given = set
+            .preconfigured_link_key
+            .as_bytes()
+            .iter()
+            .any(|b| *b != 0);
+        if link_key_given && set.trust_center_address != 0 {
+            self.install_link_key(
+                ExtendedAddress(set.trust_center_address),
+                set.preconfigured_link_key.clone(),
+                LinkKeyKind::Global,
+                true,
+            );
+        }
+        match set.startup_control {
+            commissioning::startup_control::FORM => self.form_network_params(&FormationParams {
+                key: key_given.then(|| set.network_key.clone()),
+                extended_pan_id: Some(ExtendedAddress(set.extended_pan_id)),
+                pan_id: (set.pan_id != 0xffff).then_some(PanId(set.pan_id)),
+                channels: Some(channels),
+                network_address: None,
+                update_id: 0,
+            }),
+            commissioning::startup_control::SILENT_JOIN => {
+                let channel = channels.first().ok_or(NwkStatus::InvalidParameter)?;
+                self.adopt_network(&AdoptParams {
+                    extended_pan_id: ExtendedAddress(set.extended_pan_id),
+                    pan_id: PanId(set.pan_id),
+                    channel,
+                    network_address: Some(ShortAddress(set.short_address)),
+                    key: set.network_key.clone(),
+                    key_sequence: KeySequenceNumber(set.network_key_seq_num),
+                    update_id: 0,
+                    trust_center: ExtendedAddress(set.trust_center_address),
+                })
+            }
+            commissioning::startup_control::REJOIN => {
+                self.nwk.nib.extended_pan_id = ExtendedAddress(set.extended_pan_id);
+                let mode = if key_given {
+                    self.network_key_sequence = KeySequenceNumber(set.network_key_seq_num);
+                    self.nwk.set_network_key(
+                        KeySequenceNumber(set.network_key_seq_num),
+                        set.network_key.clone(),
+                        true,
+                    );
+                    JoinMode::SecuredRejoin
+                } else {
+                    JoinMode::TrustCenterRejoin
+                };
+                self.join_on(mode, channels, self.config.scan_duration)
+            }
+            _ => self.join_on(JoinMode::Association, channels, self.config.scan_duration),
+        }
+    }
+
     /// Refreshes the Diagnostics server on `endpoint` (ZCL8 §3.15) from
     /// the stack's counters: MAC unicast transmissions and failures, APS
     /// retries and failures, NWK / APS security drops, replays, relayed
@@ -237,7 +359,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         };
         match self
             .zcl
-            .cluster_mut(endpoint, diagnostics::ID, panweave_zcl::Role::Server)
+            .cluster_mut(endpoint, diagnostics::ID, Role::Server)
         {
             Some(c) => {
                 diagnostics::update(c, &counters);

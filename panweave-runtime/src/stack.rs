@@ -353,6 +353,22 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// A Commissioning server accepted a Restart Device (ZCL8
+    /// §13.2.2.3.1): after `delay` seconds plus RAND(`jitter` × 80) ms
+    /// the application calls `Stack::restart_from_startup_set` (with
+    /// `install`) or `Stack::leave_with` and rejoins.
+    Restart {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Install the startup set.
+        install: bool,
+        /// Restart right after the delay.
+        immediate: bool,
+        /// Delay in seconds.
+        delay: u8,
+        /// Jitter field.
+        jitter: u8,
+    },
     /// An IAS ACE server received Arm (code validated, panel status
     /// set) or an Emergency / Fire / Panic (ZCL8 §8.3.2.3).
     Ace {
@@ -500,6 +516,8 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) phase: Phase,
     pub(crate) pending_children: Vec<PendingChild, 4>,
     pub(crate) network_key_sequence: KeySequenceNumber,
+    /// A Commissioning startup set to apply once the leave completes.
+    pub(crate) pending_startup: Option<panweave_zcl::clusters::commissioning::StartupSet>,
     pub(crate) next_poll: Option<Instant>,
     pub(crate) fast_polls_left: u8,
     pub(crate) dlk: crate::dlk::DlkState,
@@ -600,6 +618,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             phase: Phase::Idle,
             pending_children: Vec::new(),
             network_key_sequence: KeySequenceNumber(0),
+            pending_startup: None,
             next_poll: None,
             fast_polls_left: 0,
             dlk: crate::dlk::DlkState::default(),

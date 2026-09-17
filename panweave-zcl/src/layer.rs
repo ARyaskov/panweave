@@ -17,8 +17,8 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
-    alarms, basic, color_control, door_lock, hvac, ias_ace, ias_wd, ias_zone, identify, level,
-    on_off, poll_control, scenes, time, window_covering,
+    alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
+    identify, level, on_off, poll_control, scenes, time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -246,6 +246,22 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// What to do.
         command: window_covering::Command,
+    },
+    /// The Commissioning server on `endpoint` accepted a Restart Device
+    /// (§13.2.2.3.1): after `delay` seconds plus RAND(`jitter` × 80) ms
+    /// the runtime leaves the network and, when `install`, applies the
+    /// startup set read with `commissioning::load`.
+    Restart {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Install the startup set (else restart with the stack state).
+        install: bool,
+        /// Restart right after the delay rather than at a convenient moment.
+        immediate: bool,
+        /// Delay in seconds.
+        delay: u8,
+        /// Jitter field.
+        jitter: u8,
     },
     /// The IAS ACE server on `endpoint` received a request for the
     /// application (§8.3.2.3): Arm (code validated, panel status set)
@@ -856,6 +872,38 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             ias_ace::ID => {
                                 self.handle_ias_ace(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            commissioning::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get_mut(i)
+                                    .and_then(|e| e.cluster_mut(commissioning::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match commissioning::handle(c, cmd, payload) {
+                                    commissioning::Outcome::Reply { response, restart } => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            response.command,
+                                            &[response.status.raw()],
+                                        );
+                                        if let Some(r) = restart {
+                                            self.push_event(ZclEvent::Restart {
+                                                endpoint,
+                                                install: r.install,
+                                                immediate: r.immediate,
+                                                delay: r.delay,
+                                                jitter: r.jitter,
+                                            });
+                                        }
+                                    }
+                                    commissioning::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
                                 continue;
                             }
                             ias_wd::ID => {

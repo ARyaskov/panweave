@@ -606,6 +606,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.stop_keep_alive();
                         self.fast_poll_mode = None;
                         self.push_event(StackEvent::Left { rejoin });
+                        self.apply_pending_startup();
                     }
                     Some(ieee) => {
                         if child {
@@ -625,6 +626,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             DeviceState::NotJoined,
                         );
                         self.push_event(StackEvent::Left { rejoin: false });
+                        self.apply_pending_startup();
                     }
                     Some(child) if status.is_success() => {
                         // A child this router made leave (Remove Device or
@@ -1571,6 +1573,19 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     user,
                 },
                 ZclEvent::Ace { endpoint, request } => StackEvent::Ace { endpoint, request },
+                ZclEvent::Restart {
+                    endpoint,
+                    install,
+                    immediate,
+                    delay,
+                    jitter,
+                } => StackEvent::Restart {
+                    endpoint,
+                    install,
+                    immediate,
+                    delay,
+                    jitter,
+                },
                 ZclEvent::Warning { endpoint, warning } => {
                     StackEvent::Warning { endpoint, warning }
                 }

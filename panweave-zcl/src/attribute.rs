@@ -37,6 +37,11 @@ impl Access {
     pub const RO_REPORT: Access = Access(0x05);
     /// Read/write and reportable.
     pub const RW_REPORT: Access = Access(0x07);
+    /// A credential: never readable over the air (reads answer
+    /// NOT_AUTHORIZED) and redacted from `Debug` output.
+    pub const SECRET: Access = Access(0x08);
+    /// Write-only credential.
+    pub const WO_SECRET: Access = Access(0x0a);
 
     /// True when all bits of `flag` are set.
     #[inline]
@@ -123,7 +128,7 @@ pub struct DefaultReporting {
 }
 
 /// An attribute with its current value.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Attribute {
     /// Definition.
     pub def: AttributeDef,
@@ -134,6 +139,22 @@ pub struct Attribute {
     default_reporting: Option<DefaultReporting>,
     /// Reporting state when configured.
     pub reporting: Option<ReportState>,
+}
+
+impl core::fmt::Debug for Attribute {
+    /// Keys and `SECRET` attributes are redacted.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let secret = self.def.ty == DataType::Key128 || self.def.access.has(Access::SECRET);
+        let mut d = f.debug_struct("Attribute");
+        d.field("def", &self.def);
+        if secret {
+            d.field("value", &"[REDACTED]");
+        } else {
+            d.field("value", &self.value.as_slice());
+        }
+        d.field("reporting", &self.reporting)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Attribute {

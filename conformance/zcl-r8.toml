@@ -307,10 +307,10 @@ id = "PW-ZCL-COMM-001"
 section = "§13.2"
 summary = "Commissioning cluster (startup attribute set)"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::commissioning"
-tests = []
-
+tests = ["attributes_round_trip_and_keys_are_write_only", "consistency_per_startup_control", "restart_checks_consistency_and_reports_the_set", "save_restore_reset", "writes_are_guarded", "tool_writes_the_startup_set_and_restarts_the_router_into_a_silent_join"]
+notes = "The startup parameters, join, end-device and concentrator attribute sets (TrustCenterMasterKey omitted); NetworkKey and PreconfiguredLinkKey are write-only (reads answer NOT_AUTHORIZED per §13.2.2.2.1) and redacted; write guard for StartupControl / ShortAddress / PANId / StackProfile and the rejoin-without-EPID FAILURE (§13.2.2); Restart Device with the Table 13-5 consistency check, the response before the restart and ZclEvent::Restart carrying options, delay and jitter; Save / Restore / Reset Startup Parameters over a two-entry store with the §13.2.2.3.4 option semantics. The runtime applies a set with Stack::restart_from_startup_set (form / silent adoption / secured or Trust Center rejoin / association after the leave completes; the seeded set from the live NIB). Not done: non-volatile storage of the saved sets (the spec requires it; TODO(PW-ZCL-COMM-PERSIST)), the delay + RAND(jitter x 80 ms) timer (left to the application) and the ZDO join-parameter attributes are not wired into the stack's configuration."
 [[requirement]]
 id = "PW-ZCL-COMM-002"
 section = "§13.3"
