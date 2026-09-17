@@ -237,6 +237,8 @@ impl<
             page: self.nib.channel_page,
             channel,
         });
+        // Maximum power again on the new channel (§3.6.11.1).
+        self.push_action(NwkAction::MacResetTxPower);
         if self.nib.is_router_or_coordinator() {
             self.update_beacon_payload();
         }
@@ -567,6 +569,7 @@ impl<
         self.nib.depth = 0;
         self.operating_since = Some(self.now);
         self.link_status_due = Some(self.now + self.nib.link_status_period);
+        self.refresh_power_delta_schedule();
         self.child_age_last = self.now;
         self.push_action(NwkAction::MacStart {
             pan_id,
@@ -1081,6 +1084,10 @@ impl<
             extended: parent_ext,
         });
         self.push_action(NwkAction::MacSetRxOnWhenIdle(self.nib.rx_on_when_idle));
+        // A (re)join starts at the maximum power (§3.4.13.1, §3.6.11.1).
+        self.push_action(NwkAction::MacResetTxPower);
+        self.power_delta_due = None;
+        self.power_request = None;
         if secured {
             self.finish_join_success(rejoin, true);
         } else if let Some(j) = &mut self.join {
@@ -1188,6 +1195,7 @@ impl<
             // Negotiate the end device timeout (§3.6.10.2).
             self.send_end_device_timeout_request();
         }
+        self.refresh_power_delta_schedule();
     }
 
     /// NLME-START-ROUTER.request: begin routing and beaconing after a
@@ -1217,6 +1225,7 @@ impl<
             constants::MAX_ROUTER_BOOTSTRAP_JITTER,
         );
         self.link_status_due = Some(self.now + j);
+        self.refresh_power_delta_schedule();
         self.push_event(NwkEvent::StartRouterConfirm {
             status: NwkStatus::Success,
         });
@@ -1995,6 +2004,8 @@ impl<
         self.source_routes.clear();
         self.permit_until = None;
         self.link_status_due = None;
+        self.power_delta_due = None;
+        self.power_request = None;
         self.operating_since = None;
         self.keepalive_due = None;
         if rejoin {

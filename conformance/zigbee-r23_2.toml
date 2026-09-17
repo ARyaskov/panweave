@@ -481,10 +481,10 @@ id = "PW-R23-NWK-064"
 section = "§3.6.11"
 summary = "Power negotiation via Link Power Delta"
 level = "optional"
-status = "not-implemented"
-module = "panweave-nwk::power"
-tests = []
-
+status = "implemented"
+module = "panweave-nwk::layer::power"
+tests = ["neighbors_negotiate_transmit_power_through_link_power_delta"]
+notes = "Behind NwkConfig::power_control: routers and the coordinator broadcast periodic Link Power Delta notifications (nwkLinkPowerDeltaTransmitRate plus a one-off jitter, radius 1, all rx-on neighbours with a known RSSI), an rx-on end device unicasts a notification to its parent, a sleepy end device sends a request, polls for the response and applies only that; received commands are checked against the neighbour table and applied to the MAC Power Control Information Table (NwkAction::MacAdjustTxPower); a router answers end device children; the parent information bit 2 and §3.6.11.2 rate selection are honoured; rejoins and channel changes return to full power. Popt is configurable (NwkConfig::optimal_rssi_dbm, −65 dBm for 2.4 GHz)."
 [[requirement]]
 id = "PW-R23-NWK-065"
 section = "§3.6.12"
@@ -1203,10 +1203,10 @@ id = "PW-R23-MAC-003"
 section = "Annex D.11.2"
 summary = "MAC power control support"
 level = "optional"
-status = "not-implemented"
-module = "panweave-mac"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-mac::power"
+tests = ["adjusts_from_maximum_and_clamps", "unnegotiated_entries_expire_and_are_evicted_first"]
+notes = "The Power Control Information Table (D.11.2.3: per-link TX power and last RSSI, NWK-negotiated flag, 10 s expiry of unconfirmed links, reset on channel change) with configurable limits (D.11.2.4.4) is kept by the MAC service and sets TxOptions::tx_power_dbm for every unicast to a known link (D.11.2.4.5). The TX Power IE in enhanced beacon requests / beacons (D.11.2.2) is not implemented (needs PW-R23-MAC-002)."
 [[requirement]]
 id = "PW-R23-MAC-004"
 section = "Annex D.12–D.14"

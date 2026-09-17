@@ -188,6 +188,10 @@ pub struct NeighborEntry {
     /// The NWK key sequence number this neighbor last used (for
     /// diagnostics only).
     pub last_key_sequence: Option<u8>,
+    /// RSSI of the last frame received from this neighbor, dBm (power
+    /// negotiation, §3.4.13.7); volatile.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub last_rssi_dbm: Option<i8>,
 }
 
 impl NeighborEntry {
@@ -221,6 +225,7 @@ impl NeighborEntry {
             router_outbound_activity: 0,
             router_inbound_activity: 0,
             last_key_sequence: None,
+            last_rssi_dbm: None,
         }
     }
 

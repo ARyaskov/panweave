@@ -385,6 +385,14 @@ Keep a Changelog; versions follow SemVer.
   A rejoin also drops a stale neighbour that held the new parent's short
   address, and an unsecured Rejoin / Commissioning Response to an
   unsecured rejoin started from an operating network is accepted.
+* Power negotiation (R23.2 §3.6.11, §3.4.13, Annex D.11.2), behind
+  `NwkConfig::power_control`: periodic Link Power Delta notifications
+  from routers, notifications / requests from end devices with the
+  parent's responses, `nwkLinkPowerDeltaTransmitRate` and the parent
+  information bit, and the MAC's Power Control Information Table
+  (`panweave_mac::power`, `MacServiceConfig::power_limits`) that sets
+  the transmit power of every unicast to a negotiated link;
+  `StackEvent::LinkPowerDelta` reports processed commands.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

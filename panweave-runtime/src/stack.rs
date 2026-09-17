@@ -445,6 +445,17 @@ pub enum StackEvent {
     /// A Mgmt_NWK_IEEE_Joining_List_rsp updated the joining policy or
     /// IEEE joining list (§2.4.4.3.11.2).
     JoiningListUpdated,
+    /// A Link Power Delta command from `src` was processed (§3.4.13.7);
+    /// `delta_db` is what it asked of this device, when listed. The
+    /// MAC's Power Control Information Table has been adjusted.
+    LinkPowerDelta {
+        /// Sender.
+        src: ShortAddress,
+        /// Notification, Request or Response.
+        kind: panweave_nwk::command::LinkPowerDeltaType,
+        /// `Popt − Prx` measured by the sender, dB.
+        delta_db: Option<i8>,
+    },
     /// A Trust Center swap-out was detected during a Trust Center rejoin
     /// (§4.7.4.1.2.9): the network key came from `new` under the hashed
     /// link key. `apsTrustCenterAddress` already names the new Trust

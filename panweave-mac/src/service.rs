@@ -36,6 +36,7 @@ use panweave_types::{
 
 use crate::constants::{self, MAX_MAC_FRAME_SIZE};
 use crate::frame::{Beacon, Frame, FrameType, Header, MacAddress, MacCommand};
+use crate::power::{PowerControlTable, PowerLimits};
 use crate::radio::{RadioCapabilities, RadioConfig, RxMetadata, TxOptions, TxResult};
 
 /// Fixed-capacity buffer holding one MAC frame.
@@ -53,6 +54,9 @@ pub const INDIRECT_CAPACITY: usize = 8;
 
 /// Capacity of the action and event queues.
 pub const QUEUE_CAPACITY: usize = 8;
+
+/// Links in the Power Control Information Table (Annex D.11.2.3).
+pub const POWER_ENTRIES: usize = 16;
 
 /// Opaque handle identifying a transmission request in its confirm.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -99,6 +103,8 @@ pub struct MacServiceConfig {
     /// (`macMaxFrameTotalWaitTime` is derived from CSMA parameters in the
     /// standard; a conservative fixed value is used).
     pub poll_wait: Duration,
+    /// Transmit power limits for power control (Annex D.11.2.4.4).
+    pub power_limits: PowerLimits,
 }
 
 impl Default for MacServiceConfig {
@@ -110,6 +116,7 @@ impl Default for MacServiceConfig {
             response_wait: constants::response_wait_time(),
             transaction_persistence: constants::transaction_persistence_time(),
             poll_wait: Duration::from_millis(100),
+            power_limits: PowerLimits::default(),
         }
     }
 }
@@ -325,6 +332,8 @@ struct InFlight {
     frame: FrameBuf,
     seq: u8,
     ack_request: bool,
+    /// Negotiated transmit power for the link (D.11.2.3).
+    tx_power_dbm: Option<i8>,
     retries_left: u8,
     /// Set when the radio has been asked to transmit and completion is
     /// awaited.
@@ -455,6 +464,8 @@ pub struct MacService {
     /// True when the radio configuration needs re-applying.
     config_dirty: bool,
     now: Instant,
+    /// Power Control Information Table (Annex D.11.2.3).
+    power: PowerControlTable<POWER_ENTRIES>,
 }
 
 impl MacService {
@@ -464,6 +475,7 @@ impl MacService {
     pub fn new(config: MacServiceConfig, extended_address: ExtendedAddress) -> Self {
         let mut pib = Pib::default();
         pib.extended_address = extended_address;
+        let config_limits = config.power_limits;
         MacService {
             config,
             pib,
@@ -479,6 +491,7 @@ impl MacService {
             poll_wait_until: None,
             config_dirty: true,
             now: Instant::ZERO,
+            power: PowerControlTable::new(config_limits),
         }
     }
 
@@ -626,9 +639,24 @@ impl MacService {
 
     /// Changes channel (frequency agility).
     pub fn set_channel(&mut self, page: ChannelPage, channel: Channel) {
+        if channel != self.pib.channel || page != self.pib.page {
+            // Maximum power again on a new channel (§3.4.13.1).
+            self.power.reset();
+        }
         self.pib.page = page;
         self.pib.channel = channel;
         self.push_action(MacAction::SetChannel { page, channel });
+    }
+
+    /// The Power Control Information Table (Annex D.11.2.3).
+    pub fn power_table(&self) -> &PowerControlTable<POWER_ENTRIES> {
+        &self.power
+    }
+
+    /// The Power Control Information Table, for the network layer's
+    /// MLME-SET-POWER-INFORMATION-TABLE.request.
+    pub fn power_table_mut(&mut self) -> &mut PowerControlTable<POWER_ENTRIES> {
+        &mut self.power
     }
 
     /// Sets the parent (coordinator) addresses for end devices.
@@ -774,10 +802,13 @@ impl MacService {
                 frame,
                 seq,
                 ack_request,
-                options: if ack_request {
-                    TxOptions::ACKED
-                } else {
-                    TxOptions::UNACKED
+                options: TxOptions {
+                    tx_power_dbm: self.power.tx_power_for(&dst),
+                    ..if ack_request {
+                        TxOptions::ACKED
+                    } else {
+                        TxOptions::UNACKED
+                    }
                 },
             })?;
         }
@@ -1184,6 +1215,7 @@ impl MacService {
             frame: q.frame.clone(),
             seq: q.seq,
             ack_request: q.ack_request,
+            tx_power_dbm: q.options.tx_power_dbm,
             retries_left: retries,
             awaiting_tx: true,
             ack_deadline: None,
@@ -1243,10 +1275,13 @@ impl MacService {
             _ => TxHandle(0),
         };
         let frame = f.frame.clone();
-        let options = if f.ack_request {
-            TxOptions::ACKED
-        } else {
-            TxOptions::UNACKED
+        let options = TxOptions {
+            tx_power_dbm: f.tx_power_dbm,
+            ..if f.ack_request {
+                TxOptions::ACKED
+            } else {
+                TxOptions::UNACKED
+            }
         };
         self.in_flight = Some(f);
         self.push_action(MacAction::Transmit {
@@ -1330,6 +1365,7 @@ impl MacService {
     /// timestamps are current.
     pub fn poll_timers(&mut self, now: Instant) {
         self.now = now;
+        self.power.expire(now);
 
         // Software ack timeout.
         if let Some(f) = &self.in_flight
@@ -1663,7 +1699,10 @@ impl MacService {
                         frame: entry.frame,
                         seq: entry.seq,
                         ack_request: true,
-                        options: TxOptions::ACKED,
+                        options: TxOptions {
+                            tx_power_dbm: self.power.tx_power_for(&entry.dst),
+                            ..TxOptions::ACKED
+                        },
                     };
                     if self.enqueue(q).is_err() {
                         match entry.kind {

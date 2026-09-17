@@ -125,6 +125,7 @@ impl<
         self.service_route_discovery(now);
         self.service_broadcasts(now);
         self.service_pan_id_update(now);
+        self.service_power_delta(now);
     }
 
     /// The earliest instant at which [`Nwk::poll_timers`] needs to run.
@@ -142,6 +143,7 @@ impl<
         }
         consider(self.keepalive_due);
         consider(self.timeout_request_deadline);
+        consider(self.power_deadline());
         consider(self.join_deadline());
         consider(self.pending_deadline());
         consider(self.routing_deadline());
@@ -230,7 +232,13 @@ impl<
                 n.security_timer_secs = 0;
             }
         }
-        let parent_info = ParentInformation(self.config.keepalive_methods & 0x03);
+        // Bit 2: this parent negotiates power (§3.6.11.2, Annex K.7).
+        let power = if self.config.power_control {
+            ParentInformation::POWER_NEGOTIATION
+        } else {
+            0
+        };
+        let parent_info = ParentInformation((self.config.keepalive_methods & 0x03) | power);
         let seq = self.nib.next_sequence();
         let header = Header::new(
             FrameType::Command,
@@ -266,6 +274,15 @@ impl<
         self.timeout_request_deadline = None;
         if rsp.status == TimeoutResponseStatus::Success {
             self.nib.parent_information = rsp.parent_info;
+            // §3.6.11.2: no Link Power Delta commands unless the parent
+            // supports power negotiation.
+            if !rsp.parent_info.power_negotiation() {
+                self.nib.link_power_delta_transmit_rate = 0;
+            } else if self.nib.link_power_delta_transmit_rate == 0 {
+                self.nib.link_power_delta_transmit_rate =
+                    self.config.end_device_power_delta_rate_secs;
+            }
+            self.refresh_power_delta_schedule();
             let secs = self.nib.end_device_timeout.seconds().unwrap_or(256 * 60);
             if let Some(p) = self
                 .neighbors

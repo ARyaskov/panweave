@@ -117,6 +117,11 @@ pub struct Nib {
     pub leave_request_without_rejoin_allowed: bool,
     /// `nwkParentInformation`.
     pub parent_information: ParentInformation,
+    /// `nwkLinkPowerDeltaTransmitRate` of the MAC interface (Table 3-??,
+    /// §3.4.13.7): seconds between Link Power Delta commands, 0 = never.
+    /// The spec default is 16; an end device sets it from the parent's
+    /// support (§3.6.11.2).
+    pub link_power_delta_transmit_rate: u16,
     /// `nwkEndDeviceTimeoutDefault` (default 8 → 256 minutes).
     pub end_device_timeout_default: TimeoutIndex,
     /// `nwkEndDeviceTimeout`: the value this end device negotiates.
@@ -199,6 +204,7 @@ impl Nib {
             leave_request_allowed: true,
             leave_request_without_rejoin_allowed: true,
             parent_information: ParentInformation(0),
+            link_power_delta_transmit_rate: 16,
             end_device_timeout_default: TimeoutIndex::DEFAULT,
             end_device_timeout: TimeoutIndex::DEFAULT,
             ieee_address,

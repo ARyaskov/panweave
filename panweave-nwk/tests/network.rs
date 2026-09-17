@@ -321,13 +321,15 @@ impl Net {
             NwkAction::MacSetChannel { .. }
             | NwkAction::MacSetCoordinator { .. }
             | NwkAction::MacSetRxOnWhenIdle(_)
+            | NwkAction::MacAdjustTxPower { .. }
+            | NwkAction::MacResetTxPower
             | NwkAction::Persist => {}
             NwkAction::CounterReservation(r) => self.nodes[i].nwk.commit_counter_reservation(r),
         }
     }
 
     fn deliver(&mut self, j: usize, buf: &mut [u8], mac_src: ShortAddress) {
-        let outcome = self.nodes[j].nwk.on_mac_data(buf, mac_src, 200);
+        let outcome = self.nodes[j].nwk.on_mac_data(buf, mac_src, 200, -40);
         if let RxOutcome::Data { src, payload, .. } = outcome {
             let p = payload.to_vec();
             self.nodes[j].received.push((src, p));

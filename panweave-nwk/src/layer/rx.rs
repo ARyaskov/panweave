@@ -55,12 +55,14 @@ impl<
 {
     /// Processes an MCPS-DATA.indication. `buf` holds the NPDU and is
     /// decrypted in place; `mac_src` is the MAC source address of the
-    /// frame; `lqi` the link quality.
+    /// frame; `lqi` the link quality and `rssi_dbm` the received power
+    /// (Annex D.11.2.1.1, kept per neighbor for power negotiation).
     pub fn on_mac_data<'a>(
         &mut self,
         buf: &'a mut [u8],
         mac_src: ShortAddress,
         lqi: u8,
+        rssi_dbm: i8,
     ) -> RxOutcome<'a> {
         let (header, header_len) = match Header::decode_prefix(buf) {
             Ok(v) => v,
@@ -150,12 +152,14 @@ impl<
             // Refresh LQA and last-seen data for the previous hop.
             if let Some(n) = self.neighbors.by_extended_mut(sb) {
                 n.lqa.push(lqi);
+                n.last_rssi_dbm = Some(rssi_dbm);
                 if n.short != mac_src && mac_src.is_unicast() {
                     n.short = mac_src;
                 }
             }
         } else if let Some(n) = self.neighbors.by_short_mut(mac_src) {
             n.lqa.push(lqi);
+            n.last_rssi_dbm = Some(rssi_dbm);
         }
         if let Some(n) = self.neighbors.by_short_mut(mac_src)
             && n.is_router()
@@ -222,6 +226,7 @@ impl<
                     payload_end,
                     mac_src,
                     lqi,
+                    rssi_dbm,
                     secured,
                     secured_by,
                 );
@@ -257,6 +262,7 @@ impl<
                         payload_end,
                         mac_src,
                         lqi,
+                        rssi_dbm,
                         secured,
                         secured_by,
                     );
@@ -502,6 +508,7 @@ impl<
         payload_end: usize,
         mac_src: ShortAddress,
         lqi: u8,
+        rssi_dbm: i8,
         secured: bool,
         secured_by: Option<ExtendedAddress>,
     ) {
@@ -524,6 +531,7 @@ impl<
             dst_ieee: header.dst_ieee,
             mac_src,
             lqi,
+            rssi_dbm,
             secured,
             secured_by,
             radius: header.radius,
@@ -545,10 +553,7 @@ impl<
             NwkCommand::EndDeviceTimeoutResponse(c) => self.on_end_device_timeout_response(&ctx, c),
             NwkCommand::CommissioningRequest(c) => self.on_commissioning_request(&ctx, &c),
             NwkCommand::CommissioningResponse(c) => self.on_commissioning_response(&ctx, &c),
-            NwkCommand::LinkPowerDelta(_) => {
-                // Power negotiation is not supported (Annex D.11.2 optional);
-                // silently ignored.
-            }
+            NwkCommand::LinkPowerDelta(c) => self.on_link_power_delta(&ctx, &c),
             NwkCommand::Unknown { id, .. } => {
                 self.stats.unknown_commands = self.stats.unknown_commands.saturating_add(1);
                 if ctx.dst == self.nib.network_address && secured {
@@ -589,6 +594,8 @@ pub(crate) struct CommandContext {
     pub dst_ieee: Option<ExtendedAddress>,
     pub mac_src: ShortAddress,
     pub lqi: u8,
+    /// RSSI of the frame, dBm.
+    pub rssi_dbm: i8,
     pub secured: bool,
     pub secured_by: Option<ExtendedAddress>,
     pub radius: u8,

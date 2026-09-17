@@ -25,6 +25,7 @@
 mod bcast;
 mod join;
 mod maint;
+mod power;
 mod route;
 mod rx;
 mod tx;
@@ -41,7 +42,7 @@ use panweave_types::{
 
 use crate::address_map::AddressMap;
 use crate::broadcast::BroadcastTransactionTable;
-use crate::command::NetworkStatusCode;
+use crate::command::{LinkPowerDeltaType, NetworkStatusCode};
 use crate::discovery::DiscoveryTable;
 use crate::neighbor::NeighborTable;
 use crate::nib::{Nib, constants};
@@ -146,6 +147,16 @@ pub struct NwkConfig {
     pub keepalive_methods: u8,
     /// Whether to include the beacon appendix (R23 attach mechanisms).
     pub r23_beacon_appendix: bool,
+    /// Power negotiation support (§3.6.11, §3.4.13): send and process
+    /// Link Power Delta commands and advertise bit 2 of the parent
+    /// information. Off by default (optional at 2.4 GHz, Annex K.7).
+    pub power_control: bool,
+    /// The optimal receive level `Popt` in dBm, 20 dB above the receiver
+    /// sensitivity (§3.4.13.7): −65 dBm for the 2.4 GHz PHY.
+    pub optimal_rssi_dbm: i8,
+    /// The `nwkLinkPowerDeltaTransmitRate` an end device adopts once its
+    /// parent supports power negotiation (§3.6.11.2), seconds.
+    pub end_device_power_delta_rate_secs: u16,
 }
 
 impl Default for NwkConfig {
@@ -159,6 +170,9 @@ impl Default for NwkConfig {
             hub_connectivity: false,
             keepalive_methods: 0x03,
             r23_beacon_appendix: true,
+            power_control: false,
+            optimal_rssi_dbm: -65,
+            end_device_power_delta_rate_secs: 16,
         }
     }
 }
@@ -263,6 +277,23 @@ pub enum NwkAction {
     MacSetRxOnWhenIdle(bool),
     /// Poll the parent (data request).
     MacPoll,
+    /// MLME-SET-POWER-INFORMATION-TABLE.request (§3.4.13.7 step 3,
+    /// Annex D.11.2.3): the peer asked for `delta_db` more (or less)
+    /// power on the link; `rssi_dbm` is the RSSI of its command.
+    MacAdjustTxPower {
+        /// Peer short address.
+        short: ShortAddress,
+        /// Peer IEEE address (`ZERO` when unknown).
+        extended: ExtendedAddress,
+        /// Requested change, dB.
+        delta_db: i8,
+        /// RSSI of the Link Power Delta command.
+        rssi_dbm: i8,
+    },
+    /// Return every link to the maximum transmit power (§3.4.13.1,
+    /// §3.6.11.1: rejoin, channel change, or a lost Link Power Delta
+    /// response).
+    MacResetTxPower,
     /// Persistent NIB data changed; the runtime should schedule a commit.
     Persist,
     /// An outgoing frame-counter reservation must be persisted, then
@@ -382,6 +413,16 @@ pub enum NwkEvent {
     /// An end device timeout response was received (parent information
     /// updated).
     ParentInformationUpdated,
+    /// A Link Power Delta command was processed (§3.4.13.7): the peer
+    /// reported `delta_db` for this device, when listed.
+    LinkPowerDelta {
+        /// Sender.
+        src: ShortAddress,
+        /// Notification, Request or Response.
+        kind: LinkPowerDeltaType,
+        /// `Popt − Prx` the peer measured for this device, dB.
+        delta_db: Option<i8>,
+    },
     /// The active network key sequence changed (Switch Key applied).
     KeySwitched,
     /// NLME-ED-SCAN.confirm: energy levels indexed by channel number
@@ -571,6 +612,11 @@ pub struct Nwk<
     /// set through Mgmt_Permit_Joining_req (§2.4.3.3.7.2); not persisted.
     pub(crate) network_wide_beacon_appendix: Vec<u8, { constants::MAX_BEACON_APPENDIX }>,
     pub(crate) link_status_due: Option<Instant>,
+    /// Next Link Power Delta transmission (§3.4.13.7).
+    pub(crate) power_delta_due: Option<Instant>,
+    /// A sleepy end device's outstanding Link Power Delta request:
+    /// polls left and the next poll time (§3.6.11.2.1).
+    pub(crate) power_request: Option<power::PendingRequest>,
     pub(crate) child_age_last: Instant,
     pub(crate) now: Instant,
     pub(crate) rreq_id: u8,
@@ -660,6 +706,8 @@ impl<
             permit_until: None,
             network_wide_beacon_appendix: Vec::new(),
             link_status_due: None,
+            power_delta_due: None,
+            power_request: None,
             child_age_last: Instant::ZERO,
             now: Instant::ZERO,
             next_tx_id: 1,

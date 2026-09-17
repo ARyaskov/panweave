@@ -52,7 +52,7 @@ clusters referenced by BDB), BDB3.1 (device behaviour on top of the stack).
 | §3.6.5–§3.6.8 | Beacon scheduling (non-beacon networks only), broadcast (BTT, passive ack), multicast (deprecated in R23), beacon payload | `panweave-nwk::{broadcast, beacon}` |
 | §3.6.9 Persistent data | Which NIB elements survive reset | `panweave-storage` |
 | §3.6.10 End-device aging | Timeout request/response, keep-alive methods, parent-side aging | `panweave-nwk::child` |
-| §3.6.11 Power negotiation | Link power delta | `panweave-nwk::power` |
+| §3.6.11 Power negotiation | Link power delta | `panweave-nwk::layer::power`, `panweave-mac::power` (Annex D.11.2.3 table) |
 | §3.6.12 Multiple MAC interfaces | Interface table | `panweave-nwk::interface` |
 | §4.2–§4.3 NWK security | Auxiliary header, CCM* secured NPDU, security-related NIB, frame counter rules (§4.3.4) | `panweave-security::nwk` |
 | §4.4 APS security | Transport key, update device, remove device, request key, switch key, verify key, confirm key, key negotiation (DLK), secured APDU, security AIB | `panweave-security::aps`, `panweave-aps::security_commands` |

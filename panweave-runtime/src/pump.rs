@@ -134,7 +134,6 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let channel = meta.channel.unwrap_or(self.nwk.nib.channel);
         let lqi = meta.lqi;
         self.last_rx = Some((meta.lqi, meta.rssi_dbm));
-        #[cfg(feature = "green-power")]
         let rssi = meta.rssi_dbm;
         match self.mac.on_receive(bytes, meta) {
             RxDisposition::Handled | RxDisposition::Other { .. } => {}
@@ -172,7 +171,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 let Ok(mut npdu) = Vec::<u8, NPDU_BUF>::from_slice(frame.payload) else {
                     return;
                 };
-                let owned = match self.nwk.on_mac_data(&mut npdu, mac_src, lqi) {
+                let owned = match self.nwk.on_mac_data(&mut npdu, mac_src, lqi, rssi) {
                     RxOutcome::Data {
                         src,
                         dst,
@@ -496,6 +495,19 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.nwk.on_mac_poll_confirm(false, false);
                     }
                 }
+                NwkAction::MacAdjustTxPower {
+                    short,
+                    extended,
+                    delta_db,
+                    rssi_dbm,
+                } => {
+                    let now = self.now;
+                    let _ = self
+                        .mac
+                        .power_table_mut()
+                        .adjust(short, extended, delta_db, rssi_dbm, now);
+                }
+                NwkAction::MacResetTxPower => self.mac.power_table_mut().reset(),
                 NwkAction::Persist => {
                     // R23.2 §3.6.9 / §4.3.4: NIB items, end-device
                     // children and network keys are committed whenever
@@ -693,6 +705,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
                 NwkEvent::EnergyScanConfirm { channels, energy } => {
                     self.on_energy_scan_confirm(channels, &energy);
+                }
+                NwkEvent::LinkPowerDelta {
+                    src,
+                    kind,
+                    delta_db,
+                } => {
+                    self.push_event(StackEvent::LinkPowerDelta {
+                        src,
+                        kind,
+                        delta_db,
+                    });
                 }
                 NwkEvent::StartRouterConfirm { .. }
                 | NwkEvent::RouteDiscoveryConfirm { .. }
