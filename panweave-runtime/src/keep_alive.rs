@@ -2,9 +2,11 @@
 //! centralized network locates the Trust Center's Keep-Alive server with
 //! Match_Desc_req and then reads `TCKeepAliveBase` / `TCKeepAliveJitter`
 //! with an APS-encrypted Read Attributes at every jittered interval.
-//! Three successive failures mean the Trust Center is no longer
-//! reachable: the application is told and may start a Trust Center
-//! search; the mechanism stops until the next join.
+//! A Trust Center without a Keep-Alive server is polled with
+//! Node_Desc_req instead (BDB 3.1 §7.3.3) at the default pacing. Three
+//! successive failures mean the Trust Center is no longer reachable:
+//! the application is told and may start a Trust Center search; the
+//! mechanism stops until the next join.
 
 use panweave_aps::Destination;
 use panweave_aps::layer::{NwkView, TxOptions};
@@ -18,7 +20,7 @@ use panweave_types::{
 use panweave_zcl::clusters::keep_alive;
 use panweave_zcl::frame::{Direction, Header};
 use panweave_zcl::global::{ReadAttributeStatus, Records, command};
-use panweave_zdo::zdp::{EndpointListRsp, MatchDescReq, U16List, ZdpStatus, cluster};
+use panweave_zdo::zdp::{EndpointListRsp, MatchDescReq, NodeDescReq, U16List, ZdpStatus, cluster};
 
 use crate::context::AddrView;
 use crate::stack::{Phase, Stack, StackEvent};
@@ -51,6 +53,8 @@ enum Stage {
     Off,
     Discovering,
     Running,
+    /// No Keep-Alive server: Node_Desc_req polling (BDB 3.1 §7.3.3).
+    NodeDescriptor,
 }
 
 impl KeepAlive {
@@ -117,6 +121,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             match self.keep_alive.stage {
                 Stage::Discovering => self.keep_alive_discover(),
                 Stage::Running => self.keep_alive_read(),
+                Stage::NodeDescriptor => self.keep_alive_node_desc(),
                 Stage::Off => {}
             }
         }
@@ -159,9 +164,49 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 self.keep_alive.failures = 0;
                 self.schedule_keep_alive_read();
             }
-            // No Keep-Alive server: nothing to keep alive against.
-            None => self.keep_alive = KeepAlive::default(),
+            // No Keep-Alive server: verify connectivity with the node
+            // descriptor instead (BDB 3.1 §7.3.3).
+            None => {
+                self.keep_alive.stage = Stage::NodeDescriptor;
+                self.keep_alive.failures = 0;
+                self.schedule_keep_alive_read();
+            }
         }
+        true
+    }
+
+    /// Node_Desc_req to the Trust Center as the keep-alive (§7.3.3).
+    fn keep_alive_node_desc(&mut self) {
+        let tc = self.trust_center_short();
+        let req = NodeDescReq {
+            addr: tc,
+            tlvs: &[],
+        };
+        match self.zdo.request(tc, cluster::NODE_DESC_REQ, &req) {
+            Ok(seq) => self.keep_alive.pending = Some((seq, self.now + READ_TIMEOUT)),
+            Err(_) => self.keep_alive_failure(),
+        }
+    }
+
+    /// Node_Desc_rsp from the Trust Center; returns whether it answered
+    /// the outstanding keep-alive poll.
+    pub(crate) fn on_keep_alive_node_desc(
+        &mut self,
+        src: ShortAddress,
+        seq: TransactionSequence,
+    ) -> bool {
+        let Some((pending, _)) = self.keep_alive.pending else {
+            return false;
+        };
+        if self.keep_alive.stage != Stage::NodeDescriptor
+            || pending != seq
+            || src != self.trust_center_short()
+        {
+            return false;
+        }
+        self.keep_alive.pending = None;
+        self.keep_alive.failures = 0;
+        self.schedule_keep_alive_read();
         true
     }
 

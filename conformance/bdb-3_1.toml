@@ -116,10 +116,10 @@ id = "PW-BDB-INIT-003"
 section = "§7.3"
 summary = "Ensuring TC connectivity via keep-alive cluster, poll control, or node descriptor polling"
 level = "conditional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::keep_alive"
-tests = ["router_keep_alive_detects_a_vanished_trust_center", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
-notes = "The Keep-Alive client (Match_Desc discovery of the Trust Center's cluster 0x0025, APS-secured attribute reads at the advertised base/jitter pacing, TrustCenterLost after three failures) and the Poll Control server / client are implemented in panweave-runtime; the Node Descriptor polling fallback of §7.3 for Trust Centers without either cluster is not (TODO(PW-BDB-TC-CONNECTIVITY))."
+tests = ["router_keep_alive_detects_a_vanished_trust_center", "router_falls_back_to_node_descriptor_polling", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
+notes = "The Keep-Alive client (Match_Desc discovery of the Trust Center Keep-Alive server, APS-secured attribute reads at the advertised base / jitter pacing), the Poll Control server / client path, and the section 7.3.3 fallback for a Trust Center without a Keep-Alive server (Node_Desc_req polls at the default pacing) are implemented; three successive failures raise StackEvent::TrustCenterLost."
 [[requirement]]
 id = "PW-BDB-INIT-004"
 section = "§7.4"

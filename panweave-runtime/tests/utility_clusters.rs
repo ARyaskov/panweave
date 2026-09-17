@@ -232,3 +232,63 @@ fn router_keep_alive_detects_a_vanished_trust_center() {
         elapsed.as_secs()
     );
 }
+
+/// BDB 3.1 §7.3.3: a Trust Center without a Keep-Alive server is
+/// polled with Node_Desc_req; three unanswered polls mean it is lost.
+#[test]
+fn router_falls_back_to_node_descriptor_polling() {
+    let mut sim = Simulator::new();
+    // A bare coordinator: no Keep-Alive server on any endpoint.
+    let mut cfg = StackConfig::new(LogicalDeviceType::Coordinator, COORD_IEEE);
+    cfg.trust_center_policy.allow_joins = true;
+    let mut coord = SimStack::new(
+        cfg,
+        MacServiceConfig::default(),
+        TestRng::seed(51),
+        MemoryStorage::new(),
+    );
+    let desc = SimpleDescriptor::new(
+        Endpoint(1),
+        ProfileId::HOME_AUTOMATION,
+        DeviceId(0x0005),
+        1,
+        &[ClusterId(0)],
+        &[],
+    )
+    .unwrap();
+    coord
+        .add_endpoint(
+            desc,
+            EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION),
+        )
+        .unwrap();
+    let c = sim.add_stack("coord", coord, Box::new(OnOffApp::default()));
+    let r = sim.add_stack(
+        "router",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 52, false),
+        Box::new(OnOffApp::default()),
+    );
+    form(&mut sim, c);
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(r)).is_some()));
+    sim.run_for(Duration::from_secs(5));
+    sim.take_events(r);
+    // Node descriptor polls at the default pacing keep the link alive.
+    sim.run_for(Duration::from_secs(40 * 60));
+    assert!(
+        !sim.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::TrustCenterLost))
+    );
+    assert!(
+        !sim.events(r).iter().any(|e| matches!(e, StackEvent::Zdp(d)
+            if d.cluster == panweave_zdo::cluster::response_of(panweave_zdo::cluster::NODE_DESC_REQ))),
+        "keep-alive descriptors are consumed by the stack"
+    );
+    sim.isolate(c);
+    assert!(sim.run_until(Duration::from_secs(60 * 60), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::TrustCenterLost))
+    }));
+}

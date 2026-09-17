@@ -465,6 +465,8 @@ Keep a Changelog; versions follow SemVer.
   holds the network key after a joiner's negotiated key is verified
   (`StackEvent::JoinerVerified`) until `Stack::admit_joiner`;
   `Stack::reject_joiner` removes the device.
+* Trust Center connectivity (BDB 3.1 §7.3.3): a router whose Trust
+  Center has no Keep-Alive server polls it with Node_Desc_req instead.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

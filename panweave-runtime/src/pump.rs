@@ -271,6 +271,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     if cluster == cluster::response_of(cluster::PARENT_ANNCE) {
                         self.on_parent_annce_rsp(src, data);
                     }
+                    let keep_alive_desc = cluster == cluster::response_of(cluster::NODE_DESC_REQ)
+                        && self.on_keep_alive_node_desc(src, seq);
                     if cluster == cluster::response_of(cluster::NODE_DESC_REQ)
                         && self.tclk_update.is_some()
                         && src_ieee.is_none_or(|s| s == self.aps.aib.trust_center_address)
@@ -279,7 +281,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     let keep_alive_match = cluster == cluster::response_of(cluster::MATCH_DESC_REQ)
                         && self.on_keep_alive_match(seq, data);
-                    if !keep_alive_match && let Ok(data) = Vec::from_slice(data) {
+                    if !keep_alive_match
+                        && !keep_alive_desc
+                        && let Ok(data) = Vec::from_slice(data)
+                    {
                         self.push_event(StackEvent::Zdp(ZdpData {
                             src,
                             seq,
