@@ -16,7 +16,45 @@ use panweave_zcl::ClusterInstance;
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zdo::descriptor::SimpleDescriptor;
 
+use panweave_runtime::StackConfig;
+use panweave_security::cipher::BlockCipher;
+use panweave_storage::Storage;
+use panweave_types::CryptoRng;
+
 use crate::endpoints::{self, Built};
+
+/// Applies the Smart Energy stack profile values (SE 1.4a Tables 5-2,
+/// 5-4) to a configuration: the join scan attempts and spacing, the
+/// rejoin intervals and the end-device poll rate. Call before building
+/// the stack; [`apply_profile_to_stack`] finishes the job on the running
+/// stack.
+pub fn apply_profile(cfg: &mut StackConfig) {
+    let p = panweave_smart_energy::profile::PRESET;
+    cfg.zdo.scan_attempts = p.scan_attempts;
+    cfg.zdo.time_between_scans_octets = p.time_between_scans_octets();
+    cfg.zdo.rejoin_interval_secs =
+        u16::try_from(p.rejoin_interval.as_millis() / 1000).unwrap_or(u16::MAX);
+    cfg.zdo.max_rejoin_interval_secs =
+        u16::try_from(p.max_rejoin_interval.as_millis() / 1000).unwrap_or(u16::MAX);
+    cfg.poll_interval = p.indirect_poll_rate;
+}
+
+/// Applies the profile values that live in the running stack (Tables
+/// 5-6, 5-8): the APS inter-frame delay of fragmented transmissions,
+/// the node descriptor's maximum incoming transfer size and, on a
+/// coordinator, the concentrator radius.
+pub fn apply_profile_to_stack<C: BlockCipher, R: CryptoRng, S: Storage>(
+    stack: &mut panweave_runtime::Stack<C, R, S>,
+) {
+    let p = panweave_smart_energy::profile::PRESET;
+    stack.aps.aib.interframe_delay_ms =
+        u8::try_from(p.interframe_delay.as_millis()).unwrap_or(u8::MAX);
+    stack.zdo.node.max_incoming_transfer_size = p.max_incoming_transfer_size;
+    if stack.config.role == panweave_types::LogicalDeviceType::Coordinator {
+        stack.nwk.nib.is_concentrator = true;
+        stack.nwk.nib.concentrator_radius = p.concentrator_radius;
+    }
+}
 
 /// Why an endpoint could not be built.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -85,3 +85,31 @@ fn rules_are_enforced() {
     .unwrap();
     assert!(desc.input_clusters.contains(&c::IDENTIFY));
 }
+
+#[test]
+fn profile_preset_is_applied() {
+    use panweave::runtime::{Stack, StackConfig};
+    use panweave::security::cipher::SoftwareAes;
+    use panweave::storage::MemoryStorage;
+    use panweave::testkit::TestRng;
+    use panweave::types::{ExtendedAddress, LogicalDeviceType};
+
+    let mut cfg = StackConfig::new(LogicalDeviceType::Coordinator, ExtendedAddress(1));
+    se::apply_profile(&mut cfg);
+    assert_eq!(cfg.zdo.scan_attempts, 3);
+    assert_eq!(cfg.zdo.time_between_scans().as_millis(), 1000);
+    assert_eq!(cfg.zdo.rejoin_interval_secs, 60);
+    assert_eq!(cfg.zdo.max_rejoin_interval_secs, 900);
+    assert_eq!(cfg.poll_interval.as_millis(), 60_000);
+    let mut stack: Stack<SoftwareAes, TestRng, MemoryStorage<64, 128>> = Stack::new(
+        cfg,
+        panweave::mac::service::MacServiceConfig::default(),
+        TestRng::seed(1),
+        MemoryStorage::new(),
+    );
+    se::apply_profile_to_stack(&mut stack);
+    assert_eq!(stack.aps.aib.interframe_delay_ms, 50);
+    assert_eq!(stack.zdo.node.max_incoming_transfer_size, 128);
+    assert!(stack.nwk.nib.is_concentrator);
+    assert_eq!(stack.nwk.nib.concentrator_radius, 11);
+}

@@ -63,3 +63,77 @@ pub mod startup {
 /// Time synchronization (§5.12.1.1): clients keep within this drift of
 /// the ESI per 24 hours.
 pub const TIME_ACCURACY_PER_DAY: Duration = Duration::from_secs(60);
+
+/// Binding parameters (Table 5-9).
+pub mod binding {
+    use super::Duration;
+
+    /// `EndDeviceBindTimeout` of the coordinator.
+    pub const END_DEVICE_BIND_TIMEOUT: Duration = Duration::from_secs(60);
+}
+
+/// The stack settings a Smart Energy device applies (Tables 5-2, 5-4,
+/// 5-6, 5-8, 5-9), gathered so a runtime configuration can be set from
+/// one value; `PRESET` holds the profile's values.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Preset {
+    /// `:Config_NWK_Scan_Attempts`.
+    pub scan_attempts: u8,
+    /// `:Config_NWK_Time_btwn_Scans`.
+    pub time_between_scans: Duration,
+    /// `:Config_Rejoin_Interval`.
+    pub rejoin_interval: Duration,
+    /// `:Config_Max_Rejoin_Interval`.
+    pub max_rejoin_interval: Duration,
+    /// Indirect poll rate of an end device.
+    pub indirect_poll_rate: Duration,
+    /// Concentrator radius of a coordinator / ESI.
+    pub concentrator_radius: u8,
+    /// `apsInterframeDelay`.
+    pub interframe_delay: Duration,
+    /// `apsMaxWindowSize`.
+    pub max_window_size: u8,
+    /// Node descriptor Maximum Incoming Transfer Size.
+    pub max_incoming_transfer_size: u16,
+    /// `EndDeviceBindTimeout`.
+    pub end_device_bind_timeout: Duration,
+}
+
+/// The profile's values.
+pub const PRESET: Preset = Preset {
+    scan_attempts: join::SCAN_ATTEMPTS,
+    time_between_scans: join::TIME_BETWEEN_SCANS,
+    rejoin_interval: join::REJOIN_INTERVAL,
+    max_rejoin_interval: join::MAX_REJOIN_INTERVAL,
+    indirect_poll_rate: end_device::INDIRECT_POLL_RATE,
+    concentrator_radius: concentrator::RADIUS,
+    interframe_delay: fragmentation::INTERFRAME_DELAY,
+    max_window_size: fragmentation::MAX_WINDOW_SIZE,
+    max_incoming_transfer_size: fragmentation::MAX_INCOMING_TRANSFER_SIZE,
+    end_device_bind_timeout: binding::END_DEVICE_BIND_TIMEOUT,
+};
+
+impl Preset {
+    /// `:Config_NWK_Time_btwn_Scans` in octet durations (32 µs), the
+    /// unit of the ZDO configuration attribute, saturated to the field.
+    pub fn time_between_scans_octets(&self) -> u16 {
+        let octets = self.time_between_scans.as_millis() * 1000 / 32;
+        u16::try_from(octets).unwrap_or(u16::MAX)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_carries_the_table_values() {
+        assert_eq!(PRESET.scan_attempts, 3);
+        assert_eq!(PRESET.time_between_scans_octets(), 31_250);
+        assert_eq!(PRESET.max_rejoin_interval.as_millis(), 15 * 60 * 1000);
+        assert_eq!(PRESET.interframe_delay.as_millis(), 50);
+        assert_eq!(PRESET.max_incoming_transfer_size, 128);
+        assert_eq!(PRESET.end_device_bind_timeout.as_millis(), 60_000);
+    }
+}

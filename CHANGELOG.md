@@ -324,6 +324,11 @@ Keep a Changelog; versions follow SemVer.
   Default Response FAILURE under the network key and dropped (the
   FAILURE itself is exempt). `panweave-smart-energy::zcl_link_key_policy`
   supplies the Table 5-12 rule.
+* `panweave-smart-energy::profile::PRESET` and the facade's
+  `smart_energy_endpoints::{apply_profile, apply_profile_to_stack}`:
+  the §5.3 stack profile values (join scans, rejoin intervals, poll
+  rate, APS inter-frame delay, maximum incoming transfer size,
+  concentrator radius) applied to a stack configuration.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

@@ -8,10 +8,10 @@ id = "PW-SE-PROF-001"
 section = "§5.2, §5.3"
 summary = "Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters)"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-smart-energy::profile"
-tests = []
-notes = "Table 5-1 startup, Table 5-2 join, Table 5-4 end-device, Table 5-6 concentrator and Table 5-8 fragmentation values are constants in panweave-smart-energy::profile; applying them to a StackConfig (a Smart Energy preset) and the binding parameters of §5.3.9 are not done (TODO(PW-SE-PROFILE))."
+tests = ["preset_carries_the_table_values", "profile_preset_is_applied"]
+notes = "Table 5-1 startup, Table 5-2 join, Table 5-4 end-device, Table 5-6 concentrator, Table 5-8 fragmentation and Table 5-9 binding values are constants in panweave-smart-energy::profile, gathered in profile::PRESET; the facade's smart_energy_endpoints::apply_profile sets the ZDO configuration attributes and the poll rate of a StackConfig and apply_profile_to_stack sets the APS inter-frame delay, the node descriptor's maximum incoming transfer size and the concentrator radius of a coordinator. The end-device bind timeout is a constant for an application implementing End_Device_Bind_req on the coordinator."
 [[requirement]]
 id = "PW-SE-SEC-001"
 section = "§5.4.1–§5.4.3"
