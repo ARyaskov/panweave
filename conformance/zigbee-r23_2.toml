@@ -725,10 +725,10 @@ id = "PW-R23-ZDP-005"
 section = "§2.4.3.1.11"
 summary = "Device_annce broadcast on join/rejoin with short address, IEEE address, capability; receivers update address map and detect conflicts"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::layer"
-tests = ["announce_and_binding_frames", "device_announce_and_timeouts"]
-notes = "Codec, broadcast on join and the ZdoContext hook are implemented; the address-map update and conflict detection of §2.4.3.1.11.2 are executed by the runtime's ZdoContext over the NWK tables."
+tests = ["announce_and_binding_frames", "device_announce_and_timeouts", "duplicate_addresses_are_detected_and_reassigned"]
+notes = "Codec, broadcast on join / rejoin / re-addressing, and receipt through Nwk::on_device_announce: a lost end device child announcing under another address is re-addressed with an unsolicited Rejoin Response (step 2a), an address already held by another neighbour or address map entry raises the address conflict procedure (step 2b), otherwise the address map and neighbour table take the announced address."
 [[requirement]]
 id = "PW-R23-ZDP-006"
 section = "§2.4.3.1.12, §2.4.4.1.9"

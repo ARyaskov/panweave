@@ -317,9 +317,7 @@ impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
         short: ShortAddress,
         _capability: MacCapability,
     ) {
-        if ieee != ExtendedAddress::BROADCAST && ieee != self.nwk.nib.ieee_address {
-            let _ = self.nwk.address_map.record(ieee, short);
-        }
+        self.nwk.on_device_announce(ieee, short);
     }
 
     fn claims_child(&self, child: ExtendedAddress) -> bool {

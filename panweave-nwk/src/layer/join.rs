@@ -2268,6 +2268,26 @@ impl<
 
     /// Assigns a new address to an end device child and informs it with an
     /// unsolicited (secured) Rejoin Response (§3.6.1.10.5).
+    /// Device_annce received (§2.4.3.1.11.2): a lost end device child
+    /// announcing under another address gets a new one through an
+    /// unsolicited Rejoin Response (step 2a); an address already held by
+    /// another device is a conflict (step 2b, §3.6.1.10); otherwise the
+    /// address map and neighbor table follow the announcement.
+    pub fn on_device_announce(&mut self, ieee: ExtendedAddress, short: ShortAddress) {
+        if !ieee.is_valid_device_address() || !short.is_unicast() || ieee == self.nib.ieee_address {
+            return;
+        }
+        if self.nib.is_router_or_coordinator()
+            && let Some(n) = self.neighbors.by_extended(ieee)
+            && n.short != short
+            && n.relationship == Relationship::LostChild
+        {
+            self.reassign_child_address(ieee);
+            return;
+        }
+        self.note_address(ieee, short, true);
+    }
+
     fn reassign_child_address(&mut self, child: ExtendedAddress) {
         let Some(new) = self.allocate_address() else {
             return;
