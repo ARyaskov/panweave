@@ -16,6 +16,7 @@ use panweave_green_power::cluster::{
     Pairing, PairingConfiguration, ProxyCommissioningMode, ProxyTableRequest, Response,
     SinkCommissioningMode, SinkSecurityLevel, SinkTableRequest,
 };
+use panweave_green_power::description::CompactReport;
 use panweave_green_power::gpdf::{GpdId, Gpdf};
 use panweave_green_power::proxy::{
     Destination, Outgoing, PairingError, Proxy, ProxyConfig, ProxyEvent,
@@ -32,8 +33,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_storage::{Key, Kind, Storage, StorageError};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    CryptoRng, DeviceId, Endpoint, ExtendedAddress, GroupAddress, Key128, PanId, ProfileId,
-    ShortAddress,
+    ClusterId, CryptoRng, DeviceId, Endpoint, ExtendedAddress, GroupAddress, Key128, PanId,
+    ProfileId, ShortAddress,
 };
 use panweave_zcl::frame::{Direction, Frame as ZclFrame, Header, ZclStatus};
 use panweave_zcl::global::command as global_command;
@@ -177,7 +178,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     fn enable_green_power(&mut self, sink: Option<SinkOptions>) -> Result<(), EndpointError> {
-        let (device, servers): (DeviceId, &[panweave_types::ClusterId]) = if sink.is_some() {
+        let (device, servers): (DeviceId, &[ClusterId]) = if sink.is_some() {
             (COMBO_BASIC_DEVICE, &[gp_cluster::ID])
         } else {
             (PROXY_BASIC_DEVICE, &[])
@@ -706,6 +707,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
             }
         }
+        // A compact report is interpreted through the GPD's application
+        // description (§A.4.2.3.6): one Report Attributes per attribute.
+        let mut reports: Vec<(ClusterId, Option<u16>, Vec<u8, 24>), 8> = Vec::new();
+        if c.command_id == panweave_green_power::command::COMPACT_ATTRIBUTE_REPORTING
+            && let Some(report) = CompactReport::parse(&c.payload)
+            && let Some(desc) = gp.sink.as_ref().and_then(|s| s.descriptions.get(&c.gpd))
+            && let Some(d) = desc.report(report.report_id)
+        {
+            for a in report.attributes(&d) {
+                let mut rec: Vec<u8, 24> = Vec::new();
+                if rec.extend_from_slice(&a.id.to_le_bytes()).is_err()
+                    || rec.push(a.data_type).is_err()
+                    || rec.extend_from_slice(a.value).is_err()
+                {
+                    continue;
+                }
+                let _ = reports.push((a.cluster, a.manufacturer, rec));
+            }
+        }
         let Some(payload) = Vec::from_slice(&c.payload).ok() else {
             return;
         };
@@ -715,6 +735,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             payload,
             group: c.group,
         });
+        if c.command_id == panweave_green_power::command::COMPACT_ATTRIBUTE_REPORTING {
+            for (cluster, manufacturer, rec) in reports {
+                let mut h = Header::global(
+                    self.zcl.next_seq(),
+                    global_command::REPORT_ATTRIBUTES,
+                    Direction::ToClient,
+                )
+                .disable_default_response(true);
+                if let Some(m) = manufacturer {
+                    h = h.with_manufacturer(panweave_types::ManufacturerCode(m));
+                }
+                self.dispatch_locally(alias, &endpoints, cluster, &h, &rec);
+            }
+            return;
+        }
         let Some(t) = translation::translate(c.command_id, &c.payload, group) else {
             return;
         };
@@ -746,9 +781,22 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 (*cluster, h, records)
             }
         };
+        self.dispatch_locally(alias, &endpoints, cluster, &header, body);
+    }
+
+    /// Delivers a ZCL frame to the local `endpoints` as if it had come
+    /// from `src` (the GPD's alias) on the Green Power EndPoint.
+    fn dispatch_locally(
+        &mut self,
+        src: ShortAddress,
+        endpoints: &[Endpoint],
+        cluster: ClusterId,
+        header: &Header,
+        body: &[u8],
+    ) {
         let mut buf = [0u8; 96];
         let Ok(n) = (ZclFrame {
-            header,
+            header: *header,
             payload: body,
         })
         .encode_to_slice(&mut buf) else {
@@ -756,10 +804,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         };
         for ep in endpoints {
             let ind = panweave_aps::layer::DataIndication {
-                src: alias,
+                src,
                 src_ieee: None,
                 src_endpoint: gp_cluster::ENDPOINT,
-                delivery: Delivery::Endpoint(ep),
+                delivery: Delivery::Endpoint(*ep),
                 profile: ProfileId::WILDCARD,
                 cluster,
                 asdu: buf.get(..n).unwrap_or(&[]),
@@ -775,13 +823,24 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             if cluster == panweave_zcl::clusters::groups::ID {
                 let _ = self.persist_groups();
             }
-            if let Some(ZclIndication::Command { origin, payload }) = out
-                && let Ok(payload) = Vec::from_slice(payload)
-            {
-                self.push_event(StackEvent::ZclCommand(crate::stack::ZclFrame {
-                    origin,
-                    payload,
-                }));
+            match out {
+                Some(ZclIndication::Command { origin, payload }) => {
+                    if let Ok(payload) = Vec::from_slice(payload) {
+                        self.push_event(StackEvent::ZclCommand(crate::stack::ZclFrame {
+                            origin,
+                            payload,
+                        }));
+                    }
+                }
+                Some(ZclIndication::Report { origin, payload }) => {
+                    if let Ok(payload) = Vec::from_slice(payload) {
+                        self.push_event(StackEvent::ZclReport(crate::stack::ZclFrame {
+                            origin,
+                            payload,
+                        }));
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -27,6 +27,7 @@ use crate::command;
 use crate::commissioning::{
     ChannelConfiguration, ChannelRequest, Commissioning, CommissioningReply, KeyField,
 };
+use crate::description::{ApplicationDescription, Description, Descriptions, Fed};
 use crate::gpdf::{
     ExtendedFrameControl, FrameType, GpdId, Gpdf, NwkFrameControl, SRC_ID_UNSPECIFIED,
     SecurityLevel,
@@ -265,6 +266,12 @@ struct Candidate {
     entry: SinkEntry,
     key_delivered: bool,
     until: Instant,
+    /// The Commissioning Reply (CommandID and payload) to hand the GPD
+    /// in its next receive window.
+    reply: Vec<u8, MAX_GPDF>,
+    /// Application Description commands are still expected before the
+    /// pairing completes (§A.3.9.1 step 13.i).
+    awaiting_description: bool,
 }
 
 /// How a GPD command reached the sink.
@@ -297,6 +304,9 @@ pub struct Sink<C: BlockCipher, const N: usize> {
     pub table: SinkTable<N>,
     commissioning: Option<Window>,
     candidates: Vec<Candidate, CANDIDATES>,
+    /// Application descriptions of the GPDs commissioned with the
+    /// Compact Attribute Reporting command (§A.4.2.1.6).
+    pub descriptions: Descriptions<N>,
     tx_queue: TxQueue<2>,
     duplicates: Vec<Duplicate, DUPLICATE_ENTRIES>,
     frames: Deque<SinkFrame, QUEUE_CAPACITY>,
@@ -314,6 +324,7 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
             table: SinkTable::new(),
             commissioning: None,
             candidates: Vec::new(),
+            descriptions: Descriptions::new(),
             tx_queue: TxQueue::new(),
             duplicates: Vec::new(),
             frames: Deque::new(),
@@ -1145,6 +1156,12 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
                     self.on_success(inc);
                 }
             }
+            command::APPLICATION_DESCRIPTION => {
+                if in_commissioning {
+                    self.remember(&inc.gpd, inc.counter);
+                    self.on_application_description(inc);
+                }
+            }
             command::DECOMMISSIONING => self.on_decommissioning(inc),
             c if command::is_commissioning(c) => {}
             _ => {
@@ -1231,6 +1248,7 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
         self.remember(&inc.gpd, inc.counter);
         self.table.remove(&inc.gpd);
         self.candidates.retain(|c| !c.entry.matches(&inc.gpd));
+        self.descriptions.remove(&inc.gpd);
         self.push_event(SinkEvent::TableChanged);
         let p = self.pairing_for(&entry, false, true);
         self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
@@ -1352,11 +1370,19 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
                 key: Some(agreed.1),
             });
         }
-        if !inc.rx_after_tx {
+        let follows = cmd.application.is_some_and(|a| a.description_follows);
+        let described = self
+            .descriptions
+            .get(&gpd)
+            .is_some_and(Description::is_complete);
+        if !inc.rx_after_tx && (!follows || described) {
+            // Unidirectional (step 13.i): paired at once, or as soon as
+            // the last Application Description arrived before this.
             self.finalize(entry);
             return;
         }
-        // Bidirectional: the Commissioning Reply with what was asked for.
+        // The Commissioning Reply with what was asked for, handed over
+        // now (RxAfterTx) or after the last Application Description.
         let counter = cmd.outgoing_counter.unwrap_or(u32::from(inc.mac_sequence));
         let key_delivered = reply_key.is_some();
         let key = match reply_key {
@@ -1406,15 +1432,26 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
             entry,
             key_delivered,
             until,
+            reply: app.clone(),
+            awaiting_description: follows && !described,
         }) {
             self.candidates.remove(0);
             let _ = self.candidates.push(c);
         }
-        match inc.via {
-            Via::Direct => self.queue_gpdf(&gpd, &app),
+        if inc.rx_after_tx {
+            self.hand_over_reply(&gpd, &app, inc.via);
+        }
+    }
+
+    /// Hands the Commissioning Reply to the GPD: through the gpTxQueue
+    /// when received directly, by GP Response to the forwarding proxy
+    /// otherwise (step 13.j.ii).
+    fn hand_over_reply(&mut self, gpd: &GpdId, app: &[u8], via: Via) {
+        match via {
+            Via::Direct => self.queue_gpdf(gpd, app),
             Via::Proxy { short, .. } => {
                 let r = Response {
-                    gpd,
+                    gpd: *gpd,
                     endpoint_match: false,
                     selected_sender: short,
                     tx_channel: self.config.channel,
@@ -1423,6 +1460,39 @@ impl<C: BlockCipher, const N: usize> Sink<C, N> {
                 };
                 self.push_frame(Destination::Broadcast, cluster::server_cmd::RESPONSE, &r);
             }
+        }
+    }
+
+    /// GPD Application Description (step 13.f–13.j): the descriptors
+    /// are stored; once all of them and the Commissioning command are
+    /// in, a unidirectional GPD is paired, a bidirectional one gets its
+    /// Commissioning Reply and is paired on its Success.
+    fn on_application_description(&mut self, inc: &Incoming<'_>) {
+        let Ok(d) = ApplicationDescription::decode_exact(inc.payload) else {
+            return;
+        };
+        let complete = self.descriptions.feed(inc.gpd, &d) == Fed::Complete;
+        if !complete {
+            return;
+        }
+        let Some(i) = self
+            .candidates
+            .iter()
+            .position(|c| c.entry.matches(&inc.gpd) && c.awaiting_description)
+        else {
+            return;
+        };
+        if inc.rx_after_tx {
+            if let Some(c) = self.candidates.get_mut(i) {
+                c.awaiting_description = false;
+            }
+            let reply = self.candidates.get(i).map(|c| c.reply.clone());
+            if let Some(reply) = reply {
+                self.hand_over_reply(&inc.gpd, &reply, inc.via);
+            }
+        } else {
+            let c = self.candidates.swap_remove(i);
+            self.finalize(c.entry);
         }
     }
 

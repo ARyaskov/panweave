@@ -35,10 +35,10 @@ id = "PW-GP-GPD-001"
 section = "A.1.6, A.4"
 summary = "GPD addressing (reserved SrcIDs, application ids 0b000/0b010), bidirectional operation, GPD command ids (switch, sensor, level, color, scenes, commissioning, decommissioning, channel request, success, manufacturer specific)"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-green-power::command"
-tests = ["gpd_id_ranges", "commissioning_command_round_trips", "commissioning_reply_and_channel_commands"]
-notes = "GPD identities (SrcID ranges, IEEE + endpoint with the 0x00 / 0xff rules), the GPD command identifiers of Tables 54-56 with the commissioning / to-GPD range helpers, and the payload codecs of the commissioning commands (GPD Commissioning with Extended Options, TC-LK protected key + MIC, outgoing counter and Application information incl. cluster list and switch information; Commissioning Reply; Channel Request; Channel Configuration). Application Description (0xE4) and the sensor / bidirectional operation command payloads are not decoded (forwarded opaquely)."
+tests = ["gpd_id_ranges", "commissioning_command_round_trips", "commissioning_reply_and_channel_commands", "application_description_round_trips_and_interprets_reports", "multi_sensor_commissioning_waits_for_the_application_description", "a_multi_sensor_gpd_reports_through_its_application_description"]
+notes = "GPD identities (SrcID ranges, IEEE + endpoint with the 0x00 / 0xff rules), the GPD command identifiers of Tables 54-56 with the commissioning / to-GPD range helpers, the payload codecs of the commissioning commands (GPD Commissioning with Extended Options, TC-LK protected key + MIC, outgoing counter and Application information incl. cluster list and switch information; Commissioning Reply; Channel Request; Channel Configuration), the Application Description command (report descriptors, data points and attribute records with their offsets and fixed values) with a per-GPD store tolerating out-of-order and duplicate descriptors, the Compact Attribute Reporting command interpreted through the stored descriptor into ZCL attribute values, and the generic translation of the Table 54 / 55 data commands and the attribute reporting commands. The sink pairs a multi-sensor GPD once its Commissioning command and every Application Description are in (handing the Commissioning Reply over on the last one when it opens a receive window) and the runtime turns compact reports into Report Attributes on the paired endpoints. Not decoded: the multi-cluster reporting, ZCL tunneling and bidirectional operation (Request / Read / Write Attributes) payloads, forwarded to the application as raw GPD commands."
 [[requirement]]
 id = "PW-GP-CL-001"
 section = "A.3.3, A.3.4"

@@ -81,7 +81,9 @@ them, and a few frame-level details are not spelled out either.
   is kept.
 * Sinks that must stay in commissioning mode indefinitely pass a long
   window to `enter_commissioning_mode`.
-* GPD Application Description (0xE4) and the Translation Table are not
-  implemented: a GPD announcing "Application Description follows" is
-  paired from its Commissioning command alone and its compact attribute
-  reports reach the application untranslated.
+* The Translation Table is not implemented; a GPD announcing
+  "Application Description follows" is paired once every report
+  descriptor arrived, and its compact attribute reports are interpreted
+  through those descriptors into Report Attributes for the paired local
+  endpoints. GP Pairing Configuration carrying report descriptors
+  (Action 0b101) is refused.

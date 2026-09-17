@@ -946,3 +946,142 @@ fn pairing_configuration_manages_the_sink_table() {
     assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
     assert!(frames(&mut s).is_empty());
 }
+
+#[test]
+fn multi_sensor_commissioning_waits_for_the_application_description() {
+    use panweave_green_power::commissioning::ApplicationInfo;
+    use panweave_green_power::description::{
+        ApplicationDescription, AttributeRecord, CompactReport, DataPoint, ReportDescriptor,
+        ReportedAttribute,
+    };
+    use panweave_types::ClusterId;
+    let mut s = sink();
+    s.enter_commissioning_mode(false, None).unwrap();
+    let _ = events(&mut s);
+    // The Commissioning command announces an Application Description.
+    let (protected, mic) = security::protect_gpd_key::<SoftwareAes>(
+        &Key128::WELL_KNOWN_GLOBAL_TCLK,
+        &GPD,
+        Direction::FromGpd,
+        0,
+        &OOB_KEY,
+    )
+    .unwrap();
+    let c = Commissioning {
+        device_id: 0x30,
+        sequence_number_capable: true,
+        rx_on_capable: false,
+        pan_id_request: false,
+        key_request: false,
+        fixed_location: true,
+        security: Some(SecurityCapabilities {
+            level: 0b10,
+            key_type: KeyType::Individual,
+            key_encryption: true,
+        }),
+        key: Some(KeyField {
+            bytes: protected,
+            mic: Some(mic),
+        }),
+        outgoing_counter: Some(0x10),
+        application: Some(ApplicationInfo {
+            manufacturer_id: None,
+            model_id: None,
+            commands: None,
+            clusters: None,
+            switch: None,
+            description_follows: true,
+        }),
+    };
+    feed(
+        &mut s,
+        &data_gpdf(
+            1,
+            ext(SecurityLevel::None, false, false),
+            false,
+            None,
+            &commissioning_body(&c),
+            None,
+        ),
+    );
+    assert!(
+        events(&mut s).is_empty(),
+        "no pairing before the description"
+    );
+    assert!(s.table.is_empty());
+    // The description: report 0 = Temperature Measurement MeasuredValue
+    // (int16) at offset 0.
+    let mut records = [0u8; 16];
+    let mut rw = Writer::new(&mut records);
+    AttributeRecord::write(&mut rw, 0x0000, 0x29, Some(0), None).unwrap();
+    let rn = rw.position();
+    let mut points = [0u8; 24];
+    let mut pw = Writer::new(&mut points);
+    DataPoint::write(&mut pw, ClusterId(0x0402), true, None, 1, &records[..rn]).unwrap();
+    let pn = pw.position();
+    let mut desc = [0u8; 40];
+    let mut dw = Writer::new(&mut desc);
+    ReportDescriptor::write(&mut dw, 0, Some(60), &points[..pn]).unwrap();
+    let dn = dw.position();
+    let d = ApplicationDescription {
+        total_reports: 1,
+        reports: 1,
+        descriptors: &desc[..dn],
+    };
+    let mut body = vec![command::APPLICATION_DESCRIPTION];
+    let mut dbuf = [0u8; 48];
+    let n = d.encode_to_slice(&mut dbuf).unwrap();
+    body.extend(&dbuf[..n]);
+    feed(
+        &mut s,
+        &data_gpdf(
+            2,
+            ext(SecurityLevel::None, false, false),
+            false,
+            None,
+            &body,
+            None,
+        ),
+    );
+    let evs = events(&mut s);
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        SinkEvent::Paired {
+            gpd: GPD,
+            device_id: 0x30,
+            ..
+        }
+    )));
+    assert_eq!(s.table.find(&GPD).unwrap().frame_counter, 0x10);
+    assert!(s.descriptions.get(&GPD).unwrap().is_complete());
+    let _ = frames(&mut s);
+    // A Compact Attribute Reporting in operation carries 21.50 °C.
+    feed(
+        &mut s,
+        &data_gpdf(
+            3,
+            ext(SecurityLevel::Mic, true, false),
+            false,
+            Some(0x11),
+            &[0xA8, 0x00, 0x66, 0x08],
+            Some(&OOB_KEY),
+        ),
+    );
+    let evs = events(&mut s);
+    let cmd = evs
+        .iter()
+        .find_map(|e| match e {
+            SinkEvent::Command(c) => Some(c.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(cmd.command_id, 0xA8);
+    let report = CompactReport::parse(&cmd.payload).unwrap();
+    let desc = s.descriptions.get(&GPD).unwrap();
+    let attrs: Vec<ReportedAttribute<'_>> = report
+        .attributes(&desc.report(report.report_id).unwrap())
+        .collect();
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs[0].cluster, ClusterId(0x0402));
+    assert_eq!(attrs[0].value, &[0x66, 0x08]);
+}

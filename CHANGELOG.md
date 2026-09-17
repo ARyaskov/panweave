@@ -212,6 +212,14 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* GPD Application Description and Compact Attribute Reporting (GP
+  1.1.2 §A.4.2.1.6, §A.4.2.3.6): `description::{ApplicationDescription,
+  ReportDescriptor, DataPoint, AttributeRecord, Descriptions,
+  CompactReport}` decode and build the report descriptors, assemble
+  them per GPD and interpret a compact report into attribute values;
+  the sink defers a multi-sensor pairing until the description is
+  complete (step 13.i) and the runtime delivers compact reports to the
+  paired endpoints as Report Attributes (`StackEvent::ZclReport`).
 * GP Pairing Configuration (GP 1.1.2 §A.3.3.4.6, §A.3.5.2.4.1): the
   codec (`cluster::{PairingConfiguration, ConfigurationAction,
   PairedEndpoints}`, sharing the Sink Table entry body) and

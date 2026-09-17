@@ -21,6 +21,7 @@ extern crate alloc;
 pub mod cluster;
 pub mod command;
 pub mod commissioning;
+pub mod description;
 pub mod gpdf;
 pub mod proxy;
 pub mod proxy_table;

@@ -48,6 +48,10 @@ pub const MANUFACTURER_MULTI_CLUSTER_REPORTING: u8 = 0xA3;
 pub const REQUEST_ATTRIBUTES: u8 = 0xA4;
 /// Read Attributes Response.
 pub const READ_ATTRIBUTES_RESPONSE: u8 = 0xA5;
+/// ZCL Tunneling (§A.4.2.3.5).
+pub const ZCL_TUNNELING: u8 = 0xA6;
+/// Compact Attribute Reporting (§A.4.2.3.6).
+pub const COMPACT_ATTRIBUTE_REPORTING: u8 = 0xA8;
 /// Manufacturer-defined GPD commands (0xB0–0xBF).
 pub const MANUFACTURER_FIRST: u8 = 0xB0;
 /// Last manufacturer-defined GPD command.

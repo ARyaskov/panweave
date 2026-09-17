@@ -72,6 +72,18 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
         let mut ep = EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION);
         ep.add_instance(identify::server().unwrap()).unwrap();
         ep.add_instance(on_off::server().unwrap()).unwrap();
+        // A Temperature Measurement client receives the reports of a
+        // multi-sensor GPD.
+        ep.add_cluster(
+            panweave_zcl::ClusterDef {
+                id: ClusterId(0x0402),
+                revision: 1,
+                received: &[],
+                generated: &[],
+            },
+            panweave_zcl::Role::Client,
+        )
+        .unwrap();
         n.add_endpoint(desc, ep).unwrap();
     }
     n
@@ -774,4 +786,136 @@ fn a_commissioning_tool_configures_a_pairing_on_the_sink() {
                 .green_power_proxy_ref()
                 .is_some_and(|p| p.table.find(&GPD).is_none())
     }));
+}
+
+#[test]
+fn a_multi_sensor_gpd_reports_through_its_application_description() {
+    use panweave_green_power::commissioning::ApplicationInfo;
+    use panweave_green_power::description::{
+        ApplicationDescription, AttributeRecord, DataPoint, ReportDescriptor,
+    };
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "sink",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 71),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .enable_green_power_sink(SinkOptions::default())
+        .unwrap();
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c)
+        .green_power_commission(false, Some(Duration::from_secs(60)))
+        .unwrap();
+    sim.take_events(c);
+    // Commissioning announcing an Application Description, then the
+    // description itself: one report with a Temperature Measurement
+    // MeasuredValue at offset 0.
+    let (protected, mic) = security::protect_gpd_key::<SoftwareAes>(
+        &Key128::WELL_KNOWN_GLOBAL_TCLK,
+        &GPD,
+        Direction::FromGpd,
+        0,
+        &OOB_KEY,
+    )
+    .unwrap();
+    let cmd = Commissioning {
+        device_id: 0x30,
+        sequence_number_capable: true,
+        rx_on_capable: false,
+        pan_id_request: false,
+        key_request: false,
+        fixed_location: true,
+        security: Some(SecurityCapabilities {
+            level: 0b10,
+            key_type: KeyType::Individual,
+            key_encryption: true,
+        }),
+        key: Some(KeyField {
+            bytes: protected,
+            mic: Some(mic),
+        }),
+        outgoing_counter: Some(0x10),
+        application: Some(ApplicationInfo {
+            manufacturer_id: None,
+            model_id: None,
+            commands: None,
+            clusters: None,
+            switch: None,
+            description_follows: true,
+        }),
+    };
+    let mut body = vec![command::COMMISSIONING];
+    let mut buf = [0u8; 64];
+    let n = cmd.encode_to_slice(&mut buf).unwrap();
+    body.extend(&buf[..n]);
+    sim.inject(&gpdf(1, SecurityLevel::None, None, &body, None));
+    sim.run_for(Duration::from_secs(1));
+    assert!(
+        sim.events(c)
+            .iter()
+            .all(|e| !matches!(e, StackEvent::GreenPowerPaired { .. }))
+    );
+    let mut records = [0u8; 16];
+    let mut rw = Writer::new(&mut records);
+    AttributeRecord::write(&mut rw, 0x0000, 0x29, Some(0), None).unwrap();
+    let rn = rw.position();
+    let mut points = [0u8; 24];
+    let mut pw = Writer::new(&mut points);
+    DataPoint::write(&mut pw, ClusterId(0x0402), true, None, 1, &records[..rn]).unwrap();
+    let pn = pw.position();
+    let mut desc = [0u8; 40];
+    let mut dw = Writer::new(&mut desc);
+    ReportDescriptor::write(&mut dw, 0, Some(60), &points[..pn]).unwrap();
+    let dn = dw.position();
+    let d = ApplicationDescription {
+        total_reports: 1,
+        reports: 1,
+        descriptors: &desc[..dn],
+    };
+    let mut body = vec![command::APPLICATION_DESCRIPTION];
+    let n = d.encode_to_slice(&mut buf).unwrap();
+    body.extend(&buf[..n]);
+    sim.inject(&gpdf(2, SecurityLevel::None, None, &body, None));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::GreenPowerPaired { gpd, device_id: 0x30, .. } if *gpd == GPD))
+    }));
+    // A compact report: 21.50 °C reaches endpoint 1 as a Report
+    // Attributes of the Temperature Measurement cluster.
+    sim.take_events(c);
+    sim.inject(&gpdf(
+        3,
+        SecurityLevel::Mic,
+        Some(0x11),
+        &[command::COMPACT_ATTRIBUTE_REPORTING, 0x00, 0x66, 0x08],
+        Some((&OOB_KEY, true)),
+    ));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.events(c).iter().any(|e| {
+            matches!(
+                e,
+                StackEvent::ZclReport(f)
+                    if f.origin.endpoint == Endpoint(1)
+                        && f.origin.cluster == ClusterId(0x0402)
+                        && f.origin.src == ALIAS
+                        && f.payload.as_slice() == [0x00, 0x00, 0x29, 0x66, 0x08]
+            )
+        })
+    }));
+    assert!(sim.events(c).iter().any(|e| matches!(
+        e,
+        StackEvent::GreenPowerCommand {
+            command_id: 0xA8,
+            ..
+        }
+    )));
 }
