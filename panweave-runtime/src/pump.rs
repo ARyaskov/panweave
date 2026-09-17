@@ -2217,6 +2217,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     heat,
                     cool,
                 },
+                ZclEvent::WeeklyScheduleChanged { endpoint } => {
+                    StackEvent::WeeklyScheduleChanged { endpoint }
+                }
                 ZclEvent::Color {
                     endpoint,
                     mode,

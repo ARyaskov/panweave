@@ -300,8 +300,9 @@ pub enum ZclEvent {
         /// User identifier.
         user: u16,
     },
-    /// A Setpoint Raise/Lower adjusted the thermostat on `endpoint`
-    /// (§6.3.2.3.1): the new occupied setpoints in 0.01 °C.
+    /// A Setpoint Raise/Lower (§6.3.2.3.1) or a weekly schedule
+    /// transition (§6.3.2.3.2.8) adjusted the thermostat on `endpoint`:
+    /// the new occupied setpoints in 0.01 °C.
     Setpoints {
         /// Endpoint.
         endpoint: Endpoint,
@@ -309,6 +310,12 @@ pub enum ZclEvent {
         heat: Option<i16>,
         /// Cooling setpoint, when implemented.
         cool: Option<i16>,
+    },
+    /// The weekly schedule of the thermostat on `endpoint` was set or
+    /// cleared over the air (§6.3.2.3.2, §6.3.2.3.4).
+    WeeklyScheduleChanged {
+        /// Endpoint.
+        endpoint: Endpoint,
     },
     /// The Color Control engine on `endpoint` moved: `mode` is the
     /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
@@ -1025,6 +1032,20 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                         });
                                         let _ = self.default_response(&origin, ZclStatus::Success);
                                     }
+                                    hvac::thermostat::Outcome::Scheduled => {
+                                        self.push_event(ZclEvent::WeeklyScheduleChanged {
+                                            endpoint,
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                        self.run_thermostat_schedule(i);
+                                    }
+                                    hvac::thermostat::Outcome::Response(payload) => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            hvac::thermostat::CMD_GET_WEEKLY_SCHEDULE_RESPONSE,
+                                            &payload,
+                                        );
+                                    }
                                     hvac::thermostat::Outcome::Default(status) => {
                                         let _ = self.default_response(&origin, status);
                                     }
@@ -1259,6 +1280,30 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             None => {
                 let _ = self.default_response(origin, outcome.status);
             }
+        }
+    }
+
+    /// Runs the thermostat weekly schedule of the endpoint against its
+    /// Time server (§6.3.2.3.2.8); an applied transition reaches the
+    /// application as [`ZclEvent::Setpoints`].
+    fn run_thermostat_schedule(&mut self, ep_index: usize) {
+        let now = self.now;
+        let local_time = self.local_time(ep_index);
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let endpoint = ep.endpoint;
+        if let Some(c) = ep.cluster_mut(hvac::thermostat::ID, Role::Server)
+            && let Some((heat, cool)) = hvac::thermostat::tick(c, now, local_time)
+        {
+            if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
+                scenes::invalidate(sc);
+            }
+            self.push_event(ZclEvent::Setpoints {
+                endpoint,
+                heat,
+                cool,
+            });
         }
     }
 
@@ -2185,6 +2230,15 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 if let Some(frame) = frame {
                     self.send_door_lock_frame(i, frame);
                 }
+            }
+            let Some(ep) = self.endpoints.get(i) else {
+                break;
+            };
+            if ep
+                .cluster(hvac::thermostat::ID, Role::Server)
+                .is_some_and(|c| hvac::thermostat::schedule_due(c, now))
+            {
+                self.run_thermostat_schedule(i);
             }
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;

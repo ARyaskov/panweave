@@ -264,8 +264,8 @@ summary = "Thermostat and Fan Control clusters"
 level = "optional"
 status = "partially-implemented"
 module = "panweave-zcl::clusters::hvac"
-tests = ["setpoints_limits_dead_band_and_running_mode", "fan_modes_follow_the_sequence"]
-notes = "Thermostat information and settings attributes with the setpoint limit, dead-band and control-sequence rules enforced on writes, Setpoint Raise/Lower executed by the dispatcher (ZclEvent::Setpoints), the Table 6-17 running mode, the scene extension field set and heating-only / cooling-only / dual builders; Fan Control with FanMode validated against FanModeSequence; facade Thermostat device. The weekly schedule (Set / Get / Clear Weekly Schedule), relay status log, AC information set and the setpoint change tracking set are not implemented (TODO(PW-ZCL-THERMOSTAT-SCHEDULE))."
+tests = ["setpoints_limits_dead_band_and_running_mode", "weekly_schedule_set_get_clear", "weekly_schedule_runs_against_the_clock", "fan_modes_follow_the_sequence"]
+notes = "Thermostat information and settings attributes with the setpoint limit, dead-band and control-sequence rules enforced on writes, Setpoint Raise/Lower executed by the dispatcher (ZclEvent::Setpoints), the Table 6-17 running mode, the scene extension field set and heating-only / cooling-only / dual builders; the weekly schedule extension (StartOfWeek, NumberOfWeeklyTransitions, NumberOfDailyTransitions, TemperatureSetpointHold; Set / Get / Clear Weekly Schedule with INSUFFICIENT_SPACE, INVALID_VALUE, FAILURE and INVALID_FIELD refusals, Get Weekly Schedule Response) run against the endpoint Time server per ADR-0015; Fan Control with FanMode validated against FanModeSequence; facade Thermostat device. The relay status log, AC information set and the setpoint change tracking set are not implemented (TODO(PW-ZCL-THERMOSTAT-EXTRAS))."
 [[requirement]]
 id = "PW-ZCL-CLOS-001"
 section = "§7.3, §7.4"

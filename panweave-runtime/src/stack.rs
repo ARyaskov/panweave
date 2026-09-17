@@ -450,8 +450,9 @@ pub enum StackEvent {
         /// What to do.
         command: panweave_zcl::clusters::window_covering::Command,
     },
-    /// A Setpoint Raise/Lower adjusted a thermostat (ZCL8 §6.3.2.3.1):
-    /// the new occupied setpoints in 0.01 °C.
+    /// A Setpoint Raise/Lower (ZCL8 §6.3.2.3.1) or a weekly schedule
+    /// transition (§6.3.2.3.2.8) adjusted a thermostat: the new occupied
+    /// setpoints in 0.01 °C.
     Setpoints {
         /// Endpoint.
         endpoint: Endpoint,
@@ -459,6 +460,12 @@ pub enum StackEvent {
         heat: Option<i16>,
         /// Cooling setpoint, when implemented.
         cool: Option<i16>,
+    },
+    /// A thermostat's weekly schedule was set or cleared over the air
+    /// (ZCL8 §6.3.2.3.2, §6.3.2.3.4).
+    WeeklyScheduleChanged {
+        /// Endpoint.
+        endpoint: Endpoint,
     },
     /// The Color Control engine moved (ZCL8 §5.2): `mode` is the
     /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and

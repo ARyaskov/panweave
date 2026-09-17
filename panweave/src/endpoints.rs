@@ -146,7 +146,13 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
             None,
         )
         .ok(),
-        thermostat::ID => thermostat::server(thermostat::Capability::HeatingAndCooling).ok(),
+        thermostat::ID => {
+            // A dual thermostat with the weekly schedule extension:
+            // weeks start on Monday, four transitions a day.
+            let mut c = thermostat::server(thermostat::Capability::HeatingAndCooling).ok()?;
+            thermostat::enable_weekly_schedule(&mut c, 1, 28, 4).ok()?;
+            Some(c)
+        }
         fan_control::ID => fan_control::server(fan_control::sequence::LOW_MED_HIGH_AUTO).ok(),
         window_covering::ID => window_covering::server(
             window_covering::covering_type::ROLLERSHADE,
@@ -348,7 +354,8 @@ pub fn window_covering_device(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0202), &[], &[], false)
 }
 
-/// Thermostat (device 0x0301): Identify and Thermostat servers.
+/// Thermostat (device 0x0301): Identify and Thermostat servers, the
+/// latter with the weekly setpoint schedule.
 pub fn thermostat_device(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0301), &[], &[], false)
 }

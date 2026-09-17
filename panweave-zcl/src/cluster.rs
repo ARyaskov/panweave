@@ -86,6 +86,8 @@ pub enum ClusterState {
     IasAce(crate::clusters::ias_ace::Panel),
     /// Commissioning server state: the saved startup sets (§13.2).
     Commissioning(crate::clusters::commissioning::State),
+    /// Thermostat server state: the weekly setpoint schedule (§6.3).
+    Thermostat(crate::clusters::hvac::thermostat::Schedule),
 }
 
 /// A cluster instance.
@@ -207,6 +209,15 @@ impl<const A: usize> ClusterInstance<A> {
             }
             ClusterState::Commissioning(_) => {
                 ClusterState::Commissioning(crate::clusters::commissioning::State::default())
+            }
+            ClusterState::Thermostat(s) => {
+                // The transitions are wiped, the capacities kept.
+                ClusterState::Thermostat(crate::clusters::hvac::thermostat::Schedule {
+                    weekly: s.weekly,
+                    daily: s.daily,
+                    dirty: true,
+                    ..crate::clusters::hvac::thermostat::Schedule::default()
+                })
             }
             ClusterState::None => ClusterState::None,
         };

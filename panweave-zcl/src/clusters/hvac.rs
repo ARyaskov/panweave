@@ -1,14 +1,16 @@
 //! HVAC clusters (ZCL8 chapter 6): the Thermostat core — information
 //! and settings attributes, the setpoint limit and dead-band rules
 //! enforced on writes, Setpoint Raise/Lower, the running-mode
-//! interpretation of Table 6-17 and the scene extension — and Fan
-//! Control. The weekly schedule, relay status log and AC information
-//! sets are not implemented.
+//! interpretation of Table 6-17, the weekly setpoint schedule and the
+//! scene extension — and Fan Control. The relay status log and AC
+//! information sets are not implemented.
 
+use heapless::Vec;
+use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
 use crate::frame::ZclStatus;
 use crate::types::{DataType, Value};
 
@@ -87,6 +89,19 @@ pub mod thermostat {
     /// `ThermostatRunningMode` (enum8).
     pub const THERMOSTAT_RUNNING_MODE: AttributeDef =
         AttributeDef::new(0x001e, DataType::Enum8, Access::RO);
+    /// `StartOfWeek` (enum8, Table 6-21): present when the weekly
+    /// schedule is supported.
+    pub const START_OF_WEEK: AttributeDef = AttributeDef::new(0x0020, DataType::Enum8, Access::RO);
+    /// `NumberOfWeeklyTransitions` (uint8).
+    pub const NUMBER_OF_WEEKLY_TRANSITIONS: AttributeDef =
+        AttributeDef::new(0x0021, DataType::Uint(1), Access::RO);
+    /// `NumberOfDailyTransitions` (uint8).
+    pub const NUMBER_OF_DAILY_TRANSITIONS: AttributeDef =
+        AttributeDef::new(0x0022, DataType::Uint(1), Access::RO);
+    /// `TemperatureSetpointHold` (enum8, Table 6-22): while on, the
+    /// schedule leaves the setpoints alone.
+    pub const TEMPERATURE_SETPOINT_HOLD: AttributeDef =
+        AttributeDef::new(0x0023, DataType::Enum8, Access::RW);
 
     /// Unknown temperature (non-value).
     pub const UNKNOWN: i16 = i16::MIN;
@@ -107,6 +122,88 @@ pub mod thermostat {
 
     /// Setpoint Raise/Lower.
     pub const CMD_SETPOINT_RAISE_LOWER: CommandId = CommandId(0x00);
+    /// Set Weekly Schedule (§6.3.2.3.2).
+    pub const CMD_SET_WEEKLY_SCHEDULE: CommandId = CommandId(0x01);
+    /// Get Weekly Schedule (§6.3.2.3.3).
+    pub const CMD_GET_WEEKLY_SCHEDULE: CommandId = CommandId(0x02);
+    /// Clear Weekly Schedule (§6.3.2.3.4).
+    pub const CMD_CLEAR_WEEKLY_SCHEDULE: CommandId = CommandId(0x03);
+    /// Get Weekly Schedule Response (§6.3.2.4.1, server to client).
+    pub const CMD_GET_WEEKLY_SCHEDULE_RESPONSE: CommandId = CommandId(0x00);
+
+    /// Day of Week for Sequence bits (Table 6-37).
+    pub mod day_of_week {
+        /// Sunday.
+        pub const SUNDAY: u8 = 0x01;
+        /// Monday.
+        pub const MONDAY: u8 = 0x02;
+        /// Tuesday.
+        pub const TUESDAY: u8 = 0x04;
+        /// Wednesday.
+        pub const WEDNESDAY: u8 = 0x08;
+        /// Thursday.
+        pub const THURSDAY: u8 = 0x10;
+        /// Friday.
+        pub const FRIDAY: u8 = 0x20;
+        /// Saturday.
+        pub const SATURDAY: u8 = 0x40;
+        /// Away or vacation.
+        pub const AWAY: u8 = 0x80;
+    }
+
+    /// Mode for Sequence bits (Table 6-38).
+    pub mod schedule_mode {
+        /// Heat setpoints present.
+        pub const HEAT: u8 = 0x01;
+        /// Cool setpoints present.
+        pub const COOL: u8 = 0x02;
+    }
+
+    /// Most transitions a single day may hold: a Get Weekly Schedule
+    /// Response for one day then always fits one frame (§6.3.2.3.2.2
+    /// sends larger schedules in several commands).
+    pub const MAX_DAILY_TRANSITIONS: usize = 10;
+    /// Capacity of the schedule store across the seven days and the
+    /// away day.
+    pub const MAX_WEEKLY_TRANSITIONS: usize = 28;
+    /// Minutes in a day (transition times are minutes since midnight).
+    const MINUTES_PER_DAY: u16 = 24 * 60;
+    /// Index of the away day in [`Transition::day`].
+    pub const AWAY_DAY: u8 = 7;
+
+    /// One scheduled setpoint change.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+    pub struct Transition {
+        /// Day: 0 Sunday … 6 Saturday, [`AWAY_DAY`] for the away set.
+        pub day: u8,
+        /// Minutes since midnight.
+        pub time: u16,
+        /// Heat setpoint (0.01 °C) when the sequence carried one.
+        pub heat: Option<i16>,
+        /// Cool setpoint (0.01 °C) when the sequence carried one.
+        pub cool: Option<i16>,
+    }
+
+    /// The weekly setpoint schedule of a server (§6.3.2.2.3).
+    #[derive(Clone, PartialEq, Eq, Debug, Default)]
+    pub struct Schedule {
+        /// Transitions ordered by day then time.
+        pub transitions: Vec<Transition, MAX_WEEKLY_TRANSITIONS>,
+        /// `NumberOfWeeklyTransitions`.
+        pub weekly: u8,
+        /// `NumberOfDailyTransitions`.
+        pub daily: u8,
+        /// The transition last applied to the setpoints, so it is applied
+        /// once.
+        pub applied: Option<(u8, u16)>,
+        /// The schedule changed and has not been run against the clock.
+        pub dirty: bool,
+    }
+
+    /// Longest Get Weekly Schedule Response payload: the header and
+    /// [`MAX_DAILY_TRANSITIONS`] heat-and-cool transitions.
+    pub const RESPONSE_MAX: usize = 3 + MAX_DAILY_TRANSITIONS * 6;
 
     /// `ControlSequenceOfOperation` values (Table 6-15).
     pub mod control_sequence {
@@ -162,6 +259,19 @@ pub mod thermostat {
         revision: 3,
         received: &[CMD_SETPOINT_RAISE_LOWER],
         generated: &[],
+    };
+
+    /// Cluster definition of a server with the weekly schedule.
+    pub const SCHEDULE_DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 3,
+        received: &[
+            CMD_SETPOINT_RAISE_LOWER,
+            CMD_SET_WEEKLY_SCHEDULE,
+            CMD_GET_WEEKLY_SCHEDULE,
+            CMD_CLEAR_WEEKLY_SCHEDULE,
+        ],
+        generated: &[CMD_GET_WEEKLY_SCHEDULE_RESPONSE],
     };
 
     /// Default reporting of `LocalTemperature` (0.5 °C) and the demands.
@@ -327,6 +437,13 @@ pub mod thermostat {
                     ZclStatus::InvalidValue
                 }
             }
+            i if i == TEMPERATURE_SETPOINT_HOLD.id => {
+                if val <= 0x01 {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
             _ => ZclStatus::Success,
         }
     }
@@ -399,6 +516,320 @@ pub mod thermostat {
         ClusterInstance::new(DEF, Role::Client)
     }
 
+    /// Adds the weekly schedule extension (§6.3.2.2.3) to a server:
+    /// `StartOfWeek` (Table 6-21), the transition capacities (`daily` at
+    /// most [`MAX_DAILY_TRANSITIONS`], `weekly` at most
+    /// [`MAX_WEEKLY_TRANSITIONS`]), `TemperatureSetpointHold` and the
+    /// Set / Get / Clear Weekly Schedule commands.
+    pub fn enable_weekly_schedule<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        start_of_week: u8,
+        weekly: u8,
+        daily: u8,
+    ) -> Result<(), ZclStatus> {
+        if start_of_week > 6
+            || usize::from(daily) > MAX_DAILY_TRANSITIONS
+            || usize::from(weekly) > MAX_WEEKLY_TRANSITIONS
+            || daily > weekly
+        {
+            return Err(ZclStatus::InvalidValue);
+        }
+        c.add_attribute(START_OF_WEEK, &Value::Enum8(start_of_week))?;
+        c.add_attribute(
+            NUMBER_OF_WEEKLY_TRANSITIONS,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(weekly),
+            },
+        )?;
+        c.add_attribute(
+            NUMBER_OF_DAILY_TRANSITIONS,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(daily),
+            },
+        )?;
+        c.add_attribute(TEMPERATURE_SETPOINT_HOLD, &Value::Enum8(0))?;
+        c.def = SCHEDULE_DEF;
+        c.state = ClusterState::Thermostat(Schedule {
+            weekly,
+            daily,
+            dirty: true,
+            ..Schedule::default()
+        });
+        Ok(())
+    }
+
+    /// The weekly schedule of a server (`None` without the extension).
+    pub fn schedule<const A: usize>(c: &ClusterInstance<A>) -> Option<&Schedule> {
+        match &c.state {
+            ClusterState::Thermostat(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn schedule_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Schedule> {
+        match &mut c.state {
+            ClusterState::Thermostat(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Whether the schedule needs running: it changed, or its next
+    /// transition is due.
+    pub fn schedule_due<const A: usize>(c: &ClusterInstance<A>, now: Instant) -> bool {
+        schedule(c).is_some_and(|s| s.dirty) || c.tick.is_some_and(|t| now.has_reached(t))
+    }
+
+    /// The transition in force at `minutes` on `day`: the latest one
+    /// today at or before `minutes`, else the last one of the nearest
+    /// earlier day that has any (the away set is never selected).
+    pub fn transition_in_force(s: &Schedule, day: u8, minutes: u16) -> Option<Transition> {
+        if day > 6 {
+            return None;
+        }
+        (0..=7u8).find_map(|back| {
+            let d = (day + 7 - back) % 7;
+            s.transitions
+                .iter()
+                .filter(|t| t.day == d && (back != 0 || t.time <= minutes))
+                .max_by_key(|t| t.time)
+                .copied()
+        })
+    }
+
+    /// Seconds from `minutes` on `day` to the next transition (today
+    /// after `minutes`, else the first of the next day with any).
+    fn seconds_to_next(s: &Schedule, day: u8, seconds_of_day: u32) -> Option<u32> {
+        let minutes = seconds_of_day / 60;
+        (0..=7u32).find_map(|ahead| {
+            let d = u8::try_from((u32::from(day) + ahead) % 7).unwrap_or(0);
+            s.transitions
+                .iter()
+                .filter(|t| t.day == d && (ahead != 0 || u32::from(t.time) > minutes))
+                .map(|t| u32::from(t.time) * 60 + ahead * 86_400)
+                .min()
+                .map(|at| at.saturating_sub(seconds_of_day).max(1))
+        })
+    }
+
+    /// Runs the schedule against the local time (§6.3.2.3.2.8):
+    /// `local_time` is the ZCL local time (seconds since 2000-01-01, a
+    /// Saturday) or `u32::MAX` when unknown. Applies the transition in
+    /// force once (not while `TemperatureSetpointHold` is on), arms
+    /// `tick` for the next one and returns the setpoints it applied.
+    pub fn tick<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        now: Instant,
+        local_time: u32,
+    ) -> Option<(Option<i16>, Option<i16>)> {
+        let hold = c.u8(TEMPERATURE_SETPOINT_HOLD.id) == Some(1);
+        let has_heat = c
+            .attributes
+            .get(OCCUPIED_HEATING_SETPOINT.id, None)
+            .is_some();
+        let has_cool = c
+            .attributes
+            .get(OCCUPIED_COOLING_SETPOINT.id, None)
+            .is_some();
+        schedule(c)?;
+        if local_time == u32::MAX {
+            c.tick = None;
+            return None;
+        }
+        let day = u8::try_from((local_time / 86_400 + 6) % 7).unwrap_or(0);
+        let seconds_of_day = local_time % 86_400;
+        let minutes = u16::try_from(seconds_of_day / 60).unwrap_or(0);
+        let s = schedule_mut(c)?;
+        s.dirty = false;
+        let next = seconds_to_next(s, day, seconds_of_day);
+        let t = transition_in_force(s, day, minutes);
+        let applied = s.applied;
+        c.tick = next.map(|secs| now + Duration::from_secs(u64::from(secs)));
+        let t = t?;
+        if hold || applied == Some((t.day, t.time)) {
+            return None;
+        }
+        schedule_mut(c)?.applied = Some((t.day, t.time));
+        let heat = t.heat.filter(|_| has_heat);
+        let cool = t.cool.filter(|_| has_cool);
+        if let Some(h) = heat {
+            c.set_i16(OCCUPIED_HEATING_SETPOINT.id, h);
+        }
+        if let Some(k) = cool {
+            c.set_i16(OCCUPIED_COOLING_SETPOINT.id, k);
+        }
+        if heat.is_none() && cool.is_none() {
+            return None;
+        }
+        let running = running_mode(c);
+        c.set(THERMOSTAT_RUNNING_MODE.id, &Value::Enum8(running));
+        Some((heat, cool))
+    }
+
+    /// Abs limits of the setpoints (Table 6-11 defaults when absent).
+    fn abs_limits<const A: usize>(c: &ClusterInstance<A>) -> (i16, i16, i16, i16) {
+        (
+            c.i16(ABS_MIN_HEAT_SETPOINT_LIMIT.id)
+                .unwrap_or(DEFAULT_ABS_MIN_HEAT),
+            c.i16(ABS_MAX_HEAT_SETPOINT_LIMIT.id)
+                .unwrap_or(DEFAULT_ABS_MAX_HEAT),
+            c.i16(ABS_MIN_COOL_SETPOINT_LIMIT.id)
+                .unwrap_or(DEFAULT_ABS_MIN_COOL),
+            c.i16(ABS_MAX_COOL_SETPOINT_LIMIT.id)
+                .unwrap_or(DEFAULT_ABS_MAX_COOL),
+        )
+    }
+
+    /// The Mode for Sequence bits a server implements.
+    fn supported_modes<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+        let mut m = 0;
+        if c.attributes
+            .get(OCCUPIED_HEATING_SETPOINT.id, None)
+            .is_some()
+        {
+            m |= schedule_mode::HEAT;
+        }
+        if c.attributes
+            .get(OCCUPIED_COOLING_SETPOINT.id, None)
+            .is_some()
+        {
+            m |= schedule_mode::COOL;
+        }
+        m
+    }
+
+    /// Set Weekly Schedule (§6.3.2.3.2.8): the transitions replace those
+    /// of every day named; the whole command is refused before anything
+    /// changes.
+    fn set_weekly_schedule<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        payload: &[u8],
+    ) -> ZclStatus {
+        let supported = supported_modes(c);
+        let (min_heat, max_heat, min_cool, max_cool) = abs_limits(c);
+        let Some(s) = schedule(c) else {
+            return ZclStatus::UnsupportedClusterCommand;
+        };
+        let [n, days, mode, rest @ ..] = payload else {
+            return ZclStatus::MalformedCommand;
+        };
+        let (n, days, mode) = (usize::from(*n), *days, *mode);
+        if mode & !(schedule_mode::HEAT | schedule_mode::COOL) != 0 || mode == 0 || days == 0 {
+            return ZclStatus::InvalidField;
+        }
+        if mode & !supported != 0 {
+            return ZclStatus::InvalidField;
+        }
+        let heat = mode & schedule_mode::HEAT != 0;
+        let cool = mode & schedule_mode::COOL != 0;
+        let size = 2 + 2 * usize::from(heat) + 2 * usize::from(cool);
+        if rest.len() != n * size {
+            return ZclStatus::MalformedCommand;
+        }
+        if n > usize::from(s.daily) {
+            return ZclStatus::InsufficientSpace;
+        }
+        let mut parsed: Vec<Transition, MAX_DAILY_TRANSITIONS> = Vec::new();
+        for chunk in rest.chunks_exact(size) {
+            let time = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if time >= MINUTES_PER_DAY {
+                return ZclStatus::InvalidValue;
+            }
+            let mut at = 2;
+            let mut take = || {
+                let v = i16::from_le_bytes([chunk[at], chunk[at + 1]]);
+                at += 2;
+                v
+            };
+            let h = heat.then(&mut take);
+            let k = cool.then(&mut take);
+            if h.is_some_and(|h| h < min_heat || h > max_heat)
+                || k.is_some_and(|k| k < min_cool || k > max_cool)
+            {
+                return ZclStatus::InvalidValue;
+            }
+            if parsed.iter().any(|t| t.time == time) {
+                return ZclStatus::Failure;
+            }
+            let _ = parsed.push(Transition {
+                day: 0,
+                time,
+                heat: h,
+                cool: k,
+            });
+        }
+        let kept = s
+            .transitions
+            .iter()
+            .filter(|t| days & (1 << t.day) == 0)
+            .count();
+        let day_count = usize::try_from(days.count_ones()).unwrap_or(8);
+        if kept + n * day_count > usize::from(s.weekly) {
+            return ZclStatus::InsufficientSpace;
+        }
+        let Some(s) = schedule_mut(c) else {
+            return ZclStatus::UnsupportedClusterCommand;
+        };
+        s.transitions.retain(|t| days & (1 << t.day) == 0);
+        for day in 0..8u8 {
+            if days & (1 << day) == 0 {
+                continue;
+            }
+            for t in &parsed {
+                let _ = s.transitions.push(Transition { day, ..*t });
+            }
+        }
+        s.transitions.sort_unstable_by_key(|t| (t.day, t.time));
+        s.applied = None;
+        s.dirty = true;
+        ZclStatus::Success
+    }
+
+    /// Get Weekly Schedule (§6.3.2.3.3): one day at a time (several
+    /// days cannot share one response, so INVALID_FIELD as allowed); the
+    /// modes returned are those asked for that the server implements,
+    /// a setpoint a transition lacks reads as [`UNKNOWN`].
+    fn get_weekly_schedule<const A: usize>(
+        c: &ClusterInstance<A>,
+        payload: &[u8],
+    ) -> Result<Vec<u8, RESPONSE_MAX>, ZclStatus> {
+        let s = schedule(c).ok_or(ZclStatus::UnsupportedClusterCommand)?;
+        let [days, mode] = payload else {
+            return Err(ZclStatus::MalformedCommand);
+        };
+        if days.count_ones() != 1 || *mode & !(schedule_mode::HEAT | schedule_mode::COOL) != 0 {
+            return Err(ZclStatus::InvalidField);
+        }
+        let mode = *mode & supported_modes(c);
+        if mode == 0 {
+            return Err(ZclStatus::InvalidField);
+        }
+        let day = u8::try_from(days.trailing_zeros()).unwrap_or(0);
+        let heat = mode & schedule_mode::HEAT != 0;
+        let cool = mode & schedule_mode::COOL != 0;
+        let mut out: Vec<u8, RESPONSE_MAX> = Vec::new();
+        let _ = out.extend_from_slice(&[0, *days, mode]);
+        let mut n = 0u8;
+        for t in s.transitions.iter().filter(|t| t.day == day) {
+            if !((heat && t.heat.is_some()) || (cool && t.cool.is_some())) {
+                continue;
+            }
+            let _ = out.extend_from_slice(&t.time.to_le_bytes());
+            if heat {
+                let _ = out.extend_from_slice(&t.heat.unwrap_or(UNKNOWN).to_le_bytes());
+            }
+            if cool {
+                let _ = out.extend_from_slice(&t.cool.unwrap_or(UNKNOWN).to_le_bytes());
+            }
+            n = n.saturating_add(1);
+        }
+        if let Some(b) = out.first_mut() {
+            *b = n;
+        }
+        Ok(out)
+    }
+
     /// Sets `LocalTemperature` (0.01 °C, `None` = unknown) and updates
     /// `ThermostatRunningMode` per Table 6-17; returns whether the
     /// temperature changed.
@@ -434,8 +865,7 @@ pub mod thermostat {
     }
 
     /// Result of a received command.
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+    #[derive(Clone, PartialEq, Eq, Debug)]
     pub enum Outcome {
         /// The setpoints were adjusted (heat, cool) in 0.01 °C.
         Adjusted {
@@ -444,20 +874,48 @@ pub mod thermostat {
             /// New cooling setpoint, when implemented.
             cool: Option<i16>,
         },
+        /// The weekly schedule was set or cleared (default response
+        /// SUCCESS); the schedule is due to run.
+        Scheduled,
+        /// A Get Weekly Schedule Response payload.
+        Response(Vec<u8, RESPONSE_MAX>),
         /// Refused with this status.
         Default(ZclStatus),
     }
 
-    /// Handles Setpoint Raise/Lower (§6.3.2.3.1): each addressed
+    /// Handles Setpoint Raise/Lower (§6.3.2.3.1) — each addressed
     /// setpoint moves by `amount` tenths of a degree, clamped to its
-    /// limits and the dead band.
+    /// limits and the dead band — and the weekly schedule commands
+    /// (§6.3.2.3.2–4) when the extension is enabled.
     pub fn handle<const A: usize>(
         c: &mut ClusterInstance<A>,
         cmd: CommandId,
         payload: &[u8],
     ) -> Outcome {
-        if cmd != CMD_SETPOINT_RAISE_LOWER {
-            return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
+        match cmd {
+            CMD_SETPOINT_RAISE_LOWER => {}
+            CMD_SET_WEEKLY_SCHEDULE => {
+                return match set_weekly_schedule(c, payload) {
+                    ZclStatus::Success => Outcome::Scheduled,
+                    status => Outcome::Default(status),
+                };
+            }
+            CMD_GET_WEEKLY_SCHEDULE => {
+                return match get_weekly_schedule(c, payload) {
+                    Ok(p) => Outcome::Response(p),
+                    Err(status) => Outcome::Default(status),
+                };
+            }
+            CMD_CLEAR_WEEKLY_SCHEDULE => {
+                let Some(s) = schedule_mut(c) else {
+                    return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
+                };
+                s.transitions.clear();
+                s.applied = None;
+                s.dirty = true;
+                return Outcome::Scheduled;
+            }
+            _ => return Outcome::Default(ZclStatus::UnsupportedClusterCommand),
         }
         let [mode, amount] = payload else {
             return Outcome::Default(ZclStatus::MalformedCommand);
@@ -860,5 +1318,272 @@ mod tests {
         assert!(!mode_in_sequence(sequence::ON_AUTO, fan_mode::LOW));
         assert_eq!(fan_mode(&c), fan_mode::AUTO);
         assert!(server::<8>(7).is_err());
+    }
+
+    fn scheduled() -> ClusterInstance<36> {
+        let mut c: ClusterInstance<36> = server(Capability::HeatingAndCooling).unwrap();
+        enable_weekly_schedule(&mut c, 1, 12, 4).unwrap();
+        c
+    }
+
+    /// Set Weekly Schedule payload: header then (time, heat, cool) rows.
+    fn set_payload(days: u8, mode: u8, rows: &[(u16, Option<i16>, Option<i16>)]) -> Vec<u8, 64> {
+        let mut p: Vec<u8, 64> = Vec::new();
+        let _ = p.extend_from_slice(&[rows.len() as u8, days, mode]);
+        for (t, h, k) in rows {
+            let _ = p.extend_from_slice(&t.to_le_bytes());
+            if let Some(h) = h {
+                let _ = p.extend_from_slice(&h.to_le_bytes());
+            }
+            if let Some(k) = k {
+                let _ = p.extend_from_slice(&k.to_le_bytes());
+            }
+        }
+        p
+    }
+
+    #[test]
+    fn weekly_schedule_set_get_clear() {
+        let mut c = scheduled();
+        assert_eq!(c.u8(START_OF_WEEK.id), Some(1));
+        assert_eq!(c.u8(NUMBER_OF_WEEKLY_TRANSITIONS.id), Some(12));
+        assert_eq!(c.u8(NUMBER_OF_DAILY_TRANSITIONS.id), Some(4));
+        assert!(c.def.received.contains(&CMD_SET_WEEKLY_SCHEDULE));
+        let weekdays = day_of_week::MONDAY
+            | day_of_week::TUESDAY
+            | day_of_week::WEDNESDAY
+            | day_of_week::THURSDAY
+            | day_of_week::FRIDAY;
+        let both = schedule_mode::HEAT | schedule_mode::COOL;
+        // Two heat-and-cool transitions for every weekday.
+        let p = set_payload(
+            weekdays,
+            both,
+            &[
+                (360, Some(2100), Some(2600)),
+                (1320, Some(1800), Some(2800)),
+            ],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &p),
+            Outcome::Scheduled
+        );
+        assert_eq!(schedule(&c).unwrap().transitions.len(), 10);
+        // Get Monday, heat only: the heat setpoints in time order.
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_GET_WEEKLY_SCHEDULE,
+                &[day_of_week::MONDAY, schedule_mode::HEAT]
+            ),
+            Outcome::Response(
+                Vec::from_slice(&[
+                    2,
+                    day_of_week::MONDAY,
+                    schedule_mode::HEAT,
+                    0x68,
+                    0x01,
+                    0x34,
+                    0x08,
+                    0x28,
+                    0x05,
+                    0x08,
+                    0x07
+                ])
+                .unwrap()
+            )
+        );
+        // Several days cannot share one response.
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_GET_WEEKLY_SCHEDULE,
+                &[day_of_week::MONDAY | day_of_week::TUESDAY, both]
+            ),
+            Outcome::Default(ZclStatus::InvalidField)
+        );
+        // Refusals leave the schedule untouched: too many transitions
+        // for a day, a setpoint beyond the Abs limits, a duplicate time,
+        // no mode, a malformed length, and the weekly capacity.
+        let five = set_payload(
+            day_of_week::SATURDAY,
+            schedule_mode::HEAT,
+            &[
+                (0, Some(2000), None),
+                (60, Some(2000), None),
+                (120, Some(2000), None),
+                (180, Some(2000), None),
+                (240, Some(2000), None),
+            ],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &five),
+            Outcome::Default(ZclStatus::InsufficientSpace)
+        );
+        let cold = set_payload(
+            day_of_week::SATURDAY,
+            schedule_mode::HEAT,
+            &[(0, Some(500), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &cold),
+            Outcome::Default(ZclStatus::InvalidValue)
+        );
+        let dup = set_payload(
+            day_of_week::SATURDAY,
+            schedule_mode::HEAT,
+            &[(0, Some(2000), None), (0, Some(2100), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &dup),
+            Outcome::Default(ZclStatus::Failure)
+        );
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_SET_WEEKLY_SCHEDULE,
+                &[1, day_of_week::SATURDAY, 0, 0, 0]
+            ),
+            Outcome::Default(ZclStatus::InvalidField)
+        );
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_SET_WEEKLY_SCHEDULE,
+                &[1, day_of_week::SATURDAY, 1, 0, 0]
+            ),
+            Outcome::Default(ZclStatus::MalformedCommand)
+        );
+        let weekend = set_payload(
+            day_of_week::SATURDAY | day_of_week::SUNDAY,
+            schedule_mode::HEAT,
+            &[(480, Some(2000), None), (1380, Some(1700), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &weekend),
+            Outcome::Default(ZclStatus::InsufficientSpace)
+        );
+        assert_eq!(schedule(&c).unwrap().transitions.len(), 10);
+        // Replacing Monday's set with one heat-only transition.
+        let monday = set_payload(
+            day_of_week::MONDAY,
+            schedule_mode::HEAT,
+            &[(420, Some(1950), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &monday),
+            Outcome::Scheduled
+        );
+        assert_eq!(schedule(&c).unwrap().transitions.len(), 9);
+        // Asked for both modes, the missing cool setpoint reads unknown.
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_GET_WEEKLY_SCHEDULE,
+                &[day_of_week::MONDAY, both]
+            ),
+            Outcome::Response(
+                Vec::from_slice(&[
+                    1,
+                    day_of_week::MONDAY,
+                    both,
+                    0xa4,
+                    0x01,
+                    0x9e,
+                    0x07,
+                    0x00,
+                    0x80
+                ])
+                .unwrap()
+            )
+        );
+        // Clear, then an empty Tuesday.
+        assert_eq!(
+            handle(&mut c, CMD_CLEAR_WEEKLY_SCHEDULE, &[]),
+            Outcome::Scheduled
+        );
+        assert!(schedule(&c).unwrap().transitions.is_empty());
+        assert_eq!(
+            handle(
+                &mut c,
+                CMD_GET_WEEKLY_SCHEDULE,
+                &[day_of_week::TUESDAY, schedule_mode::COOL]
+            ),
+            Outcome::Response(
+                Vec::from_slice(&[0, day_of_week::TUESDAY, schedule_mode::COOL]).unwrap()
+            )
+        );
+        // A heating-only server refuses cool sequences; a server without
+        // the extension does not know the commands.
+        let mut h: ClusterInstance<36> = server(Capability::Heating).unwrap();
+        enable_weekly_schedule(&mut h, 0, 7, 1).unwrap();
+        let cool = set_payload(
+            day_of_week::MONDAY,
+            schedule_mode::COOL,
+            &[(0, None, Some(2600))],
+        );
+        assert_eq!(
+            handle(&mut h, CMD_SET_WEEKLY_SCHEDULE, &cool),
+            Outcome::Default(ZclStatus::InvalidField)
+        );
+        let mut plain: ClusterInstance<36> = server(Capability::Heating).unwrap();
+        assert_eq!(
+            handle(&mut plain, CMD_CLEAR_WEEKLY_SCHEDULE, &[]),
+            Outcome::Default(ZclStatus::UnsupportedClusterCommand)
+        );
+        assert!(enable_weekly_schedule(&mut plain, 0, 4, 11).is_err());
+    }
+
+    #[test]
+    fn weekly_schedule_runs_against_the_clock() {
+        let mut c = scheduled();
+        let monday = set_payload(
+            day_of_week::MONDAY,
+            schedule_mode::HEAT,
+            &[(360, Some(2100), None), (1320, Some(1800), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &monday),
+            Outcome::Scheduled
+        );
+        let now = Instant::from_millis(1_000);
+        assert!(schedule_due(&c, now));
+        // 2000-01-03 is a Monday: 07:00 is after the 06:00 transition.
+        let monday_0700 = 2 * 86_400 + 7 * 3_600;
+        assert_eq!(tick(&mut c, now, monday_0700), Some((Some(2100), None)));
+        assert_eq!(c.i16(OCCUPIED_HEATING_SETPOINT.id), Some(2100));
+        assert_eq!(c.tick, Some(now + Duration::from_secs(15 * 3_600)));
+        assert!(!schedule_due(&c, now));
+        // Applied once.
+        assert_eq!(tick(&mut c, now, monday_0700), None);
+        let monday_2300 = monday_0700 + 16 * 3_600;
+        assert_eq!(tick(&mut c, now, monday_2300), Some((Some(1800), None)));
+        // Tuesday inherits Monday's last transition (already applied),
+        // and the next one is next Monday 06:00.
+        let tuesday_0300 = 3 * 86_400 + 3 * 3_600;
+        assert_eq!(tick(&mut c, now, tuesday_0300), None);
+        assert_eq!(
+            c.tick,
+            Some(now + Duration::from_secs(6 * 86_400 + 3 * 3_600))
+        );
+        // A hold keeps the schedule off the setpoints; no clock, no tick.
+        c.set(TEMPERATURE_SETPOINT_HOLD.id, &Value::Enum8(1));
+        c.set_i16(OCCUPIED_HEATING_SETPOINT.id, 2000);
+        assert_eq!(
+            handle(&mut c, CMD_CLEAR_WEEKLY_SCHEDULE, &[]),
+            Outcome::Scheduled
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &monday),
+            Outcome::Scheduled
+        );
+        assert_eq!(tick(&mut c, now, monday_0700), None);
+        assert_eq!(c.i16(OCCUPIED_HEATING_SETPOINT.id), Some(2000));
+        assert_eq!(tick(&mut c, now, u32::MAX), None);
+        assert_eq!(c.tick, None);
+        // A factory reset wipes the transitions and keeps the capacity.
+        c.reset_to_defaults(now);
+        assert!(schedule(&c).unwrap().transitions.is_empty());
+        assert_eq!(schedule(&c).unwrap().weekly, 12);
     }
 }

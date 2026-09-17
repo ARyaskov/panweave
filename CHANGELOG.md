@@ -170,6 +170,14 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Thermostat weekly setpoint schedule (ZCL8 §6.3.2.2.3, §6.3.2.3.2–4):
+  `thermostat::enable_weekly_schedule` adds `StartOfWeek`, the
+  transition capacities and `TemperatureSetpointHold`; Set / Get /
+  Clear Weekly Schedule are executed by the dispatcher
+  (`ZclEvent::WeeklyScheduleChanged`, Get Weekly Schedule Response) and
+  the schedule runs against the endpoint's Time server, applying
+  transitions as `ZclEvent::Setpoints` (ADR-0015); the facade
+  `thermostat_device` carries it.
 * `panweave-zcl::clusters::window_covering`: the Window Covering
   cluster — information / settings attributes, per-axis open- or
   closed-loop control, the seven motion commands validated against the
