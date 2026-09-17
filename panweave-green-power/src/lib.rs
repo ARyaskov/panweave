@@ -25,4 +25,6 @@ pub mod gpdf;
 pub mod proxy;
 pub mod proxy_table;
 pub mod security;
+pub mod sink;
 pub mod sink_table;
+pub mod translation;

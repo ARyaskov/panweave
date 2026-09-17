@@ -176,6 +176,17 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave_green_power::sink::Sink` (GP 1.1.2 §A.3.5.2.4, §A.3.9): the
+  sans-I/O Basic Combo sink — commissioning mode (local or GP Sink
+  Commissioning Mode, proxies involved on request), unidirectional and
+  bidirectional commissioning from direct GPDFs and GP Commissioning
+  Notifications with the gpsSecurityLevel policy, TC-LK protected key
+  exchange, Commissioning Reply delivery from its own gpTxQueue or by GP
+  Response to a proxy, Success verification, GP Pairing generation,
+  decommissioning, operation with duplicate / freshness filtering and
+  wrong-mode corrections, Channel Request answers, GP Sink Table
+  Response; `translation::translate` maps the Table 54 / 55 GPD commands
+  to ZCL; ADR-0016.
 * Green Power sink-side codecs (GP 1.1.2 §A.3.3, §A.4.2.1): the Sink
   Table entry format and `SinkTable` (`sink_table`), the GPD
   Commissioning / Commissioning Reply / Channel Request / Channel

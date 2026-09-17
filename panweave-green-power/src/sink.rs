@@ -1,0 +1,1498 @@
+//! The GP Basic Combo sink (GP Basic 1.1.2 §A.3.5.2.4, §A.3.9): a
+//! sans-I/O machine that consumes GPDFs received directly, the Green
+//! Power cluster commands tunnelled by proxies, and the application's
+//! commissioning-mode requests, and produces the Green Power cluster
+//! commands a sink generates (GP Pairing, GP Proxy Commissioning Mode, GP
+//! Response, GP Sink Table Response), the GPDFs it transmits itself as
+//! SelectedSender (Commissioning Reply, Channel Configuration) and the
+//! events for the application (pairings, decommissioning, accepted GPD
+//! commands). Time, keys and the radio belong to the caller.
+
+use core::marker::PhantomData;
+
+use heapless::{Deque, Vec};
+use panweave_codec::{Decode, Encode, Writer};
+use panweave_mac::frame::MacAddress;
+use panweave_security::cipher::BlockCipher;
+use panweave_types::time::{Duration, Instant};
+use panweave_types::{CommandId, ExtendedAddress, Key128, PanId, ShortAddress};
+
+use crate::cluster::{
+    self, CommissioningNotification, CommunicationMode, GppGpdLink, Notification, Pairing,
+    ProxyCommissioningMode, Response, SinkAddress, SinkCommissioningMode, SinkSecurityLevel,
+    SinkTableRequest, SinkTableResponse, TableStatus, exit_mode,
+};
+use crate::command;
+use crate::commissioning::{
+    ChannelConfiguration, ChannelRequest, Commissioning, CommissioningReply, KeyField,
+};
+use crate::gpdf::{
+    ExtendedFrameControl, FrameType, GpdId, Gpdf, GpdfBuilder, NwkFrameControl, SRC_ID_UNSPECIFIED,
+    SecurityLevel,
+};
+use crate::proxy::{
+    DEFAULT_COMMISSIONING_WINDOW, DUPLICATE_ENTRIES, DUPLICATE_TIMEOUT, Destination, MAX_PAYLOAD,
+    QUEUE_CAPACITY, SecurityStatus,
+};
+use crate::proxy_table::{ALIAS_DERIVED, SecurityOptions, derived_alias};
+use crate::security::{self, Direction, KeyType};
+use crate::sink_table::{SinkEntry, SinkTable};
+
+/// gpTxOffset (§A.1.5.2.1.2): the GPDF answering a frame with RxAfterTx
+/// is transmitted this long after the triggering frame.
+pub const GP_TX_OFFSET: Duration = Duration::from_millis(20);
+/// Largest GPDF (NWK header and payload) the sink transmits.
+pub const MAX_GPDF: usize = 80;
+/// Largest GPD command payload delivered to the application.
+pub const MAX_COMMAND_PAYLOAD: usize = 64;
+/// GPDs that may be in the middle of bidirectional commissioning at once.
+pub const CANDIDATES: usize = 2;
+/// DeviceID recorded for a GPD commissioned from a Data GPDF with
+/// Auto-Commissioning (no Commissioning command, §A.3.9.1 step 13.g):
+/// the generic 0xFE.
+pub const DEVICE_ID_GENERIC: u8 = 0xFE;
+/// Security frame counters above which a reset is accepted after a key
+/// delivery (§A.3.9.1 step 18b).
+pub const COUNTER_RESET_THRESHOLD: u32 = 0x8000_0000;
+
+/// The sink's own addresses, the keys it may use and its attributes
+/// (Table 24, Table 30).
+#[derive(Clone, Debug)]
+pub struct SinkConfig {
+    /// NWK address of this sink.
+    pub short: ShortAddress,
+    /// IEEE address of this sink.
+    pub ieee: ExtendedAddress,
+    /// PAN identifier of the network (delivered on request).
+    pub pan_id: PanId,
+    /// Operational channel (11–26).
+    pub channel: u8,
+    /// `gpSharedSecurityKeyType`.
+    pub shared_key_type: KeyType,
+    /// `gpSharedSecurityKey` (the group key for GroupKey /
+    /// DerivedIndividual).
+    pub shared_key: Option<Key128>,
+    /// The current NWK key (for NwkKey / NwkDerivedGroupKey).
+    pub nwk_key: Option<Key128>,
+    /// `gpLinkKey`: protects GPD keys exchanged over the air.
+    pub link_key: Key128,
+    /// `gpsSecurityLevel`.
+    pub security_level: SinkSecurityLevel,
+    /// `gpsCommunicationMode`.
+    pub communication_mode: CommunicationMode,
+    /// The group paired in `CommissionedGroupcast` mode (derived
+    /// groupcast is used when absent).
+    pub commissioned_group: Option<u16>,
+    /// `gpsCommissioningExitMode`.
+    pub exit_mode: u8,
+    /// `gpsCommissioningWindow`.
+    pub commissioning_window: Duration,
+    /// Proxies send their GP Commissioning Notifications in unicast to
+    /// this sink (the Unicast communication sub-field of GP Proxy
+    /// Commissioning Mode).
+    pub unicast_notifications: bool,
+}
+
+impl SinkConfig {
+    /// The Table 24 defaults: derived groupcast, exit on the first
+    /// pairing, 180 s window, gpsSecurityLevel 0x06, the well-known
+    /// gpLinkKey.
+    pub const fn new(
+        short: ShortAddress,
+        ieee: ExtendedAddress,
+        pan_id: PanId,
+        channel: u8,
+    ) -> Self {
+        SinkConfig {
+            short,
+            ieee,
+            pan_id,
+            channel,
+            shared_key_type: KeyType::None,
+            shared_key: None,
+            nwk_key: None,
+            link_key: Key128::WELL_KNOWN_GLOBAL_TCLK,
+            security_level: SinkSecurityLevel::DEFAULT,
+            communication_mode: CommunicationMode::DerivedGroupcast,
+            commissioned_group: None,
+            exit_mode: exit_mode::ON_FIRST_PAIRING,
+            commissioning_window: DEFAULT_COMMISSIONING_WINDOW,
+            unicast_notifications: true,
+        }
+    }
+}
+
+/// A Green Power cluster command generated by the sink (server → client
+/// direction).
+#[derive(Clone, Debug)]
+pub struct SinkFrame {
+    /// Destination.
+    pub destination: Destination,
+    /// Cluster-specific command.
+    pub command: CommandId,
+    /// Encoded payload.
+    pub payload: Vec<u8, MAX_PAYLOAD>,
+}
+
+/// A GPDF the sink transmits itself as SelectedSender.
+#[derive(Clone, Debug)]
+pub struct GpdfTx {
+    /// Earliest transmission time (gpTxOffset after the trigger).
+    pub not_before: Instant,
+    /// MAC destination (0xffff or the GPD IEEE address).
+    pub dst: MacAddress,
+    /// NWK header and application payload.
+    pub frame: Vec<u8, MAX_GPDF>,
+}
+
+/// Why a commissioning attempt was refused (§A.3.9.1 step 13,
+/// §A.3.9.2.1.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Refusal {
+    /// The GPD's security level is below gpsSecurityLevel (or 0b01).
+    SecurityLevel,
+    /// gpsSecurityLevel requires gpLinkKey protection the GPD lacks.
+    LinkKeyProtection,
+    /// A key request without RxAfterTx or without security capability.
+    KeyRequest,
+    /// No key for the GPD is available (none supplied, none derivable).
+    MissingKey,
+    /// The outgoing counter is missing for a secured GPD.
+    MissingCounter,
+    /// The protected GPD key did not verify.
+    KeyMic,
+    /// The Sink Table is full.
+    TableFull,
+    /// The Success GPDF was not protected as agreed.
+    SuccessSecurity,
+}
+
+/// A GPD command accepted from a paired GPD.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GpdCommand {
+    /// GPD identity.
+    pub gpd: GpdId,
+    /// GPD CommandID.
+    pub command_id: u8,
+    /// GPD Command payload.
+    pub payload: Vec<u8, MAX_COMMAND_PAYLOAD>,
+    /// The group of the pairing for groupcast modes (scene commands
+    /// translate with it).
+    pub group: Option<u16>,
+}
+
+/// Events for the application / runtime.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SinkEvent {
+    /// The Sink Table changed: persist it.
+    TableChanged,
+    /// Commissioning mode entered (`Some(window end)`) or left (`None`).
+    CommissioningMode(Option<Instant>),
+    /// A pairing was created or refreshed.
+    Paired {
+        /// GPD identity.
+        gpd: GpdId,
+        /// DeviceID of the GPD.
+        device_id: u8,
+        /// Communication mode of the pairing.
+        mode: CommunicationMode,
+        /// Alias of the GPD (Device_annce it when `announce`).
+        alias: ShortAddress,
+        /// Group the Green Power EndPoint must join for groupcast modes.
+        group: Option<u16>,
+        /// A new entry (not a refresh) in a mode other than lightweight
+        /// unicast: send Device_annce for the alias (§A.3.9.1 step 19e).
+        announce: bool,
+    },
+    /// A GPD decommissioned itself; its pairing is gone.
+    Decommissioned {
+        /// GPD identity.
+        gpd: GpdId,
+        /// Group the Green Power EndPoint may leave.
+        group: Option<u16>,
+    },
+    /// A commissioning attempt was refused.
+    Refused {
+        /// GPD identity.
+        gpd: GpdId,
+        /// Why.
+        reason: Refusal,
+    },
+    /// A GPD command from a paired GPD, delivered once.
+    Command(GpdCommand),
+}
+
+/// Why a GP Sink Commissioning Mode command was not honoured
+/// (§A.3.3.4.8.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ModeError {
+    /// The sink endpoint is not implemented: NOT_FOUND.
+    NotFound,
+    /// GPM involvement requested: INVALID_FIELD.
+    InvalidField,
+    /// gpsSecurityLevel involves the Trust Center: no commissioning.
+    InvolveTc,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    until: Instant,
+    involve_proxies: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Duplicate {
+    gpd: GpdId,
+    counter: u32,
+    until: Instant,
+}
+
+/// A GPD in the middle of bidirectional commissioning: the entry to
+/// store once its Success GPDF arrives.
+#[derive(Clone, Debug)]
+struct Candidate {
+    entry: SinkEntry,
+    key_delivered: bool,
+    until: Instant,
+}
+
+/// One gpTxQueue entry (§A.1.5.2.1.1).
+#[derive(Clone, Debug)]
+struct TxEntry {
+    gpd: GpdId,
+    dst: MacAddress,
+    frame: Vec<u8, MAX_GPDF>,
+}
+
+/// How a GPD command reached the sink.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Via {
+    Direct,
+    Proxy { short: ShortAddress, unicast: bool },
+}
+
+/// A GPD command after security processing, from either path.
+struct Incoming<'a> {
+    gpd: GpdId,
+    command_id: u8,
+    payload: &'a [u8],
+    level: SecurityLevel,
+    key_type: KeyType,
+    counter: u32,
+    mac_sequence: u8,
+    rx_after_tx: bool,
+    auto_commissioning: bool,
+    via: Via,
+}
+
+/// The Basic Combo sink; `C` is the block cipher used for GPDF security
+/// and key derivation.
+pub struct Sink<C: BlockCipher, const N: usize> {
+    /// Configuration.
+    pub config: SinkConfig,
+    /// The Sink Table.
+    pub table: SinkTable<N>,
+    commissioning: Option<Window>,
+    candidates: Vec<Candidate, CANDIDATES>,
+    tx_queue: Vec<TxEntry, 2>,
+    duplicates: Vec<Duplicate, DUPLICATE_ENTRIES>,
+    frames: Deque<SinkFrame, QUEUE_CAPACITY>,
+    gpdfs: Deque<GpdfTx, 2>,
+    events: Deque<SinkEvent, QUEUE_CAPACITY>,
+    now: Instant,
+    _cipher: PhantomData<C>,
+}
+
+impl<C: BlockCipher, const N: usize> Sink<C, N> {
+    /// A sink in operational mode with an empty table.
+    pub fn new(config: SinkConfig) -> Self {
+        Sink {
+            config,
+            table: SinkTable::new(),
+            commissioning: None,
+            candidates: Vec::new(),
+            tx_queue: Vec::new(),
+            duplicates: Vec::new(),
+            frames: Deque::new(),
+            gpdfs: Deque::new(),
+            events: Deque::new(),
+            now: Instant::from_millis(0),
+            _cipher: PhantomData,
+        }
+    }
+
+    /// Next Green Power cluster command to send.
+    pub fn next_frame(&mut self) -> Option<SinkFrame> {
+        self.frames.pop_front()
+    }
+
+    /// Next GPDF to transmit.
+    pub fn next_gpdf(&mut self) -> Option<GpdfTx> {
+        self.gpdfs.pop_front()
+    }
+
+    /// Next event.
+    pub fn next_event(&mut self) -> Option<SinkEvent> {
+        self.events.pop_front()
+    }
+
+    /// True while in commissioning mode.
+    pub fn in_commissioning_mode(&self) -> bool {
+        self.commissioning.is_some()
+    }
+
+    /// End of the commissioning window, when in commissioning mode.
+    pub fn commissioning_until(&self) -> Option<Instant> {
+        self.commissioning.map(|c| c.until)
+    }
+
+    /// Earliest timer.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        let mut best: Option<Instant> = None;
+        let mut consider = |t: Instant| {
+            if best.is_none_or(|b| t.as_millis() < b.as_millis()) {
+                best = Some(t);
+            }
+        };
+        if let Some(c) = self.commissioning {
+            consider(c.until);
+        }
+        for d in &self.duplicates {
+            consider(d.until);
+        }
+        for c in &self.candidates {
+            consider(c.until);
+        }
+        for g in &self.gpdfs {
+            consider(g.not_before);
+        }
+        best
+    }
+
+    /// Advances time: expires the commissioning window, the duplicate
+    /// filter and stale commissioning candidates.
+    pub fn poll(&mut self, now: Instant) {
+        self.now = now;
+        self.duplicates.retain(|d| !now.has_reached(d.until));
+        self.candidates.retain(|c| !now.has_reached(c.until));
+        if let Some(c) = self.commissioning
+            && now.has_reached(c.until)
+        {
+            self.commissioning = None;
+            self.tx_queue.clear();
+            let _ = self.events.push_back(SinkEvent::CommissioningMode(None));
+        }
+    }
+
+    fn push_frame(&mut self, destination: Destination, command: CommandId, payload: &impl Encode) {
+        let mut encoded: Vec<u8, MAX_PAYLOAD> = Vec::new();
+        if encoded.resize(payload.encoded_len(), 0).is_err()
+            || payload.encode_to_slice(&mut encoded).is_err()
+        {
+            return;
+        }
+        let _ = self.frames.push_back(SinkFrame {
+            destination,
+            command,
+            payload: encoded,
+        });
+    }
+
+    fn push_event(&mut self, e: SinkEvent) {
+        let _ = self.events.push_back(e);
+    }
+
+    // ---------------------------------------------------------------
+    // Commissioning mode (§A.3.9.1 step 1)
+    // ---------------------------------------------------------------
+
+    /// Enters commissioning mode for `window` (the gpsCommissioningWindow
+    /// by default) and, when `involve_proxies`, asks the proxies to enter
+    /// it too (multi-hop commissioning). Refused when gpsSecurityLevel
+    /// involves the Trust Center.
+    pub fn enter_commissioning_mode(
+        &mut self,
+        involve_proxies: bool,
+        window: Option<Duration>,
+    ) -> Result<Instant, ModeError> {
+        if self.config.security_level.involve_tc {
+            return Err(ModeError::InvolveTc);
+        }
+        let window = window.unwrap_or(self.config.commissioning_window);
+        let until = self.now + window;
+        self.commissioning = Some(Window {
+            until,
+            involve_proxies,
+        });
+        self.push_event(SinkEvent::CommissioningMode(Some(until)));
+        if involve_proxies {
+            let secs = u16::try_from(window.as_secs()).unwrap_or(u16::MAX);
+            let cmd = ProxyCommissioningMode {
+                enter: true,
+                exit_on_first_pairing: self.config.exit_mode & exit_mode::ON_FIRST_PAIRING != 0,
+                exit_on_command: self.config.exit_mode & exit_mode::ON_EXIT_COMMAND != 0,
+                unicast: self.config.unicast_notifications,
+                window_secs: Some(secs),
+                channel: None,
+            };
+            self.push_frame(
+                Destination::Broadcast,
+                cluster::server_cmd::PROXY_COMMISSIONING_MODE,
+                &cmd,
+            );
+        }
+        Ok(until)
+    }
+
+    /// Leaves commissioning mode, telling the proxies when they were
+    /// involved.
+    pub fn exit_commissioning_mode(&mut self) {
+        let Some(c) = self.commissioning.take() else {
+            return;
+        };
+        self.tx_queue.clear();
+        self.push_event(SinkEvent::CommissioningMode(None));
+        if c.involve_proxies {
+            let cmd = ProxyCommissioningMode {
+                enter: false,
+                exit_on_first_pairing: false,
+                exit_on_command: false,
+                unicast: false,
+                window_secs: None,
+                channel: None,
+            };
+            self.push_frame(
+                Destination::Broadcast,
+                cluster::server_cmd::PROXY_COMMISSIONING_MODE,
+                &cmd,
+            );
+        }
+    }
+
+    /// GP Sink Commissioning Mode received (§A.3.3.4.8.2); the caller
+    /// says whether the requested sink endpoint exists.
+    pub fn on_sink_commissioning_mode(
+        &mut self,
+        cmd: &SinkCommissioningMode,
+        endpoint_exists: bool,
+    ) -> Result<(), ModeError> {
+        if !cmd.gpm_fields_valid() {
+            return Err(ModeError::InvalidField);
+        }
+        if !endpoint_exists {
+            return Err(ModeError::NotFound);
+        }
+        if cmd.enter {
+            self.enter_commissioning_mode(cmd.involve_proxies, None)
+                .map(|_| ())
+        } else {
+            if self.commissioning.is_some() {
+                // The exit notification to the proxies follows the
+                // request, not how the mode was entered.
+                if let Some(c) = self.commissioning.as_mut() {
+                    c.involve_proxies = cmd.involve_proxies;
+                }
+                self.exit_commissioning_mode();
+            }
+            Ok(())
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // GP Sink Table Request (§A.3.3.5.6.1)
+    // ---------------------------------------------------------------
+
+    /// GP Sink Table Request from `src`.
+    pub fn on_sink_table_request(
+        &mut self,
+        req: &SinkTableRequest,
+        src: ShortAddress,
+        unicast: bool,
+    ) {
+        let total = u8::try_from(self.table.len()).unwrap_or(u8::MAX);
+        let mut entries = [0u8; MAX_PAYLOAD - 4];
+        let (status, start, count, len) = match req {
+            SinkTableRequest::ByGpd(gpd) => {
+                let found = self.table.find(gpd);
+                match found {
+                    Some(e) => {
+                        let mut w = Writer::new(&mut entries);
+                        let (count, len) = match e.encode(&mut w) {
+                            Ok(()) => (1, w.position()),
+                            Err(_) => (0, 0),
+                        };
+                        (TableStatus::Success, 0xff, count, len)
+                    }
+                    None => {
+                        if !unicast {
+                            return;
+                        }
+                        (TableStatus::NotFound, 0xff, 0, 0)
+                    }
+                }
+            }
+            SinkTableRequest::ByIndex(i) => {
+                if usize::from(*i) < self.table.len() {
+                    let (count, len) = self.table.encode_from(usize::from(*i), &mut entries);
+                    (TableStatus::Success, *i, count, len)
+                } else {
+                    if !unicast {
+                        return;
+                    }
+                    (TableStatus::NotFound, *i, 0, 0)
+                }
+            }
+        };
+        let r = SinkTableResponse {
+            status,
+            total,
+            start_index: start,
+            count,
+            entries: entries.get(..len).unwrap_or(&[]),
+        };
+        self.push_frame(
+            Destination::Unicast(src),
+            cluster::server_cmd::SINK_TABLE_RESPONSE,
+            &r,
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Tunnelled commands
+    // ---------------------------------------------------------------
+
+    /// GP Notification received from proxy `src` (`unicast` when it was
+    /// addressed to this sink rather than a group).
+    pub fn on_notification(&mut self, n: &Notification<'_>, src: ShortAddress, unicast: bool) {
+        let via = Via::Proxy {
+            short: n.proxy.map_or(src, |p| p.0),
+            unicast,
+        };
+        let inc = Incoming {
+            gpd: n.gpd,
+            command_id: n.command_id,
+            payload: n.payload,
+            level: n.security_level,
+            key_type: n.key_type,
+            counter: n.frame_counter,
+            mac_sequence: (n.frame_counter & 0xff) as u8,
+            rx_after_tx: n.rx_after_tx,
+            auto_commissioning: false,
+            via,
+        };
+        self.process(&inc);
+    }
+
+    /// GP Commissioning Notification received from proxy `src`.
+    pub fn on_commissioning_notification(
+        &mut self,
+        n: &CommissioningNotification<'_>,
+        src: ShortAddress,
+    ) {
+        if self.commissioning.is_none() {
+            return;
+        }
+        let proxy = n.proxy.map_or(src, |p| p.0);
+        // Maintenance frames: the Channel Request of §A.3.9.1 step 7.
+        if n.gpd == GpdId::SrcId(SRC_ID_UNSPECIFIED) {
+            if n.command_id == command::CHANNEL_REQUEST && n.rx_after_tx {
+                self.channel_request_via_proxy(n.payload, proxy);
+            }
+            return;
+        }
+        let mut payload: Vec<u8, MAX_PAYLOAD> = Vec::new();
+        let _ = payload.push(n.command_id);
+        if payload.extend_from_slice(n.payload).is_err() {
+            return;
+        }
+        let mut key_type = n.key_type;
+        if n.security_failed {
+            // The proxy could not check the frame: only a Success GPDF
+            // of a commissioning candidate can be processed here, with
+            // the agreed key (§A.3.9.1 step 18b).
+            let Some(cand) = self.candidates.iter().find(|c| c.entry.matches(&n.gpd)) else {
+                return;
+            };
+            let Some(mic) = n.mic else {
+                return;
+            };
+            let Some(key) = cand.entry.security.as_ref().and_then(|s| s.key.clone()) else {
+                return;
+            };
+            if cand.entry.security_level() != n.security_level {
+                self.push_event(SinkEvent::Refused {
+                    gpd: n.gpd,
+                    reason: Refusal::SuccessSecurity,
+                });
+                return;
+            }
+            let individual = cand.entry.key_type().is_individual();
+            let mut header: Vec<u8, 10> = Vec::new();
+            reconstruct_header(
+                &mut header,
+                &n.gpd,
+                n.security_level,
+                individual,
+                n.rx_after_tx,
+                n.frame_counter,
+            );
+            if security::unprotect::<C>(
+                &key,
+                n.security_level,
+                &n.gpd,
+                n.frame_counter,
+                Direction::FromGpd,
+                &header,
+                &mut payload,
+                &mic,
+            )
+            .is_err()
+            {
+                self.push_event(SinkEvent::Refused {
+                    gpd: n.gpd,
+                    reason: Refusal::SuccessSecurity,
+                });
+                return;
+            }
+            key_type = cand.entry.key_type();
+        }
+        let command_id = payload.first().copied().unwrap_or(0);
+        // A data command in a GP Commissioning Notification came from a
+        // Data GPDF with Auto-Commissioning (§A.3.9.1 step 12).
+        let auto_commissioning =
+            !command::is_commissioning(command_id) && !command::is_manufacturer_defined(command_id);
+        let inc = Incoming {
+            gpd: n.gpd,
+            command_id,
+            payload: payload.get(1..).unwrap_or(&[]),
+            level: n.security_level,
+            key_type,
+            counter: n.frame_counter,
+            mac_sequence: (n.frame_counter & 0xff) as u8,
+            rx_after_tx: n.rx_after_tx,
+            auto_commissioning,
+            via: Via::Proxy {
+                short: proxy,
+                unicast: true,
+            },
+        };
+        self.process(&inc);
+    }
+
+    // ---------------------------------------------------------------
+    // Direct reception (§A.3.5.2.4)
+    // ---------------------------------------------------------------
+
+    /// A GPDF received by the GP stub. Frames answered from the gpTxQueue
+    /// are transmitted gpTxOffset after `now`.
+    pub fn on_gpdf(&mut self, gpdf: &Gpdf<'_>, _link: GppGpdLink) {
+        if gpdf.extended.from_proxy {
+            return;
+        }
+        let Some(command_id) = gpdf.command_id() else {
+            return;
+        };
+        if gpdf.frame_control.frame_type == FrameType::Maintenance {
+            self.on_maintenance(gpdf, command_id);
+            return;
+        }
+        let Some(gpd) = gpdf.gpd else {
+            return;
+        };
+        if !gpd.is_valid() {
+            return;
+        }
+        let level = gpdf.extended.security_level;
+        if !level.is_protected() && command::is_to_gpd(command_id) {
+            return;
+        }
+        let counter = gpdf.frame_counter.unwrap_or(u32::from(gpdf.mac_sequence));
+        if self.is_duplicate(&gpd, counter) {
+            return;
+        }
+        let mut payload: Vec<u8, MAX_PAYLOAD> = Vec::new();
+        if payload.extend_from_slice(gpdf.application_payload).is_err() {
+            return;
+        }
+        let (status, key_type) = self.security_process(gpdf, &gpd, &mut payload);
+        match status {
+            SecurityStatus::NoSecurity | SecurityStatus::Success => {}
+            SecurityStatus::AuthFailed | SecurityStatus::Unprocessed => {
+                // A badly protected Success GPDF ends the attempt
+                // (§A.3.9.1 step 18b.i); everything else is dropped.
+                if self.candidates.iter().any(|c| c.entry.matches(&gpd)) {
+                    self.push_event(SinkEvent::Refused {
+                        gpd,
+                        reason: Refusal::SuccessSecurity,
+                    });
+                }
+                return;
+            }
+        }
+        let command_id = payload.first().copied().unwrap_or(command_id);
+        if command::is_to_gpd(command_id) {
+            return;
+        }
+        let inc = Incoming {
+            gpd,
+            command_id,
+            payload: payload.get(1..).unwrap_or(&[]),
+            level,
+            key_type,
+            counter,
+            mac_sequence: gpdf.mac_sequence,
+            rx_after_tx: gpdf.extended.rx_after_tx,
+            auto_commissioning: gpdf.frame_control.auto_commissioning,
+            via: Via::Direct,
+        };
+        self.process(&inc);
+        // The gpTxQueue answers a frame with RxAfterTx (§A.1.5.2.2).
+        if gpdf.extended.rx_after_tx {
+            self.flush_tx_queue(&gpd);
+        }
+    }
+
+    fn on_maintenance(&mut self, gpdf: &Gpdf<'_>, command_id: u8) {
+        // §A.3.9.1 step 7: a Channel Request with Auto-Commissioning
+        // clear is followed by a receive window on this channel.
+        if command_id != command::CHANNEL_REQUEST
+            || gpdf.frame_control.auto_commissioning
+            || self.commissioning.is_none()
+        {
+            return;
+        }
+        let gpd = GpdId::SrcId(SRC_ID_UNSPECIFIED);
+        let counter = u32::from(gpdf.mac_sequence);
+        if self.is_duplicate(&gpd, counter) {
+            return;
+        }
+        self.remember(&gpd, counter);
+        let cfg = ChannelConfiguration {
+            channel: self.config.channel,
+            basic: true,
+        };
+        let mut app = [command::CHANNEL_CONFIGURATION, 0];
+        let _ = cfg.encode_to_slice(app.get_mut(1..).unwrap_or(&mut []));
+        let builder = GpdfBuilder {
+            frame_control: NwkFrameControl {
+                frame_type: FrameType::Maintenance,
+                auto_commissioning: false,
+                extension: false,
+            },
+            extended: None,
+            gpd: None,
+            frame_counter: None,
+            application_payload: &app,
+            mic: None,
+        };
+        let mut frame: Vec<u8, MAX_GPDF> = Vec::new();
+        if frame.resize(builder.encoded_len(), 0).is_err()
+            || builder.encode_to_slice(&mut frame).is_err()
+        {
+            return;
+        }
+        let _ = self.gpdfs.push_back(GpdfTx {
+            not_before: self.now + GP_TX_OFFSET,
+            dst: MacAddress::Short(ShortAddress::BROADCAST_ALL),
+            frame,
+        });
+    }
+
+    fn channel_request_via_proxy(&mut self, payload: &[u8], proxy: ShortAddress) {
+        let Ok(req) = ChannelRequest::decode_exact(payload) else {
+            return;
+        };
+        let cfg = ChannelConfiguration {
+            channel: self.config.channel,
+            basic: true,
+        };
+        let mut body = [0u8; 1];
+        let _ = cfg.encode_to_slice(&mut body);
+        let r = Response {
+            gpd: GpdId::SrcId(SRC_ID_UNSPECIFIED),
+            endpoint_match: false,
+            selected_sender: proxy,
+            tx_channel: req.next,
+            command_id: command::CHANNEL_CONFIGURATION,
+            payload: Some(&body),
+        };
+        self.push_frame(Destination::Broadcast, cluster::server_cmd::RESPONSE, &r);
+    }
+
+    fn flush_tx_queue(&mut self, gpd: &GpdId) {
+        let Some(i) = self.tx_queue.iter().position(|e| e.gpd.same_device(gpd)) else {
+            return;
+        };
+        let e = self.tx_queue.swap_remove(i);
+        let _ = self.gpdfs.push_back(GpdfTx {
+            not_before: self.now + GP_TX_OFFSET,
+            dst: e.dst,
+            frame: e.frame,
+        });
+    }
+
+    fn is_duplicate(&self, gpd: &GpdId, counter: u32) -> bool {
+        self.duplicates
+            .iter()
+            .any(|d| d.gpd.same_device(gpd) && d.counter == counter)
+    }
+
+    fn remember(&mut self, gpd: &GpdId, counter: u32) {
+        let d = Duplicate {
+            gpd: *gpd,
+            counter,
+            until: self.now + DUPLICATE_TIMEOUT,
+        };
+        if self.duplicates.push(d).is_err() {
+            self.duplicates.remove(0);
+            let _ = self.duplicates.push(d);
+        }
+    }
+
+    /// GP-SEC processing of a directly received frame (§A.3.7.3.1.1):
+    /// the key comes from a commissioning candidate, the Sink Table
+    /// entry, or — for GPDs commissioning with a shared key — the
+    /// configured shared keys.
+    fn security_process(
+        &mut self,
+        gpdf: &Gpdf<'_>,
+        gpd: &GpdId,
+        payload: &mut Vec<u8, MAX_PAYLOAD>,
+    ) -> (SecurityStatus, KeyType) {
+        let level = gpdf.extended.security_level;
+        let individual = gpdf.extended.individual_key;
+        let failed_type = if individual {
+            KeyType::Individual
+        } else {
+            KeyType::None
+        };
+        if !level.is_protected() {
+            return (SecurityStatus::NoSecurity, KeyType::None);
+        }
+        let (Some(counter), Some(mic)) = (gpdf.frame_counter, gpdf.mic) else {
+            return (SecurityStatus::Unprocessed, failed_type);
+        };
+        let expectation = if let Some(c) = self.candidates.iter().find(|c| c.entry.matches(gpd)) {
+            let fresh = counter > c.entry.frame_counter
+                || (c.entry.frame_counter > COUNTER_RESET_THRESHOLD && c.key_delivered);
+            Some((
+                c.entry.security_level(),
+                c.entry.key_type(),
+                c.entry.security.as_ref().and_then(|s| s.key.clone()),
+                fresh,
+            ))
+        } else {
+            self.table.find(gpd).map(|e| {
+                (
+                    e.security_level(),
+                    e.key_type(),
+                    self.stored_or_derived_key(e, gpd),
+                    counter > e.frame_counter,
+                )
+            })
+        };
+        let (key, key_type) = match expectation {
+            Some((exp_level, exp_type, key, fresh)) => {
+                if exp_level != level || exp_type.is_individual() != individual || !fresh {
+                    return (SecurityStatus::Unprocessed, failed_type);
+                }
+                match key {
+                    Some(k) => (k, exp_type),
+                    None => return (SecurityStatus::Unprocessed, failed_type),
+                }
+            }
+            // An unknown GPD is only processed (with the shared keys)
+            // while commissioning (§A.3.9.2.1.2).
+            None if self.commissioning.is_some() => match self.shared_key_for(gpd, individual) {
+                Some(k) => k,
+                None => return (SecurityStatus::Unprocessed, failed_type),
+            },
+            None => return (SecurityStatus::Unprocessed, failed_type),
+        };
+        let ok = security::unprotect::<C>(
+            &key,
+            level,
+            gpd,
+            counter,
+            Direction::FromGpd,
+            gpdf.header,
+            payload,
+            &mic,
+        );
+        match ok {
+            Ok(()) => (SecurityStatus::Success, key_type),
+            Err(_) => (SecurityStatus::AuthFailed, failed_type),
+        }
+    }
+
+    /// The key of a Sink Table entry: stored, or derivable from the
+    /// shared keys for the shared / derived key types.
+    fn stored_or_derived_key(&self, e: &SinkEntry, gpd: &GpdId) -> Option<Key128> {
+        if let Some(k) = e.security.as_ref().and_then(|s| s.key.clone()) {
+            return Some(k);
+        }
+        self.key_of_type(e.key_type(), gpd)
+    }
+
+    /// The key of `key_type` for `gpd` from the configured shared keys.
+    fn key_of_type(&self, key_type: KeyType, gpd: &GpdId) -> Option<Key128> {
+        match key_type {
+            KeyType::NwkKey => self.config.nwk_key.clone(),
+            KeyType::GroupKey => self.config.shared_key.clone(),
+            KeyType::NwkDerivedGroupKey => self
+                .config
+                .nwk_key
+                .as_ref()
+                .map(security::derive_group_key::<C>),
+            KeyType::DerivedIndividual => self
+                .config
+                .shared_key
+                .as_ref()
+                .map(|k| security::derive_individual_key::<C>(k, gpd)),
+            KeyType::None | KeyType::Individual => None,
+        }
+    }
+
+    /// The shared key an unknown GPD would be using, by the SecurityKey
+    /// bit of its frame.
+    fn shared_key_for(&self, gpd: &GpdId, individual: bool) -> Option<(Key128, KeyType)> {
+        let t = if individual {
+            KeyType::DerivedIndividual
+        } else {
+            match self.config.shared_key_type {
+                KeyType::None => KeyType::NwkDerivedGroupKey,
+                t => t,
+            }
+        };
+        self.key_of_type(t, gpd).map(|k| (k, t))
+    }
+
+    /// The key the sink hands to a GPD that asks for one (§A.3.9.1 step
+    /// 13.j.i): the gpSharedSecurityKey type, else the NWK-key derived
+    /// group key.
+    fn supplied_key(&self, gpd: &GpdId) -> Option<(KeyType, Key128)> {
+        let t = match self.config.shared_key_type {
+            KeyType::None | KeyType::Individual => KeyType::NwkDerivedGroupKey,
+            t => t,
+        };
+        self.key_of_type(t, gpd).map(|k| (t, k))
+    }
+
+    // ---------------------------------------------------------------
+    // Command dispatch
+    // ---------------------------------------------------------------
+
+    fn process(&mut self, inc: &Incoming<'_>) {
+        if !inc.gpd.is_valid() || self.is_duplicate(&inc.gpd, inc.counter) {
+            return;
+        }
+        let in_commissioning = self.commissioning.is_some();
+        match inc.command_id {
+            command::COMMISSIONING => {
+                if in_commissioning && !inc.auto_commissioning {
+                    self.remember(&inc.gpd, inc.counter);
+                    self.on_commissioning_command(inc);
+                }
+            }
+            command::SUCCESS => {
+                if in_commissioning {
+                    self.remember(&inc.gpd, inc.counter);
+                    self.on_success(inc);
+                }
+            }
+            command::DECOMMISSIONING => self.on_decommissioning(inc),
+            c if command::is_commissioning(c) => {}
+            _ => {
+                if inc.auto_commissioning {
+                    if inc.rx_after_tx || !in_commissioning {
+                        return;
+                    }
+                    self.remember(&inc.gpd, inc.counter);
+                    if self.on_auto_commissioning(inc) {
+                        self.on_data(inc, true);
+                    }
+                } else {
+                    self.on_data(inc, false);
+                }
+            }
+        }
+    }
+
+    /// A GPD command in operation (§A.3.5.2.4).
+    fn on_data(&mut self, inc: &Incoming<'_>, just_paired: bool) {
+        let Some(entry) = self.table.find(&inc.gpd).cloned() else {
+            return;
+        };
+        let group = pairing_group(&entry);
+        if !just_paired
+            && let Via::Proxy { unicast: true, .. } = inc.via
+            && !matches!(
+                entry.mode,
+                CommunicationMode::FullUnicast | CommunicationMode::LightweightUnicast
+            )
+        {
+            // Tunnelled in the wrong mode: correct the proxy (§A.3.5.2.4).
+            let add = self.pairing_for(&entry, true, false);
+            self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &add);
+            let mut remove = self.pairing_for(&entry, false, false);
+            remove.mode = CommunicationMode::LightweightUnicast;
+            remove.sink = Some(SinkAddress::Unicast(self.config.ieee, self.config.short));
+            self.push_frame(
+                Destination::Broadcast,
+                cluster::server_cmd::PAIRING,
+                &remove,
+            );
+            return;
+        }
+        if inc.level != entry.security_level() || inc.key_type != entry.key_type() {
+            return;
+        }
+        if inc.level.is_protected() && inc.counter <= entry.frame_counter && !just_paired {
+            return;
+        }
+        self.remember(&inc.gpd, inc.counter);
+        if !just_paired
+            && let Some(e) = self.table.find_mut(&inc.gpd)
+            && e.frame_counter != inc.counter
+        {
+            e.frame_counter = inc.counter;
+            if inc.level.is_protected() {
+                self.push_event(SinkEvent::TableChanged);
+            }
+        }
+        let mut payload: Vec<u8, MAX_COMMAND_PAYLOAD> = Vec::new();
+        if payload.extend_from_slice(inc.payload).is_err() {
+            return;
+        }
+        self.push_event(SinkEvent::Command(GpdCommand {
+            gpd: inc.gpd,
+            command_id: inc.command_id,
+            payload,
+            group,
+        }));
+    }
+
+    /// GPD Decommissioning (§A.3.5.2.4).
+    fn on_decommissioning(&mut self, inc: &Incoming<'_>) {
+        let Some(entry) = self.table.find(&inc.gpd).cloned() else {
+            return;
+        };
+        if inc.level != entry.security_level()
+            || inc.key_type != entry.key_type()
+            || (inc.level.is_protected() && inc.counter <= entry.frame_counter)
+        {
+            return;
+        }
+        self.remember(&inc.gpd, inc.counter);
+        self.table.remove(&inc.gpd);
+        self.candidates.retain(|c| !c.entry.matches(&inc.gpd));
+        self.push_event(SinkEvent::TableChanged);
+        let p = self.pairing_for(&entry, false, true);
+        self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+        self.push_event(SinkEvent::Decommissioned {
+            gpd: inc.gpd,
+            group: pairing_group(&entry),
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Commissioning (§A.3.9.1 steps 13, 18, 19)
+    // ---------------------------------------------------------------
+
+    fn refuse(&mut self, gpd: GpdId, reason: Refusal) {
+        self.push_event(SinkEvent::Refused { gpd, reason });
+    }
+
+    /// A fresh entry in the sink's communication mode.
+    fn new_entry(&self, gpd: GpdId, device_id: u8) -> SinkEntry {
+        let mode = match (
+            self.config.communication_mode,
+            self.config.commissioned_group,
+        ) {
+            (CommunicationMode::CommissionedGroupcast, None) => CommunicationMode::DerivedGroupcast,
+            (m, _) => m,
+        };
+        let mut e = SinkEntry::new(gpd, mode, device_id);
+        if mode == CommunicationMode::CommissionedGroupcast
+            && let Some(g) = self.config.commissioned_group
+        {
+            let _ = e.groups.push((g, ALIAS_DERIVED));
+        }
+        e
+    }
+
+    /// GPD Commissioning command (step 13.e–13.j).
+    fn on_commissioning_command(&mut self, inc: &Incoming<'_>) {
+        let gpd = inc.gpd;
+        let Ok(cmd) = Commissioning::decode_exact(inc.payload) else {
+            return;
+        };
+        let caps = cmd.level_capabilities();
+        let policy = self.config.security_level;
+        if caps == 0b01 || caps < policy.minimum {
+            return self.refuse(gpd, Refusal::SecurityLevel);
+        }
+        if caps > 0 && policy.link_key_protection && !cmd.key_encryption() {
+            return self.refuse(gpd, Refusal::LinkKeyProtection);
+        }
+        if cmd.key_request && (!inc.rx_after_tx || caps == 0) {
+            return self.refuse(gpd, Refusal::KeyRequest);
+        }
+        let mut entry = self.new_entry(gpd, cmd.device_id);
+        entry.sequence_number_capable = cmd.sequence_number_capable;
+        entry.rx_on_capable = cmd.rx_on_capable;
+        entry.fixed_location = cmd.fixed_location;
+        let mut reply_key: Option<(KeyType, Key128)> = None;
+        if caps == 0 {
+            entry.frame_counter = u32::from(inc.mac_sequence);
+        }
+        if caps > 0 {
+            let Some(counter) = cmd.outgoing_counter else {
+                return self.refuse(gpd, Refusal::MissingCounter);
+            };
+            entry.frame_counter = counter;
+            let agreed: (KeyType, Key128) = match cmd.key {
+                Some(kf) => {
+                    let key = match kf.mic {
+                        Some(mic) => match security::unprotect_gpd_key::<C>(
+                            &self.config.link_key,
+                            &gpd,
+                            Direction::FromGpd,
+                            0,
+                            &kf.bytes,
+                            &mic,
+                        ) {
+                            Ok(k) => k,
+                            Err(_) => return self.refuse(gpd, Refusal::KeyMic),
+                        },
+                        None => Key128::from_bytes(kf.bytes),
+                    };
+                    let ty = cmd.key_type();
+                    let shared_type = self.config.shared_key_type;
+                    if cmd.key_request && shared_type != KeyType::None {
+                        let shared = self.supplied_key(&gpd);
+                        match shared {
+                            Some((st, sk)) if st == ty && sk == key => (st, sk),
+                            Some((st, sk)) if ty == KeyType::Individual => {
+                                reply_key = Some((st, sk.clone()));
+                                (st, sk)
+                            }
+                            _ => (ty, key),
+                        }
+                    } else {
+                        (ty, key)
+                    }
+                }
+                None if cmd.key_request => match self.supplied_key(&gpd) {
+                    Some((t, k)) => {
+                        reply_key = Some((t, k.clone()));
+                        (t, k)
+                    }
+                    None => return self.refuse(gpd, Refusal::MissingKey),
+                },
+                None => {
+                    let ty = cmd.key_type();
+                    match self.key_of_type(ty, &gpd) {
+                        Some(k) => (ty, k),
+                        None => return self.refuse(gpd, Refusal::MissingKey),
+                    }
+                }
+            };
+            let Some(level) = SecurityLevel::from_raw(caps) else {
+                return self.refuse(gpd, Refusal::SecurityLevel);
+            };
+            entry.security = Some(SecurityOptions {
+                level,
+                key_type: agreed.0,
+                key: Some(agreed.1),
+            });
+        }
+        if !inc.rx_after_tx {
+            self.finalize(entry);
+            return;
+        }
+        // Bidirectional: the Commissioning Reply with what was asked for.
+        let counter = cmd.outgoing_counter.unwrap_or(u32::from(inc.mac_sequence));
+        let key_delivered = reply_key.is_some();
+        let key = match reply_key {
+            Some((_, k)) if cmd.key_encryption() => {
+                match security::protect_gpd_key::<C>(
+                    &self.config.link_key,
+                    &gpd,
+                    Direction::ToGpd,
+                    counter,
+                    &k,
+                ) {
+                    Ok((bytes, mic)) => Some(KeyField {
+                        bytes,
+                        mic: Some(mic),
+                    }),
+                    Err(_) => return self.refuse(gpd, Refusal::KeyMic),
+                }
+            }
+            Some((_, k)) => {
+                let mut bytes = [0u8; 16];
+                bytes.copy_from_slice(k.as_bytes());
+                Some(KeyField { bytes, mic: None })
+            }
+            None => None,
+        };
+        let reply = CommissioningReply {
+            pan_id: cmd.pan_id_request.then_some(self.config.pan_id),
+            security_level: caps,
+            key_type: entry.key_type(),
+            key,
+            frame_counter: key.and_then(|k| k.mic.map(|_| counter)),
+        };
+        let mut app: Vec<u8, MAX_GPDF> = Vec::new();
+        let _ = app.push(command::COMMISSIONING_REPLY);
+        if app.resize(1 + reply.encoded_len(), 0).is_err()
+            || reply
+                .encode_to_slice(app.get_mut(1..).unwrap_or(&mut []))
+                .is_err()
+        {
+            return;
+        }
+        let until = self
+            .commissioning
+            .map_or(self.now + self.config.commissioning_window, |c| c.until);
+        self.candidates.retain(|c| !c.entry.gpd.same_device(&gpd));
+        if let Err(c) = self.candidates.push(Candidate {
+            entry,
+            key_delivered,
+            until,
+        }) {
+            self.candidates.remove(0);
+            let _ = self.candidates.push(c);
+        }
+        match inc.via {
+            Via::Direct => self.queue_gpdf(&gpd, &app),
+            Via::Proxy { short, .. } => {
+                let r = Response {
+                    gpd,
+                    endpoint_match: false,
+                    selected_sender: short,
+                    tx_channel: self.config.channel,
+                    command_id: command::COMMISSIONING_REPLY,
+                    payload: Some(app.get(1..).unwrap_or(&[])),
+                };
+                self.push_frame(Destination::Broadcast, cluster::server_cmd::RESPONSE, &r);
+            }
+        }
+    }
+
+    /// Stores an unprotected Data GPDF to `gpd` in the gpTxQueue (one
+    /// entry per GPD).
+    fn queue_gpdf(&mut self, gpd: &GpdId, application_payload: &[u8]) {
+        let builder = GpdfBuilder {
+            frame_control: NwkFrameControl {
+                frame_type: FrameType::Data,
+                auto_commissioning: false,
+                extension: true,
+            },
+            extended: Some(ExtendedFrameControl {
+                application_id: gpd.application_id(),
+                security_level: SecurityLevel::None,
+                individual_key: false,
+                rx_after_tx: false,
+                from_proxy: true,
+            }),
+            gpd: Some(*gpd),
+            frame_counter: None,
+            application_payload,
+            mic: None,
+        };
+        let mut frame: Vec<u8, MAX_GPDF> = Vec::new();
+        if frame.resize(builder.encoded_len(), 0).is_err()
+            || builder.encode_to_slice(&mut frame).is_err()
+        {
+            return;
+        }
+        let dst = match gpd {
+            GpdId::SrcId(_) => MacAddress::Short(ShortAddress::BROADCAST_ALL),
+            GpdId::Ieee { address, .. } => MacAddress::Extended(*address),
+        };
+        self.tx_queue.retain(|e| !e.gpd.same_device(gpd));
+        if self
+            .tx_queue
+            .push(TxEntry {
+                gpd: *gpd,
+                dst,
+                frame,
+            })
+            .is_err()
+        {
+            self.tx_queue.remove(0);
+        }
+    }
+
+    /// GPD Success (step 18): the candidate becomes a pairing.
+    fn on_success(&mut self, inc: &Incoming<'_>) {
+        let Some(i) = self
+            .candidates
+            .iter()
+            .position(|c| c.entry.matches(&inc.gpd))
+        else {
+            return;
+        };
+        let cand = self.candidates.swap_remove(i);
+        if inc.level != cand.entry.security_level() || inc.key_type != cand.entry.key_type() {
+            return self.refuse(inc.gpd, Refusal::SuccessSecurity);
+        }
+        let mut entry = cand.entry;
+        if inc.level.is_protected() {
+            entry.frame_counter = inc.counter;
+        }
+        self.tx_queue.retain(|e| !e.gpd.same_device(&inc.gpd));
+        self.finalize(entry);
+    }
+
+    /// A Data GPDF with Auto-Commissioning in commissioning mode (step
+    /// 13.g note): pairs with the defaults; true when paired.
+    fn on_auto_commissioning(&mut self, inc: &Incoming<'_>) -> bool {
+        let gpd = inc.gpd;
+        let policy = self.config.security_level;
+        if inc.level.raw() < policy.minimum {
+            self.refuse(gpd, Refusal::SecurityLevel);
+            return false;
+        }
+        let mut entry = self.new_entry(gpd, DEVICE_ID_GENERIC);
+        if inc.level.is_protected() {
+            let key = self.key_of_type(inc.key_type, &gpd);
+            entry.security = Some(SecurityOptions {
+                level: inc.level,
+                key_type: inc.key_type,
+                key,
+            });
+            entry.frame_counter = inc.counter;
+        }
+        self.finalize(entry)
+    }
+
+    /// Step 19: stores the entry, sends GP Pairing and reports the
+    /// pairing; true on success.
+    fn finalize(&mut self, entry: SinkEntry) -> bool {
+        let gpd = entry.gpd;
+        let existed = self.table.find(&gpd).is_some();
+        let stored = if let Some(e) = self.table.find_mut(&gpd) {
+            let radius = e.groupcast_radius;
+            *e = entry;
+            e.merge_radius(radius);
+            e.clone()
+        } else {
+            match self.table.insert(entry) {
+                Ok(i) => match self.table.at(i) {
+                    Some(e) => e.clone(),
+                    None => return false,
+                },
+                Err(_) => {
+                    self.refuse(gpd, Refusal::TableFull);
+                    return false;
+                }
+            }
+        };
+        self.push_event(SinkEvent::TableChanged);
+        let p = self.pairing_for(&stored, true, false);
+        self.push_frame(Destination::Broadcast, cluster::server_cmd::PAIRING, &p);
+        self.push_event(SinkEvent::Paired {
+            gpd,
+            device_id: stored.device_id,
+            mode: stored.mode,
+            alias: stored.alias(),
+            group: pairing_group(&stored),
+            announce: !existed && stored.mode != CommunicationMode::LightweightUnicast,
+        });
+        if self.config.exit_mode & exit_mode::ON_FIRST_PAIRING != 0 {
+            self.exit_commissioning_mode();
+        }
+        true
+    }
+
+    /// The GP Pairing reflecting `entry` (§A.3.9.1 step 19f).
+    fn pairing_for(&self, entry: &SinkEntry, add_sink: bool, remove_gpd: bool) -> Pairing {
+        let sink = match entry.mode {
+            CommunicationMode::FullUnicast | CommunicationMode::LightweightUnicast => {
+                SinkAddress::Unicast(self.config.ieee, self.config.short)
+            }
+            CommunicationMode::DerivedGroupcast => SinkAddress::Group(derived_alias(&entry.gpd).0),
+            CommunicationMode::CommissionedGroupcast => SinkAddress::Group(
+                entry
+                    .groups
+                    .first()
+                    .map_or(derived_alias(&entry.gpd).0, |g| g.0),
+            ),
+        };
+        let secured = entry.security_level().is_protected();
+        Pairing {
+            gpd: entry.gpd,
+            add_sink,
+            remove_gpd,
+            mode: entry.mode,
+            gpd_fixed: entry.fixed_location,
+            sequence_number_capable: entry.sequence_number_capable,
+            security_level_raw: entry.security_level().raw(),
+            key_type: entry.key_type(),
+            sink: (!remove_gpd).then_some(sink),
+            device_id: add_sink.then_some(entry.device_id),
+            frame_counter: (add_sink && (secured || entry.sequence_number_capable))
+                .then_some(entry.frame_counter),
+            key: if add_sink && secured {
+                entry.security.as_ref().and_then(|s| s.key.clone())
+            } else {
+                None
+            },
+            assigned_alias: if add_sink { entry.assigned_alias } else { None },
+            groupcast_radius: if add_sink && entry.groupcast_radius != 0 {
+                Some(entry.groupcast_radius)
+            } else {
+                None
+            },
+        }
+    }
+}
+
+/// The group of a groupcast pairing.
+fn pairing_group(entry: &SinkEntry) -> Option<u16> {
+    match entry.mode {
+        CommunicationMode::DerivedGroupcast => Some(derived_alias(&entry.gpd).0),
+        CommunicationMode::CommissionedGroupcast => entry.groups.first().map(|g| g.0),
+        _ => None,
+    }
+}
+
+/// Rebuilds the GP stub NWK header of a Data GPDF tunnelled in a GP
+/// Commissioning Notification (for security processing on the sink).
+fn reconstruct_header(
+    out: &mut Vec<u8, 10>,
+    gpd: &GpdId,
+    level: SecurityLevel,
+    individual: bool,
+    rx_after_tx: bool,
+    counter: u32,
+) {
+    let fc = NwkFrameControl {
+        frame_type: FrameType::Data,
+        auto_commissioning: false,
+        extension: true,
+    };
+    let ext = ExtendedFrameControl {
+        application_id: gpd.application_id(),
+        security_level: level,
+        individual_key: individual,
+        rx_after_tx,
+        from_proxy: false,
+    };
+    let _ = out.push(fc.raw());
+    let _ = out.push(ext.raw());
+    match gpd {
+        GpdId::SrcId(s) => {
+            let _ = out.extend_from_slice(&s.to_le_bytes());
+        }
+        GpdId::Ieee { endpoint, .. } => {
+            let _ = out.push(*endpoint);
+        }
+    }
+    let _ = out.extend_from_slice(&counter.to_le_bytes());
+}

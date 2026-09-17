@@ -62,10 +62,10 @@ id = "PW-GP-SINK-001"
 section = "A.3.2.9, A.3.6.2, A.3.8.2"
 summary = "Sink (combo basic): sink table, commissioning (unidirectional and bidirectional), key derivation/delivery, GP Pairing distribution to proxies, translation of GPD commands to ZCL, security and freshness checks"
 level = "conditional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-green-power::sink"
-tests = []
-
+tests = ["unidirectional_commissioning_with_a_protected_oob_key", "bidirectional_commissioning_hands_out_the_derived_group_key", "multi_hop_commissioning_through_a_proxy", "direct_channel_request_and_sink_table_request", "generic_translation_table"]
+notes = "Sans-I/O Basic Combo sink: Sink Table (ADR-0016), commissioning mode (local request or GP Sink Commissioning Mode, window, exit on first pairing, GP Proxy Commissioning Mode to the proxies), unidirectional and bidirectional commissioning from direct GPDFs and GP Commissioning Notifications (gpsSecurityLevel checks, TC-LK protected OOB keys, key delivery in the Commissioning Reply as gpTxQueue GPDF or GP Response to the proxy, Success verification incl. SecurityProcessingFailed notifications, counter reset rule), Data GPDF with Auto-Commissioning, GP Pairing generation, Decommissioning, operation from direct GPDFs and GP Notifications (duplicate filter, level / key-type match, freshness, wrong-mode corrections), Channel Request answered directly or via GP Response, GP Sink Table Request / Response, generic GPD-to-ZCL translation of Tables 54 / 55 (translation). Runtime integration (endpoint 242 server, Device_annce, group membership, execution on local endpoints, persistence), GP Pairing Configuration, Application Description / Translation Table and Sink Table-based forwarding are not implemented."
 [[requirement]]
 id = "PW-GP-COMM-001"
 section = "A.3.9"
