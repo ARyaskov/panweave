@@ -1768,9 +1768,11 @@ impl<
                     return Err(NwkError::InvalidParameter);
                 }
                 if n.relationship == Relationship::UnauthenticatedChild {
+                    let short = n.short;
                     self.remove_child(child);
                     self.push_event(NwkEvent::LeaveConfirm {
                         device: Some(child),
+                        short: Some(short),
                         status: NwkStatus::Success,
                     });
                     return Ok(());
@@ -1808,14 +1810,17 @@ impl<
                 let rejoin = self.leaving_rejoin.take().unwrap_or(false);
                 self.push_event(NwkEvent::LeaveConfirm {
                     device: None,
+                    short: None,
                     status,
                 });
                 self.local_leave(rejoin);
             }
             Some(child) => {
+                let short = self.neighbors.by_extended(child).map(|n| n.short);
                 self.remove_child(child);
                 self.push_event(NwkEvent::LeaveConfirm {
                     device: Some(child),
+                    short,
                     status,
                 });
             }
@@ -1884,6 +1889,8 @@ impl<
                     // Our parent left with remove-children: we leave too.
                     self.push_event(NwkEvent::LeaveIndication {
                         device: Some(src_ieee),
+                        short: Some(ctx.src),
+                        child: false,
                         rejoin: leave.rejoin,
                     });
                     if self.nib.is_router_or_coordinator() {
@@ -1891,21 +1898,25 @@ impl<
                     } else {
                         self.push_event(NwkEvent::LeaveIndication {
                             device: None,
+                            short: None,
+                            child: false,
                             rejoin: leave.rejoin,
                         });
                         self.local_leave(leave.rejoin);
                     }
                     return;
                 }
-                self.push_event(NwkEvent::LeaveIndication {
-                    device: Some(src_ieee),
-                    rejoin: leave.rejoin,
-                });
-                if self
+                let child = self
                     .neighbors
                     .by_extended(src_ieee)
-                    .is_some_and(|n| n.relationship.is_child())
-                {
+                    .is_some_and(|n| n.relationship.is_child());
+                self.push_event(NwkEvent::LeaveIndication {
+                    device: Some(src_ieee),
+                    short: Some(ctx.src),
+                    child,
+                    rejoin: leave.rejoin,
+                });
+                if child {
                     self.remove_child(src_ieee);
                 } else {
                     self.neighbors.remove_extended(src_ieee);
@@ -1927,6 +1938,8 @@ impl<
             }
             self.push_event(NwkEvent::LeaveIndication {
                 device: None,
+                short: None,
+                child: false,
                 rejoin: leave.rejoin,
             });
             let _ = self.leave(None, leave.rejoin, leave.remove_children);
@@ -1942,6 +1955,8 @@ impl<
         }
         self.push_event(NwkEvent::LeaveIndication {
             device: None,
+            short: None,
+            child: false,
             rejoin: leave.rejoin,
         });
         self.local_leave(leave.rejoin);

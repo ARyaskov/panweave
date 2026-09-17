@@ -1,6 +1,7 @@
 //! The [`Stack`] type: configuration, events and the public control API.
 
 use heapless::{Deque, Vec};
+use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{Aps, ApsConfig, DeviceState, NwkHandle, RequestId};
 use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacService, MacServiceConfig, TxHandle};
@@ -221,6 +222,14 @@ pub enum StackEvent {
     /// The Trust Center handed out a symmetric authentication token
     /// (passphrase) for future key negotiations (§2.4.3.4.2).
     AuthenticationTokenStored,
+    /// A device left the network: one of this router's children, or (at
+    /// the Trust Center) any device reported by its parent (§4.6.3.6).
+    DeviceLeft {
+        /// The device.
+        ieee: ExtendedAddress,
+        /// It intends to rejoin.
+        rejoin: bool,
+    },
     /// `partner`'s APS frame counter was synchronized with a challenge
     /// (§4.6.3.8): APS-encrypted frames from it are accepted again.
     FrameCounterSynchronized {
@@ -547,6 +556,40 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .map_err(|_| NwkStatus::InvalidRequest)?;
         self.pump();
         Ok(())
+    }
+
+    /// Trust Center: removes `device` from the network (§4.6.3.6.1). A
+    /// child of this device receives a NWK Leave; otherwise its parent
+    /// `parent` receives an APS Remove Device and issues the leave.
+    pub fn remove_device(
+        &mut self,
+        device: ExtendedAddress,
+        parent: Option<ExtendedAddress>,
+    ) -> Result<(), NwkStatus> {
+        if !self.aps.config.is_trust_center {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let is_child = self
+            .nwk
+            .neighbors
+            .by_extended(device)
+            .is_some_and(|n| n.relationship.is_child());
+        let r = if is_child {
+            self.nwk
+                .leave(Some(device), false, false)
+                .map_err(|_| NwkStatus::InvalidRequest)
+        } else {
+            let parent = parent.ok_or(NwkStatus::UnknownDevice)?;
+            let parent_short = crate::context::AddrView(&self.nwk)
+                .short_of(parent)
+                .ok_or(NwkStatus::UnknownDevice)?;
+            self.aps
+                .remove_device(parent, parent_short, device)
+                .map(|_| ())
+                .map_err(|_| NwkStatus::InvalidRequest)
+        };
+        self.pump();
+        r
     }
 
     /// Leaves the network.

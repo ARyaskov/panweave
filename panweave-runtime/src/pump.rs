@@ -549,8 +549,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         .set_network_state(ShortAddress::NO_SHORT_ADDRESS, DeviceState::NotJoined);
                     self.push_event(StackEvent::JoinFailed(NwkStatus::NoKey));
                 }
-                NwkEvent::LeaveIndication { device, rejoin } => {
-                    if device.is_none() {
+                NwkEvent::LeaveIndication {
+                    device,
+                    short,
+                    child,
+                    rejoin,
+                } => match device {
+                    None => {
                         self.phase = Phase::Idle;
                         self.aps.set_network_state(
                             ShortAddress::NO_SHORT_ADDRESS,
@@ -558,9 +563,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         );
                         self.push_event(StackEvent::Left { rejoin });
                     }
-                }
-                NwkEvent::LeaveConfirm { device, status } => {
-                    if device.is_none() && status.is_success() {
+                    Some(ieee) => {
+                        if child {
+                            self.report_child_left(ieee, short, rejoin);
+                        }
+                    }
+                },
+                NwkEvent::LeaveConfirm {
+                    device,
+                    short,
+                    status,
+                } => match device {
+                    None if status.is_success() => {
                         self.phase = Phase::Idle;
                         self.aps.set_network_state(
                             ShortAddress::NO_SHORT_ADDRESS,
@@ -568,7 +582,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         );
                         self.push_event(StackEvent::Left { rejoin: false });
                     }
-                }
+                    Some(child) if status.is_success() => {
+                        // A child this router made leave (Remove Device or
+                        // Mgmt_Leave): tell the Trust Center (§4.6.3.6.2).
+                        self.report_child_left(child, short, false);
+                    }
+                    _ => {}
+                },
                 NwkEvent::NetworkStatus { code, .. } => {
                     if code == panweave_nwk::command::NetworkStatusCode::ParentLinkFailure
                         && self.config.role == LogicalDeviceType::EndDevice
@@ -712,6 +732,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         parent: Option<ShortAddress>,
         joiner_tlvs: &[u8],
     ) {
+        if status == UpdateDeviceStatus::DeviceLeft {
+            // §4.6.3.6.1: the device left through its parent; drop the
+            // network-layer bookkeeping and inform the application. The
+            // key-pair entry stays (a Trust Center policy decision).
+            let _ = self.nwk.neighbors.remove_extended(device);
+            self.nwk.address_map.remove_extended(device);
+            self.push_event(StackEvent::DeviceLeft {
+                ieee: device,
+                rejoin: false,
+            });
+            return;
+        }
         let kind = match status {
             UpdateDeviceStatus::SecuredRejoin => JoinKind::SecuredRejoin,
             UpdateDeviceStatus::UnsecuredJoin => JoinKind::UnsecuredJoin,
@@ -857,6 +889,30 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             secret,
             deadline,
         });
+    }
+
+    /// A child left this router (§4.6.3.6.2): a router on a centralized
+    /// network reports a departure without rejoin to the Trust Center
+    /// with Update Device (Device Left); the application is told.
+    fn report_child_left(
+        &mut self,
+        ieee: ExtendedAddress,
+        short: Option<ShortAddress>,
+        rejoin: bool,
+    ) {
+        if !rejoin
+            && !self.aps.config.is_trust_center
+            && !self.aps.aib.is_distributed()
+            && let Some(s) = short
+        {
+            let tc_short = AddrView(&self.nwk)
+                .short_of(self.aps.aib.trust_center_address)
+                .unwrap_or(ShortAddress::COORDINATOR);
+            let _ = self
+                .aps
+                .update_device(tc_short, ieee, s, UpdateDeviceStatus::DeviceLeft, &[]);
+        }
+        self.push_event(StackEvent::DeviceLeft { ieee, rejoin });
     }
 
     /// Initiates an APS frame counter challenge to `partner`
@@ -1104,7 +1160,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     self.trust_center_authorize(device, short, status, Some(src), &joiner_tlvs);
                 }
                 ApsEvent::RemoveDevice { target, .. } => {
-                    let _ = self.nwk.leave(Some(target), false, false);
+                    // §4.6.3.6.2: ourselves, or one of our children;
+                    // anything else is discarded by the NWK layer.
+                    if target == self.config.ieee {
+                        let _ = self.nwk.leave(None, false, false);
+                    } else {
+                        let _ = self.nwk.leave(Some(target), false, false);
+                    }
                 }
                 ApsEvent::RequestKey {
                     src,

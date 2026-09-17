@@ -347,3 +347,74 @@ fn router_and_sleepy_end_device_with_router_failure() {
     assert_eq!(sim.stack(c).dropped_events, 0);
     assert_eq!(sim.stack(s).dropped_events, 0);
 }
+
+/// The Trust Center removes a device it is not the parent of: APS Remove
+/// Device to the router, NWK Leave to the child, Update Device (Device
+/// Left) back to the Trust Center (R23.2 §4.6.3.6).
+#[test]
+fn trust_center_removes_a_device_through_its_parent() {
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "coord",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 21, false),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "router",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 22, false),
+        Box::new(OnOffApp::default()),
+    );
+    let s = sim.add_stack(
+        "sed",
+        node(LogicalDeviceType::EndDevice, SED_IEEE, 23, true),
+        Box::new(OnOffApp::default()),
+    );
+    sim.block(c, s);
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(r)).is_some()));
+    sim.run_for(Duration::from_secs(2));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(s).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(s)).is_some()));
+    sim.run_for(Duration::from_secs(5));
+    sim.take_events(c);
+    sim.take_events(r);
+    sim.take_events(s);
+
+    // Unknown parent: refused; via the router: the device leaves.
+    assert!(sim.stack(c).remove_device(SED_IEEE, None).is_err());
+    sim.stack(c)
+        .remove_device(SED_IEEE, Some(ROUTER_IEEE))
+        .unwrap();
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(s)
+                .iter()
+                .any(|e| matches!(e, StackEvent::Left { rejoin: false }))
+        }),
+        "sed: {:?}\nrouter: {:?}",
+        sim.events(s),
+        sim.events(r)
+    );
+    assert!(!sim.stack(s).is_operating());
+    // The router reported the departure and the Trust Center learnt it.
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::DeviceLeft { ieee, rejoin: false } if *ieee == SED_IEEE))
+    }), "coord: {:?}", sim.events(c));
+    assert!(sim.events(r).iter().any(|e| matches!(
+        e,
+        StackEvent::DeviceLeft { ieee, .. } if *ieee == SED_IEEE
+    )));
+    assert!(sim.stack(r).nwk.neighbors.by_extended(SED_IEEE).is_none());
+}

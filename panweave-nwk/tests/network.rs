@@ -659,7 +659,8 @@ fn leave_and_child_aging() {
             e,
             NwkEvent::LeaveIndication {
                 device: None,
-                rejoin: false
+                rejoin: false,
+                ..
             }
         )),
         "{evs:?}"

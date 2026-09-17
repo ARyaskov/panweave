@@ -298,6 +298,10 @@ pub enum NwkEvent {
     LeaveIndication {
         /// The device that left, or `None` for self.
         device: Option<ExtendedAddress>,
+        /// Network address of the device that left (`None` for self).
+        short: Option<ShortAddress>,
+        /// The device was a child of this router (§4.6.3.6.2).
+        child: bool,
         /// Rejoin flag.
         rejoin: bool,
     },
@@ -305,6 +309,8 @@ pub enum NwkEvent {
     LeaveConfirm {
         /// Target (`None` = self).
         device: Option<ExtendedAddress>,
+        /// Network address the target had (`None` for self).
+        short: Option<ShortAddress>,
         /// Status.
         status: NwkStatus,
     },

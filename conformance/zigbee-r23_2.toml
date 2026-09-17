@@ -1079,22 +1079,22 @@ tests = ["unauthorized_joiner_ignores_data_and_unencrypted_key"]
 notes = "Broadcast Transport Key (alternate key) and Switch Key are implemented; the broadcast delivery timer between them and the unicast-to-sleepy-children repetition (§4.4.2.3 last paragraph) are left to the runtime."
 [[requirement]]
 id = "PW-R23-SEC-021"
-section = "§4.6.3.5"
+section = "§4.4.5, §4.6.3.4.2"
 summary = "Network key recovery: after Switch Key with unknown sequence number, request via Request Key"
 level = "mandatory"
-status = "not-implemented"
+status = "not-applicable"
 module = "panweave-security::procedures::key_update"
 tests = []
-
+notes = "R23.2 defines Request Key only for Trust Center (0x04) and application (0x02) link keys; a Switch Key naming an unknown sequence number is ignored (Nwk::switch_network_key returns false) and a device that lost the network key recovers through a Trust Center rejoin (BDB 3.1 §10.1, implemented in panweave-bdb)."
 [[requirement]]
 id = "PW-R23-SEC-022"
 section = "§4.6.3.6"
 summary = "Device leave: TC sends Remove Device to parent, parent issues NWK Leave; device leaving reports Update Device (device left)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::procedures::leave"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["trust_center_removes_a_device_through_its_parent"]
+notes = "Stack::remove_device issues a NWK Leave to a direct child or an APS Remove Device to the parent; a router accepts Remove Device from the Trust Center for itself or a child, reports departed children with Update Device (Device Left) — on the child's own leave announcement and after a requested leave was confirmed (an end device told to leave by its parent sends no announcement, §3.6.1.11.3.1) — and the Trust Center surfaces DeviceLeft to the application."
 [[requirement]]
 id = "PW-R23-SEC-023"
 section = "§4.7.1, §4.7.3"
