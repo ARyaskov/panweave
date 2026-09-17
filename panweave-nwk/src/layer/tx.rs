@@ -204,8 +204,27 @@ impl<
         discover_route: bool,
         secure: bool,
     ) -> Result<TxId, NwkError> {
+        self.data_request_aliased(dst, payload, radius, discover_route, secure, None)
+    }
+
+    /// NLDE-DATA.request with UseAlias (§3.2.1.1.3): the NWK header
+    /// carries the alias source address and sequence number while the
+    /// auxiliary security header still names this device (Green Power
+    /// proxies, GP Basic §A.3.6.3.3).
+    pub fn data_request_aliased(
+        &mut self,
+        dst: ShortAddress,
+        payload: &[u8],
+        radius: Option<u8>,
+        discover_route: bool,
+        secure: bool,
+        alias: Option<(ShortAddress, u8)>,
+    ) -> Result<TxId, NwkError> {
         if !self.nib.joined {
             return Err(NwkError::NotJoined);
+        }
+        if alias.is_some_and(|(a, _)| !a.is_unicast()) {
+            return Err(NwkError::InvalidParameter);
         }
         if dst == ShortAddress::NO_SHORT_ADDRESS
             || matches!(dst.kind(), panweave_types::ShortAddressKind::Reserved)
@@ -214,8 +233,11 @@ impl<
         }
         let secure = secure && self.config.security_enabled;
         let radius = radius.unwrap_or(constants::DEFAULT_RADIUS).max(1);
-        let seq = self.nib.next_sequence();
-        let mut header = Header::new(FrameType::Data, dst, self.nib.network_address, radius, seq)
+        let (src, seq) = match alias {
+            Some((a, s)) => (a, s),
+            None => (self.nib.network_address, self.nib.next_sequence()),
+        };
+        let mut header = Header::new(FrameType::Data, dst, src, radius, seq)
             .secured(secure)
             .with_discover_route(if discover_route && dst.is_unicast() {
                 DiscoverRoute::Enable
@@ -225,7 +247,7 @@ impl<
         if self.nib.is_end_device() && self.nib.parent_information.0 != 0 {
             header = header.with_end_device_initiator(true);
         }
-        if !self.nib.authenticated {
+        if !self.nib.authenticated && alias.is_none() {
             // A joined-but-unauthorized device identifies itself so that
             // the parent can match the frame to its unauthenticated child
             // (§4.6.3.2.1, Relay Message Upstream).

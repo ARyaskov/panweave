@@ -31,6 +31,8 @@ extern crate alloc;
 mod bdb;
 mod context;
 mod dlk;
+#[cfg(feature = "green-power")]
+pub mod green_power;
 mod keep_alive;
 mod persist;
 mod pump;

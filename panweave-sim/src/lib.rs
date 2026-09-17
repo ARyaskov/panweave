@@ -159,6 +159,9 @@ pub struct Simulator {
     pub trace: Vec<TraceEntry>,
     /// Frames transmitted.
     pub frames: u64,
+    /// Radio used by [`Simulator::inject`] (a device without a stack,
+    /// e.g. a Green Power Device).
+    phantom: Option<usize>,
 }
 
 impl Default for Simulator {
@@ -178,7 +181,43 @@ impl Simulator {
             trace_enabled: false,
             trace: Vec::new(),
             frames: 0,
+            phantom: None,
         }
+    }
+
+    /// Transmits a raw PHY frame (without FCS) from a stack-less radio on
+    /// the current channel, e.g. a Green Power Device's GPDF; returns the
+    /// nodes that received it.
+    pub fn inject(&mut self, bytes: &[u8]) -> Vec<usize> {
+        let radio = match self.phantom {
+            Some(r) => r,
+            None => {
+                let r = self.medium.add_radio();
+                self.phantom = Some(r);
+                r
+            }
+        };
+        let now = self.clock.now();
+        self.frames += 1;
+        let (air, targets) = self.medium.transmit(radio, bytes);
+        let mut delivered = Vec::new();
+        if let Some(air) = air {
+            for t in targets {
+                if let Some(j) = self.nodes.iter().position(|n| n.radio == t) {
+                    let meta = RxMetadata {
+                        lqi: 180,
+                        rssi_dbm: -55,
+                        timestamp_us: Some(now.as_millis() * 1000),
+                        acked_by_hardware: false,
+                        channel: Some(air.channel),
+                    };
+                    self.nodes[j].stack.on_radio_frame(&air.bytes, meta);
+                    delivered.push(j);
+                }
+            }
+        }
+        self.settle();
+        delivered
     }
 
     /// Captures every transmitted frame into a pcap stream.

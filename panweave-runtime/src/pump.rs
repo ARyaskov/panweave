@@ -129,6 +129,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub(crate) fn handle_radio_frame(&mut self, bytes: &[u8], meta: RxMetadata) {
         let channel = meta.channel.unwrap_or(self.nwk.nib.channel);
         let lqi = meta.lqi;
+        #[cfg(feature = "green-power")]
+        let rssi = meta.rssi_dbm;
         match self.mac.on_receive(bytes, meta) {
             RxDisposition::Handled | RxDisposition::Other { .. } => {}
             RxDisposition::Beacon { header, beacon, .. } => {
@@ -146,6 +148,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
             RxDisposition::Data { frame, .. } => {
                 if frame.header.frame_control.frame_type() != MacFrameType::Data {
+                    return;
+                }
+                #[cfg(feature = "green-power")]
+                if crate::green_power::is_gpdf(frame.payload) {
+                    // GPDFs (Zigbee Protocol Version 3) go to the GP stub.
+                    self.on_gpdf(&frame, lqi, rssi);
                     return;
                 }
                 let Some(mac_src) = frame.header.src.short() else {
@@ -270,6 +278,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if ind.cluster == panweave_zcl::clusters::groups::ID {
             // A Groups server command may have changed apsGroupTable.
             let _ = self.persist_groups();
+        }
+        #[cfg(feature = "green-power")]
+        if let Some(ZclIndication::Command { origin, payload }) = out
+            && self.on_green_power_command(&origin, payload)
+        {
+            return;
         }
         let event = match out {
             Some(ZclIndication::Command { origin, payload }) => Vec::from_slice(payload)
@@ -646,7 +660,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 | NwkEvent::ChildRemoved { .. }
                 | NwkEvent::LostChild { .. }
                 | NwkEvent::ParentInformationUpdated
-                | NwkEvent::KeySwitched => {}
+                | NwkEvent::KeySwitched => {
+                    #[cfg(feature = "green-power")]
+                    self.sync_green_power_keys();
+                }
             }
         }
         any
@@ -715,6 +732,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             rejoin,
         });
         self.start_keep_alive();
+        #[cfg(feature = "green-power")]
+        self.sync_green_power_keys();
     }
 
     /// NLME-JOIN.indication at a parent (§4.6.3.2.1).
@@ -1207,11 +1226,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     radius,
                     discover_route,
                     secure,
+                    alias,
                     frame,
-                } => match self
-                    .nwk
-                    .data_request(dst, &frame, radius, discover_route, secure)
-                {
+                } => match self.nwk.data_request_aliased(
+                    dst,
+                    &frame,
+                    radius,
+                    discover_route,
+                    secure,
+                    alias,
+                ) {
                     Ok(id) => {
                         self.schedule_fast_polls();
                         if self.aps_handles.push((id, handle)).is_err() {
@@ -1391,6 +1415,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             asdu,
             options,
             radius: None,
+            alias: None,
         };
         let view = AddrView(&self.nwk);
         let _ = self.aps.data_request(&req, &view);

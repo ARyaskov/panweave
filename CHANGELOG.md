@@ -93,6 +93,13 @@ Keep a Changelog; versions follow SemVer.
   alias derivation, and the sans-I/O Basic Proxy (pairings, duplicate and
   freshness filtering, key recovery, tunnelling with destinations, aliases
   and delays, commissioning mode); ADR-0011; `green_power` fuzz target.
+  Runtime feature `green-power`: `Stack::enable_green_power_proxy()`
+  registers the Green Power EndPoint, routes protocol-version-3 MAC frames
+  to the stub, tunnels notifications with NWK / APS source aliasing
+  (`Nwk::data_request_aliased`, `DataRequest::alias`) after their delay,
+  persists the Proxy Table (`Kind::GreenPower`) and reports
+  `StackEvent::GreenPowerCommissioningMode`; `Simulator::inject` plays a
+  stack-less Green Power Device.
 * Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
   targets for the ZDP security services and the ZCL dispatcher, a
   dispatcher property test, `docs/performance.md`.

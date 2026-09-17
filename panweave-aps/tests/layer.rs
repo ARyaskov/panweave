@@ -261,6 +261,7 @@ fn req<'a>(dst: Destination, asdu: &'a [u8], options: TxOptions) -> DataRequest<
         asdu,
         options,
         radius: None,
+        alias: None,
     }
 }
 

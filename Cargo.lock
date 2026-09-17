@@ -634,6 +634,7 @@ dependencies = [
  "panweave-aps",
  "panweave-bdb",
  "panweave-codec",
+ "panweave-green-power",
  "panweave-mac",
  "panweave-nwk",
  "panweave-pcap",

@@ -324,6 +324,12 @@ pub enum StackEvent {
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,
+    /// The Green Power proxy entered (`Some(window end)`) or left
+    /// (`None`) commissioning mode (GP Basic §A.3.5.2.3).
+    GreenPowerCommissioningMode {
+        /// End of the commissioning window.
+        until: Option<Instant>,
+    },
 }
 
 /// The endpoint could not be registered (duplicate number, endpoint 0 or
@@ -411,6 +417,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) fast_poll_mode: Option<Duration>,
     /// Trust Center keep-alive client.
     pub(crate) keep_alive: crate::keep_alive::KeepAlive,
+    /// Green Power Basic Proxy, when enabled.
+    #[cfg(feature = "green-power")]
+    pub(crate) green_power: Option<crate::green_power::GreenPower>,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -499,6 +508,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             last_scan: (ChannelMask::EMPTY, 0),
             fast_poll_mode: None,
             keep_alive: crate::keep_alive::KeepAlive::default(),
+            #[cfg(feature = "green-power")]
+            green_power: None,
             dropped_events: 0,
         }
     }
@@ -801,6 +812,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         self.poll_keep_alive(now);
+        #[cfg(feature = "green-power")]
+        self.poll_green_power(now);
         self.service_polling(now);
         self.pump();
     }
@@ -852,6 +865,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.challenge.map(|c| c.deadline),
             self.next_scan.map(|(at, _, _)| at),
             self.keep_alive.deadline(),
+            #[cfg(feature = "green-power")]
+            self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.next_poll
                 .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]

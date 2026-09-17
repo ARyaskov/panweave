@@ -54,6 +54,8 @@ pub enum Kind {
     Groups,
     /// Application-defined record.
     Application,
+    /// Green Power Proxy Table entry; `id` is the entry index.
+    GreenPower,
 }
 
 /// A record key.

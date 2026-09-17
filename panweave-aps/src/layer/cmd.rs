@@ -131,6 +131,7 @@ impl<
                 header,
                 nwk_secure,
                 radius: None,
+                alias: None,
                 ack,
                 post,
                 wrap,
@@ -721,6 +722,7 @@ impl<
             radius: Some(1),
             discover_route: false,
             secure: false,
+            alias: None,
             frame,
         });
     }

@@ -55,8 +55,8 @@ summary = "Proxy basic: proxy table, receive GPDF, duplicate filter, security ch
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-green-power::proxy"
-tests = ["unsecured_gpdf_is_tunnelled_to_every_paired_sink", "secured_gpdf_needs_matching_security_and_freshness", "commissioning_mode_forwards_commissioning_frames", "proxy_table_request_by_index_and_by_gpd"]
-notes = "Sans-I/O Basic Proxy: Proxy Table maintained from GP Pairing (add / remove sink, RemoveGPD, level 0b01 refusal, INVALID_FIELD / INSUFFICIENT_SPACE for unicast requests), duplicate filter (gpDuplicateTimeout), level / key-type match and freshness check, key recovery per §A.3.7.3.1.4, GP Notification to lightweight unicast sinks (no alias, Dmin), derived groupcast (DGroupID, entry alias, MAC sequence) and commissioned groups (group alias, sequence − 9), commissioning mode with window / exit conditions / unicast originator, GP Commissioning Notification (alias sequence − 12, SecurityProcessingFailed with MIC) including Channel Requests, GP Proxy Table Response. Not yet wired into the runtime: GPDF reception from the MAC, transmission with NWK source aliasing, the Green Power EndPoint 242 and Proxy Table persistence (TableChanged event only); gppBlockedGPDID, Proxy Table maintenance and bidirectional operation are not implemented."
+tests = ["unsecured_gpdf_is_tunnelled_to_every_paired_sink", "secured_gpdf_needs_matching_security_and_freshness", "commissioning_mode_forwards_commissioning_frames", "proxy_table_request_by_index_and_by_gpd", "router_proxy_tunnels_gpdfs_to_the_sink"]
+notes = "Basic Proxy: Proxy Table maintained from GP Pairing (add / remove sink, RemoveGPD, level 0b01 refusal, INVALID_FIELD / INSUFFICIENT_SPACE Default Responses for unicast requests), duplicate filter (gpDuplicateTimeout), level / key-type match and freshness check, key recovery per §A.3.7.3.1.4, GP Notification to lightweight unicast sinks (no alias, Dmin), derived groupcast (DGroupID, entry alias, MAC sequence) and commissioned groups (group alias, sequence − 9), commissioning mode with window / exit conditions / unicast originator, GP Commissioning Notification (alias sequence − 12, SecurityProcessingFailed with MIC) including Channel Requests, GP Proxy Table Response. The runtime (feature green-power) feeds protocol-version-3 MAC frames to the stub, registers the Green Power EndPoint, tunnels with NWK/APS aliasing after the delay and persists the Proxy Table. gppBlockedGPDID, Proxy Table maintenance (search counter, GP Pairing Search), Device_annce on alias conflicts and bidirectional operation (gpTxQueue) are not implemented."
 [[requirement]]
 id = "PW-GP-SINK-001"
 section = "A.3.2.9, A.3.6.2, A.3.8.2"
@@ -71,16 +71,16 @@ id = "PW-GP-COMM-001"
 section = "A.3.9"
 summary = "Commissioning procedure: sink commissioning mode window, proxy commissioning window, channel request handling, commissioning reply, success"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-green-power::commissioning"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-green-power::proxy"
+tests = ["commissioning_mode_forwards_commissioning_frames", "router_proxy_tunnels_gpdfs_to_the_sink"]
+notes = "Proxy side of the procedure: GP Proxy Commissioning Mode enters / exits the window (default 180 s, overridable), Channel Request and Commissioning / Success / Decommissioning GPDFs are forwarded as GP Commissioning Notifications (broadcast with derived alias, or unicast to the originator), exit on first pairing / on command / on expiry. The sink side (Commissioning Reply, key delivery, GP Pairing distribution) is not implemented."
 [[requirement]]
 id = "PW-GP-EP-001"
 section = "A.2.4, A.2.5"
 summary = "Green Power endpoint 242 with profile 0xA1E0; proxy alias addressing"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-green-power::cluster"
-tests = ["notification_round_trip"]
-notes = "Endpoint 242 / profile 0xA1E0 constants and the alias derivation (§A.3.6.3.3.1, derived_alias) exist; the endpoint is not yet registered by the runtime and NWK aliasing is not yet supported by panweave-nwk."
+status = "implemented"
+module = "panweave-runtime::green_power"
+tests = ["router_proxy_tunnels_gpdfs_to_the_sink"]
+notes = "Stack::enable_green_power_proxy registers endpoint 242 (profile 0xA1E0, device GP Proxy Basic 0x0061) with the Green Power cluster client; notifications are sent from it with UseAlias (NWK source / sequence and APS counter = alias, §A.3.6.3.3) through the new NLDE/APSDE alias parameters."

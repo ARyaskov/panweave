@@ -91,6 +91,7 @@ pub(crate) struct PendingTx {
     pub asdu: AsduBuf,
     pub nwk_secure: bool,
     pub radius: Option<u8>,
+    pub alias: Option<(ShortAddress, u8)>,
     pub ack: bool,
     /// Total blocks (0 = not fragmented).
     pub block_count: u8,
@@ -131,6 +132,7 @@ pub(crate) struct TxParams {
     pub header: Header,
     pub nwk_secure: bool,
     pub radius: Option<u8>,
+    pub alias: Option<(ShortAddress, u8)>,
     pub ack: bool,
     pub post: Option<PostAction>,
     pub wrap: Option<Wrap>,
@@ -162,7 +164,15 @@ impl<
         if req.src_endpoint == Endpoint::BROADCAST {
             return Err(ApsError::InvalidParameter);
         }
-        let counter = self.next_counter();
+        // §2.2.4.1.1: an aliased frame carries the alias sequence number
+        // as its APS counter and cannot be acknowledged.
+        if req.alias.is_some() && req.options.ack {
+            return Err(ApsError::InvalidParameter);
+        }
+        let counter = match req.alias {
+            Some((_, seq)) => seq,
+            None => self.next_counter(),
+        };
         let id = self.alloc_request();
         match req.destination {
             Destination::Bound => {
@@ -357,6 +367,7 @@ impl<
                 header,
                 nwk_secure: true,
                 radius: req.radius,
+                alias: req.alias,
                 ack,
                 post: None,
                 wrap: None,
@@ -403,6 +414,7 @@ impl<
                 header,
                 nwk_secure: false,
                 radius: Some(1),
+                alias: None,
                 ack: false,
                 post: None,
                 wrap: None,
@@ -460,6 +472,7 @@ impl<
             asdu,
             nwk_secure: p.nwk_secure,
             radius: p.radius,
+            alias: p.alias,
             ack: p.ack,
             block_count,
             block: 0,
@@ -653,13 +666,14 @@ impl<
                     };
                     p.handle = Some(handle);
                     p.state = TxState::AwaitingNwkConfirm;
-                    let (dst, radius, secure) = (p.dst, p.radius, p.nwk_secure);
+                    let (dst, radius, secure, alias) = (p.dst, p.radius, p.nwk_secure, p.alias);
                     self.push_action(ApsAction::NwkData {
                         handle,
                         dst,
                         radius,
                         discover_route: dst.is_unicast(),
                         secure,
+                        alias,
                         frame,
                     });
                     idx += 1;
@@ -901,6 +915,7 @@ impl<
                 header: Header::command(cmd_counter, false).with_ack_request(true),
                 nwk_secure: downstream,
                 radius: None,
+                alias: None,
                 ack: true,
                 post: None,
                 // The Relay Message TLV names the joiner: the destination

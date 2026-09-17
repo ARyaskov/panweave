@@ -194,6 +194,12 @@ pub struct DataRequest<'a> {
     pub options: TxOptions,
     /// NWK radius (`None` = default).
     pub radius: Option<u8>,
+    /// NWK source aliasing (R23.2 §2.2.4.1.1 UseAlias / AliasSrcAddr /
+    /// AliasSeqNumb, used by Green Power proxies): the NWK source address
+    /// and sequence number to put in the frame; the APS counter takes the
+    /// alias sequence number. Acknowledged transmission is not allowed
+    /// with an alias.
+    pub alias: Option<(ShortAddress, u8)>,
 }
 
 /// Address information the APS needs from the NWK layer.
@@ -278,6 +284,8 @@ pub enum ApsAction {
         discover_route: bool,
         /// Apply NWK security.
         secure: bool,
+        /// NWK source alias (address, sequence number).
+        alias: Option<(ShortAddress, u8)>,
         /// The APS frame.
         frame: FrameBuf,
     },

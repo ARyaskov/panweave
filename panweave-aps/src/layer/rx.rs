@@ -558,6 +558,7 @@ impl<
             radius: None,
             discover_route: true,
             secure: ctx.nwk_secured,
+            alias: None,
             frame,
         });
     }

@@ -319,8 +319,8 @@ summary = "Data transmission: construct NPDU with radius (default 2×nwkMaxDepth
 level = "mandatory"
 status = "implemented"
 module = "panweave-nwk::layer::tx"
-tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "sleepy_end_device_receives_via_indirect_delivery"]
-
+tests = ["coordinator_forms_and_end_device_joins_and_exchanges_data", "sleepy_end_device_receives_via_indirect_delivery", "router_proxy_tunnels_gpdfs_to_the_sink"]
+notes = "UseAlias / AliasSrcAddr / AliasSeqNumb of NLDE-DATA.request (§3.2.1.1) are supported by Nwk::data_request_aliased: the NWK header carries the alias while the auxiliary header names this device; the APS layer copies the alias sequence number into the APS counter and refuses acknowledged aliased transmissions (§2.2.4.1.1)."
 [[requirement]]
 id = "PW-R23-NWK-041"
 section = "§3.6.2.2"
