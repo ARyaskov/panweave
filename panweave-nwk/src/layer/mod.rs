@@ -758,6 +758,12 @@ impl<
         }
     }
 
+    /// Live broadcast transaction records as `(source, sequence)` pairs
+    /// (§3.6.6, diagnostics).
+    pub fn broadcast_transactions(&self) -> impl Iterator<Item = (ShortAddress, u8)> + '_ {
+        self.btt.iter().map(|r| (r.source, r.sequence))
+    }
+
     /// Takes the next action for the driver.
     pub fn next_action(&mut self) -> Option<NwkAction> {
         self.actions.pop_front()

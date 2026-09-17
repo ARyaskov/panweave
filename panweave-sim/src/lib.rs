@@ -193,14 +193,7 @@ impl Simulator {
     /// the current channel, e.g. a Green Power Device's GPDF; returns the
     /// nodes that received it.
     pub fn inject(&mut self, bytes: &[u8]) -> Vec<usize> {
-        let radio = match self.phantom {
-            Some(r) => r,
-            None => {
-                let r = self.medium.add_radio();
-                self.phantom = Some(r);
-                r
-            }
-        };
+        let radio = self.phantom_radio();
         let now = self.clock.now();
         self.frames += 1;
         let (air, targets) = self.medium.transmit(radio, bytes);
@@ -327,6 +320,30 @@ impl Simulator {
         for j in 0..self.nodes.len() {
             if j != i {
                 self.medium.block(r, self.nodes[j].radio);
+            }
+        }
+    }
+
+    /// Blocks the stack-less radio of [`Simulator::inject`] from node
+    /// `i` (the injected device is out of its range).
+    pub fn block_injector(&mut self, i: usize) {
+        let r = self.phantom_radio();
+        self.medium.block(r, self.nodes[i].radio);
+    }
+
+    /// Restores the link between the injected device and node `i`.
+    pub fn unblock_injector(&mut self, i: usize) {
+        let r = self.phantom_radio();
+        self.medium.unblock(r, self.nodes[i].radio);
+    }
+
+    fn phantom_radio(&mut self) -> usize {
+        match self.phantom {
+            Some(r) => r,
+            None => {
+                let r = self.medium.add_radio();
+                self.phantom = Some(r);
+                r
             }
         }
     }

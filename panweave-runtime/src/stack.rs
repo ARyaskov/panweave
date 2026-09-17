@@ -24,8 +24,11 @@ use panweave_zdo::descriptor::{
 };
 use panweave_zdo::layer::Zdo;
 
-/// NWK layer with the stack's table sizes.
-pub type StackNwk<C, R> = Nwk<C, R, 16, 16, 4, 8>;
+/// NWK layer with the stack's table sizes: 16 neighbors, 16 routes, 4
+/// route discoveries and 16 broadcast transactions (a commissioning
+/// burst — Device_annce, GP Pairing, mode changes — plus the relays of a
+/// few neighbors fit within nwkNetworkBroadcastDeliveryTime).
+pub type StackNwk<C, R> = Nwk<C, R, 16, 16, 4, 16>;
 /// APS layer with the stack's table sizes.
 pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
@@ -632,11 +635,53 @@ pub enum StackEvent {
         /// This device sent the Request Key.
         initiator: bool,
     },
-    /// The Green Power proxy entered (`Some(window end)`) or left
-    /// (`None`) commissioning mode (GP Basic §A.3.5.2.3).
+    /// The Green Power proxy or sink entered (`Some(window end)`) or
+    /// left (`None`) commissioning mode (GP Basic §A.3.5.2.3, §A.3.9.1).
     GreenPowerCommissioningMode {
         /// End of the commissioning window.
         until: Option<Instant>,
+    },
+    /// The Green Power sink paired a GPD (GP Basic §A.3.9.1 step 19):
+    /// its Sink Table entry is stored, the GP Pairing sent and the alias
+    /// announced.
+    #[cfg(feature = "green-power")]
+    GreenPowerPaired {
+        /// GPD identity.
+        gpd: panweave_green_power::gpdf::GpdId,
+        /// DeviceID of the GPD.
+        device_id: u8,
+        /// Communication mode of the pairing.
+        mode: panweave_green_power::cluster::CommunicationMode,
+        /// Alias of the GPD.
+        alias: ShortAddress,
+    },
+    /// A GPD decommissioned itself from the sink (GP Basic §A.3.5.2.4).
+    #[cfg(feature = "green-power")]
+    GreenPowerDecommissioned {
+        /// GPD identity.
+        gpd: panweave_green_power::gpdf::GpdId,
+    },
+    /// The sink refused a commissioning attempt.
+    #[cfg(feature = "green-power")]
+    GreenPowerRefused {
+        /// GPD identity.
+        gpd: panweave_green_power::gpdf::GpdId,
+        /// Why.
+        reason: panweave_green_power::sink::Refusal,
+    },
+    /// A command from a paired GPD, accepted once by the sink (its
+    /// generic ZCL translation, if any, was executed on the paired
+    /// endpoints).
+    #[cfg(feature = "green-power")]
+    GreenPowerCommand {
+        /// GPD identity.
+        gpd: panweave_green_power::gpdf::GpdId,
+        /// GPD CommandID.
+        command_id: u8,
+        /// GPD Command payload.
+        payload: Vec<u8, { panweave_green_power::sink::MAX_COMMAND_PAYLOAD }>,
+        /// Group of the pairing for groupcast modes.
+        group: Option<u16>,
     },
 }
 
@@ -797,7 +842,7 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) keep_alive: crate::keep_alive::KeepAlive,
     /// Green Power Basic Proxy, when enabled.
     #[cfg(feature = "green-power")]
-    pub(crate) green_power: Option<crate::green_power::GreenPower>,
+    pub(crate) green_power: Option<crate::green_power::GreenPower<C>>,
     /// Touchlink commissioning, when enabled.
     pub(crate) touchlink: Option<crate::touchlink::Touchlink>,
     /// Events dropped on overflow.

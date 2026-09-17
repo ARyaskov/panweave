@@ -176,6 +176,21 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Runtime Green Power Basic Combo (feature `green-power`):
+  `Stack::enable_green_power_sink(SinkOptions)` registers endpoint 242 as
+  GP Combo Basic with the Table 24 server attributes, restores the
+  persisted Sink Table (`Kind::GreenPower` ids 0x100+),
+  `green_power_commission` / `green_power_stop_commissioning` drive the
+  sink's commissioning mode, the sink's GP Pairing / Proxy Commissioning
+  Mode / Response / Sink Table Response go out from the Green Power
+  EndPoint, its Commissioning Reply and Channel Configuration GPDFs are
+  transmitted after gpTxOffset, the alias is announced with Device_annce
+  (NWK sequence and APS counter 0x00), endpoint 242 joins the pairing's
+  group, and accepted GPD commands are reported as
+  `StackEvent::GreenPowerCommand` and executed on the paired local
+  endpoints through their generic ZCL translation;
+  `StackEvent::{GreenPowerPaired, GreenPowerDecommissioned,
+  GreenPowerRefused}`; `Simulator::{block_injector, unblock_injector}`.
 * `panweave_green_power::sink::Sink` (GP 1.1.2 §A.3.5.2.4, §A.3.9): the
   sans-I/O Basic Combo sink — commissioning mode (local or GP Sink
   Commissioning Mode, proxies involved on request), unidirectional and
@@ -682,6 +697,12 @@ Keep a Changelog; versions follow SemVer.
   touchlink Reset To Factory New clears persistent data only once the
   leave has completed; `Stack::erase_persisted` also clears the Green
   Power proxy table and Zigbee Direct past keys.
+* Aliased NWK broadcasts (Green Power tunnelling, Device_annce on behalf
+  of a GPD) are recorded in the broadcast transaction table under the
+  alias source rather than the device's own address, so their relays
+  count as passive acknowledgements instead of being relayed again and
+  retried; the runtime's broadcast transaction table holds 16 records so
+  a commissioning burst does not drop the broadcasts that follow it.
 * Frames for sleepy children are secured when the child polls: the NWK
   registers a deferred indirect transaction
   (`NwkAction::MacDataDeferred`, `MacService::data_request_deferred`),

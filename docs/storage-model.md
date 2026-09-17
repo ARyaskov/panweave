@@ -23,7 +23,7 @@ a format octet so that a later layout can migrate or reject old data.
 | `Aib` | Trust Center address and the index of `LinkKey` partners | with `LinkKey` | no |
 | `Bindings` | binding table (§2.2.8.1) | `ApsAction::Persist(Bindings)`, ZDO Bind / Unbind / Clear_All_Bindings | no |
 | `Groups` | group table | `ApsAction::Persist(Groups)` | no |
-| `GreenPower` | one Proxy Table entry per `id` (index) in the OTA format of GP Basic §A.3.4.2.2.1 | `ProxyEvent::TableChanged` (GP Pairing, forwarded frames update the counter) | counter: monotonic per GPD, never rolled back |
+| `GreenPower` | one Proxy Table entry per `id` (index 0–19) in the OTA format of GP Basic §A.3.4.2.2.1; one Sink Table entry per `id` 0x100 + index in the format of §A.3.3.2.2.1 | `ProxyEvent::TableChanged` / `SinkEvent::TableChanged` (pairings, forwarded and accepted frames update the counter) | counter: monotonic per GPD, never rolled back |
 | `Application` | opaque application record | application | app-defined |
 
 Per R23.2 §4.4.12.1 the `Timeout` and `VerifiedFrameCounter` of a key pair

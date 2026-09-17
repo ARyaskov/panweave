@@ -41,7 +41,13 @@ impl<
         header_len: usize,
         secure: bool,
     ) -> Result<(), NwkError> {
-        let src = self.nib.network_address;
+        // The record is keyed by the frame's own source: an aliased
+        // broadcast (Green Power, §3.6.6 with UseAlias) carries the alias,
+        // and its relays must be recognised as passive acknowledgements.
+        let src = ShortAddress(u16::from_le_bytes([
+            *plaintext.get(4).unwrap_or(&0),
+            *plaintext.get(5).unwrap_or(&0),
+        ]));
         self.stats.broadcasts_sent = self.stats.broadcasts_sent.saturating_add(1);
         let sequence = *plaintext.get(7).unwrap_or(&0);
         let dst = ShortAddress(u16::from_le_bytes([
