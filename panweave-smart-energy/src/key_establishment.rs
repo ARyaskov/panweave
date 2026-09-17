@@ -584,6 +584,16 @@ impl<E: Ecmqv> Initiator<E> {
         }
     }
 
+    /// Hands the primitive back once the exchange is over.
+    pub fn into_ecmqv(self) -> E {
+        self.ecmqv
+    }
+
+    /// The suite in use.
+    pub fn suite(&self) -> Suite {
+        self.ecmqv.suite()
+    }
+
     /// The Initiate Key Establishment Request.
     pub fn initiate(&self, timing: Timing) -> Initiate<'_> {
         Initiate {
@@ -734,6 +744,16 @@ impl<E: Ecmqv> Responder<E> {
             material: None,
             partner_timing: Timing::default(),
         }
+    }
+
+    /// Hands the primitive back once the exchange is over.
+    pub fn into_ecmqv(self) -> E {
+        self.ecmqv
+    }
+
+    /// The suite in use.
+    pub fn suite(&self) -> Suite {
+        self.ecmqv.suite()
     }
 
     /// Handles the Initiate Key Establishment Request (C.3.1.2.3.1.2);

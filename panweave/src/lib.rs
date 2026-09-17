@@ -58,6 +58,8 @@ pub mod endpoints;
 #[cfg(feature = "smart-energy")]
 pub use panweave_smart_energy as smart_energy;
 #[cfg(feature = "smart-energy")]
+pub mod cbke;
+#[cfg(feature = "smart-energy")]
 pub mod smart_energy_endpoints;
 
 use heapless::Deque;

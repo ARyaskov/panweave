@@ -15,7 +15,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ClusterId, CryptoRng, Endpoint, LogicalDeviceType, ProfileId, ShortAddress, TransactionSequence,
+    ClusterId, CryptoRng, Endpoint, ExtendedAddress, LogicalDeviceType, ProfileId, ShortAddress,
+    TransactionSequence,
 };
 use panweave_zcl::clusters::keep_alive;
 use panweave_zcl::frame::{Direction, Header};
@@ -95,10 +96,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.keep_alive = KeepAlive::default();
     }
 
-    fn trust_center_short(&self) -> ShortAddress {
+    /// The Trust Center's network address as far as this device knows
+    /// it (the coordinator's when unknown).
+    pub fn trust_center_short(&self) -> ShortAddress {
         AddrView(&self.nwk)
             .short_of(self.aps.aib.trust_center_address)
             .unwrap_or(ShortAddress::COORDINATOR)
+    }
+
+    /// The IEEE address known for `short` (neighbour table or address
+    /// map).
+    pub fn ieee_of(&self, short: ShortAddress) -> Option<ExtendedAddress> {
+        AddrView(&self.nwk).ieee_of(short)
     }
 
     /// Runs the keep-alive timers.

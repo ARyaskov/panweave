@@ -170,10 +170,10 @@ id = "PW-BDB-STEER-004"
 section = "§9.6"
 summary = "Certificate-based TCLK exchange (CBKE) when supported"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-smart-energy::key_establishment"
-tests = ["cbke_over_the_key_establishment_cluster_installs_a_working_link_key"]
-notes = "The Key Establishment cluster and CBKE machines are in panweave-smart-energy and the simulator test installs the derived Trust Center link key on both sides; the curve arithmetic is host-supplied (ADR-0012) and the runtime does not start the exchange by itself after joining."
+tests = ["cbke_over_the_key_establishment_cluster_installs_a_working_link_key", "the_driver_runs_cbke_after_joining"]
+notes = "The Key Establishment cluster and CBKE machines are in panweave-smart-energy; the facade CbkeDriver runs the exchange over the stack on both sides, starting it by itself after a join when configured (start_after_join) and installing the derived Trust Center link key as the verified unique key; the simulator tests prove the key with APS-secured traffic. The curve arithmetic is host-supplied (ADR-0012)."
 [[requirement]]
 id = "PW-BDB-STEER-005"
 section = "§9.7"

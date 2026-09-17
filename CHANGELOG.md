@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave::cbke::CbkeDriver` (SE 1.4a Annex C, BDB 3.1 §8.7): runs
+  the Key Establishment exchange over a `Stack` on either side — the
+  initiator by itself after joining with `start_after_join`, the
+  responder for any peer that initiates — with the C.3.1.1 timeouts,
+  NO_RESOURCES while busy, and the derived link key installed as the
+  verified unique key (`CbkeOutcome`); `Stack::{trust_center_short,
+  ieee_of}` and the machines' `into_ecmqv` / `suite` support it.
 * Color Control completion (ZCL8 §5.2.2.2): the Defined Primaries and
   Additional Defined Primaries sets (`enable_primaries`, up to six),
   the Defined Colour Points set with the white point

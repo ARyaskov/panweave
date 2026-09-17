@@ -51,5 +51,9 @@ panweave = { path = ".", features = ["direct", "smart-energy"] }
 name = "direct"
 required-features = ["direct"]
 
+[[test]]
+name = "cbke"
+required-features = ["smart-energy"]
+
 [lints]
 workspace = true
