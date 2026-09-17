@@ -12,10 +12,11 @@ use panweave_direct::commissioning::{
     LeaveNetwork, ManageJoiners, NetworkInfo, NetworkStatus, STATUS_FAILURE, STATUS_SUCCESS,
     StatusReport, Zdd,
 };
+use panweave_direct::rotation::PastNetworkKeys;
 use panweave_runtime::{AdoptParams, FormationParams, JoinMode, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::LinkKeyKind;
-use panweave_storage::Storage;
+use panweave_storage::{Key, Kind, Storage, StorageError};
 use panweave_types::{
     ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber,
     LogicalDeviceType,
@@ -37,9 +38,53 @@ pub struct DirectState {
     /// `None` the host derives it from the Trust Center link key with
     /// `panweave_direct::auth::admin_key`.
     pub admin_key: Option<Key128>,
+    /// The network keys this device switched away from (ZD §9.1): a ZVD
+    /// whose Basic authorization key was derived from one of them may
+    /// open a Limited Authorization session and Trust Center rejoin.
+    /// Recorded on every key switch and persisted.
+    pub past_network_keys: PastNetworkKeys<PAST_NETWORK_KEYS>,
 }
 
+/// Past network keys kept for Limited Authorization sessions.
+pub const PAST_NETWORK_KEYS: usize = 4;
+
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
+    /// Keeps the network key a key switch retires (ZD §9.1) and
+    /// persists the set.
+    pub(crate) fn direct_on_key_switched(&mut self, previous: Option<KeySequenceNumber>) {
+        let Some(p) = previous else {
+            return;
+        };
+        let Some(slot) = self.stack.nwk.security.keys.get(p) else {
+            return;
+        };
+        self.direct.past_network_keys.record(p, slot.key.clone());
+        let _ = self.persist_direct_past_keys();
+    }
+
+    /// Writes the past network keys to storage.
+    pub fn persist_direct_past_keys(&mut self) -> Result<(), StorageError> {
+        let mut buf = [0u8; PAST_NETWORK_KEYS * PastNetworkKeys::<PAST_NETWORK_KEYS>::ENTRY_LEN];
+        let n = self.direct.past_network_keys.encode(&mut buf).unwrap_or(0);
+        self.stack.storage.store(
+            Key::single(Kind::DirectPastKeys),
+            buf.get(..n).unwrap_or(&[]),
+        )
+    }
+
+    /// Restores the past network keys from storage (part of warm start).
+    pub fn restore_direct_past_keys(&mut self) -> Result<(), StorageError> {
+        let mut buf = [0u8; PAST_NETWORK_KEYS * PastNetworkKeys::<PAST_NETWORK_KEYS>::ENTRY_LEN];
+        if let Some(n) = self
+            .stack
+            .storage
+            .load(Key::single(Kind::DirectPastKeys), &mut buf)?
+        {
+            self.direct.past_network_keys = PastNetworkKeys::decode(buf.get(..n).unwrap_or(&[]));
+        }
+        Ok(())
+    }
+
     /// Maps a stack event onto the completion of a pending Zigbee
     /// Direct operation.
     pub(crate) fn direct_outcome(&mut self, event: &StackEvent) -> Option<Event> {

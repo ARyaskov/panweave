@@ -1073,10 +1073,10 @@ id = "PW-R23-SEC-020"
 section = "§4.6.3.4"
 summary = "Network key update: TC broadcasts new key via Transport Key (nwkKeyType alternate), then Switch Key after nwkNetworkBroadcastDeliveryTime; devices store alternate key and switch on Switch Key; frame counters reset"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-aps::layer::cmd"
-tests = ["unauthorized_joiner_ignores_data_and_unencrypted_key"]
-notes = "Broadcast Transport Key (alternate key) and Switch Key are implemented; the broadcast delivery timer between them and the unicast-to-sleepy-children repetition (§4.4.2.3 last paragraph) are left to the runtime."
+status = "implemented"
+module = "panweave-runtime::provision"
+tests = ["trust_center_rotates_the_network_key", "zdd_keeps_past_network_keys_for_limited_authorization"]
+notes = "Stack::update_network_key on the Trust Center installs the alternate key ((N+1) mod 256), broadcasts the Transport Key to rx-on devices, unicasts it to its own rx-off children, and after nwkNetworkBroadcastDeliveryTime broadcasts the Switch Key and switches itself; routers unicast a received broadcast network key to their rx-off children (section 4.4.2.3 last paragraph, once, held by the MAC until the child polls); devices store the alternate key, switch on the Switch Key from the Trust Center and report StackEvent::NetworkKeySwitched with the retired sequence number, which stays in its slot until the next update. A sleepy end device, which never hears the 0xFFFD Switch Key broadcast, switches when its parent first uses the alternate key (ADR-0014). The unicast key update to a device list (section 4.6.3.4.1 second option) is not offered."
 [[requirement]]
 id = "PW-R23-SEC-021"
 section = "§4.4.5, §4.6.3.4.2"

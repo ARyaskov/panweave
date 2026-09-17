@@ -116,6 +116,17 @@ impl<
             {
                 Ok(u) => {
                     secured_by = Some(u.sender);
+                    // The Switch Key broadcast goes to rx-on devices only
+                    // (§4.4.6.1.3); a sleepy end device follows its parent
+                    // onto the alternate key when the parent starts using
+                    // it (§4.6.3.4.2).
+                    if self.nib.is_end_device()
+                        && !self.nib.rx_on_when_idle
+                        && self.security.active_sequence() != Some(u.key_sequence)
+                        && src == self.nib.parent_address
+                    {
+                        let _ = self.switch_network_key(u.key_sequence);
+                    }
                     (u.payload_start, u.payload_end)
                 }
                 Err(SecurityError::BadFrameCounter) => {

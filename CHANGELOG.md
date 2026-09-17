@@ -403,6 +403,20 @@ Keep a Changelog; versions follow SemVer.
   standard beacons; `NwkConfig::enhanced_beacon_requests` makes network
   discovery use them. The TX Power IE exchange seeds the Power Control
   Information Table (D.11.2.4.2).
+* Network key update (R23.2 §4.6.3.4): `Stack::update_network_key` on
+  the Trust Center (alternate key broadcast, unicast to rx-off
+  children, Switch Key after `nwkNetworkBroadcastDeliveryTime`);
+  routers unicast a received broadcast network key to their rx-off
+  children (§4.4.2.3); `StackEvent::NetworkKeySwitched` names the
+  retired sequence number; a sleepy end device follows its parent onto
+  the alternate key (ADR-0014).
+* Zigbee Direct network key rotation (ZD 1.1 §9):
+  `panweave_direct::rotation` with the past-network-key store (kept by
+  the facade's `DirectState`, persisted under `Kind::DirectPastKeys`
+  and restored by `Node::initialize`), the Limited Authorization
+  `SessionClass` and the Transport Key forwarding decision; the session
+  responder hands the ZVD's key sequence number to the secret resolver
+  and reports it in `Established::peer_key_sequence`.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

@@ -445,6 +445,14 @@ pub enum StackEvent {
     /// A Mgmt_NWK_IEEE_Joining_List_rsp updated the joining policy or
     /// IEEE joining list (§2.4.4.3.11.2).
     JoiningListUpdated,
+    /// The active network key changed (APSME-SWITCH-KEY, §4.6.3.4.2);
+    /// `previous` still sits in its NWK key slot until the next update.
+    NetworkKeySwitched {
+        /// The key that was active before.
+        previous: Option<KeySequenceNumber>,
+        /// The key now active.
+        sequence: KeySequenceNumber,
+    },
     /// A Link Power Delta command from `src` was processed (§3.4.13.7);
     /// `delta_db` is what it asked of this device, when listed. The
     /// MAC's Power Control Information Table has been adjusted.
@@ -579,6 +587,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// A Trust Center swap-out was detected in the rejoin in progress:
     /// request a link key update once joined (§4.7.4.1.2.6 step 8).
     pub(crate) swap_out_pending: bool,
+    /// A network key update in progress on the Trust Center (§4.6.3.4):
+    /// the alternate key's sequence number and when to switch to it.
+    pub(crate) key_update: Option<(KeySequenceNumber, Instant)>,
     /// The key being awaited completes a rejoin (not an initial join).
     pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
@@ -687,6 +698,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             energy_scan: None,
             beacon_survey: None,
             swap_out_pending: false,
+            key_update: None,
             awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
@@ -1018,6 +1030,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         self.poll_keep_alive(now);
+        self.poll_key_update(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
         self.poll_touchlink(now);
@@ -1072,6 +1085,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.challenge.map(|c| c.deadline),
             self.next_scan.map(|(at, _, _)| at),
             self.keep_alive.deadline(),
+            self.key_update.map(|(_, at)| at),
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),

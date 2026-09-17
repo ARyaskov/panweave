@@ -24,8 +24,8 @@ use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy}
 use panweave_storage::{Key, Kind, Storage};
 use panweave_types::time::Duration;
 use panweave_types::{
-    ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyType, LogicalDeviceType, NwkStatus,
-    ProfileId, ShortAddress,
+    ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeySequenceNumber, KeyType,
+    LogicalDeviceType, NwkStatus, ProfileId, ShortAddress,
 };
 use panweave_types::{ChannelMask, TransactionSequence};
 use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
@@ -743,10 +743,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 | NwkEvent::PermitJoining(_)
                 | NwkEvent::ChildRemoved { .. }
                 | NwkEvent::LostChild { .. }
-                | NwkEvent::ParentInformationUpdated
-                | NwkEvent::KeySwitched => {
+                | NwkEvent::ParentInformationUpdated => {
                     #[cfg(feature = "green-power")]
                     self.sync_green_power_keys();
+                }
+                NwkEvent::KeySwitched { previous, sequence } => {
+                    #[cfg(feature = "green-power")]
+                    self.sync_green_power_keys();
+                    self.push_event(StackEvent::NetworkKeySwitched { previous, sequence });
                 }
             }
         }
@@ -1548,7 +1552,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ApsEvent::TransportKey {
                     key, authorizes, ..
                 } => match key {
-                    TransportedKey::Network { key, sequence, .. } => {
+                    TransportedKey::Network {
+                        key,
+                        sequence,
+                        source,
+                        broadcast,
+                    } => {
                         if authorizes {
                             self.network_key_sequence = sequence;
                             self.nwk.set_network_key(sequence, key, true);
@@ -1557,7 +1566,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             self.awaiting_key_rejoin = false;
                             self.complete_join(rejoin);
                         } else {
-                            self.nwk.set_network_key(sequence, key, false);
+                            self.nwk.set_network_key(sequence, key.clone(), false);
+                            if broadcast && self.nwk.nib.is_router_or_coordinator() {
+                                self.relay_network_key_to_sleepy_children(&key, sequence, source);
+                            }
                         }
                     }
                     TransportedKey::TrustCenterLink { source } => {
@@ -1656,6 +1668,29 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// §4.4.2.3 last paragraph: a router that received the Trust
+    /// Center's broadcast network key update unicasts it to each of its
+    /// rx-off children (held by the MAC until they poll).
+    pub(crate) fn relay_network_key_to_sleepy_children(
+        &mut self,
+        key: &Key128,
+        sequence: KeySequenceNumber,
+        trust_center: ExtendedAddress,
+    ) {
+        let children: Vec<(ExtendedAddress, ShortAddress), 16> = self
+            .nwk
+            .neighbors
+            .end_device_children()
+            .filter(|n| !n.rx_on_when_idle)
+            .map(|n| (n.extended, n.short))
+            .collect();
+        for (ieee, short) in children {
+            let _ = self
+                .aps
+                .relay_network_key_to_child(ieee, short, key, sequence, trust_center);
+        }
     }
 
     /// A Request Key for an application link key at the Trust Center

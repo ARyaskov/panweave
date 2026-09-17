@@ -287,6 +287,11 @@ pub struct Established {
     /// Network key sequence number announced by the ZDD (Message 2), if
     /// any.
     pub key_sequence: Option<u8>,
+    /// Network key sequence number the ZVD put in Message 1: the key its
+    /// Basic authorization key was derived from (§9.1). On the ZDD a
+    /// value other than the active one marks a Limited Authorization
+    /// session.
+    pub peer_key_sequence: Option<u8>,
 }
 
 fn parse(message: &[u8], expected: u8) -> Result<TlvSet<'_>, SessionError> {
@@ -304,7 +309,7 @@ pub struct Responder<'a> {
     local: ExtendedAddress,
     key_sequence: Option<u8>,
     state: ResponderState,
-    secrets: &'a dyn Fn(Psk) -> Option<Secret<'a>>,
+    secrets: &'a dyn Fn(Psk, Option<u8>) -> Option<Secret<'a>>,
 }
 
 enum ResponderState {
@@ -313,6 +318,7 @@ enum ResponderState {
         key: Key128,
         peer: ExtendedAddress,
         psk: Psk,
+        peer_key_sequence: Option<u8>,
         ephemeral: Ephemeral,
         peer_public: Vec<u8, 64>,
     },
@@ -324,12 +330,15 @@ impl<'a> Responder<'a> {
     /// `key_sequence` (the active network key sequence number of a
     /// provisioned ZDD) and resolves pre-shared secrets through
     /// `secrets` (returning `None` refuses the PSK, e.g. anonymous
-    /// sessions while the Anonymous Join Countdown Timer is 0).
+    /// sessions while the Anonymous Join Countdown Timer is 0). The
+    /// resolver also receives the network key sequence number the peer
+    /// put in Message 1, so a Basic authorization key derived from a
+    /// past network key can be found (§9.1 Limited Authorization).
     pub fn new(
         method: Method,
         local: ExtendedAddress,
         key_sequence: Option<u8>,
-        secrets: &'a dyn Fn(Psk) -> Option<Secret<'a>>,
+        secrets: &'a dyn Fn(Psk, Option<u8>) -> Option<Secret<'a>>,
     ) -> Self {
         Responder {
             method,
@@ -355,7 +364,8 @@ impl<'a> Responder<'a> {
             return Err(SessionError::UnsupportedMethod);
         }
         let (peer, peer_public) = tlv::point(&set, method).ok_or(SessionError::Malformed)?;
-        let secret = (self.secrets)(psk).ok_or(SessionError::UnsupportedPsk)?;
+        let peer_key_sequence = tlv::key_sequence(&set);
+        let secret = (self.secrets)(psk, peer_key_sequence).ok_or(SessionError::UnsupportedPsk)?;
         let ephemeral = Ephemeral::generate::<C, R>(rng, method, secret.bytes())?;
         let key = ephemeral.derive::<C>(self.local, peer, peer_public, secret.bytes())?;
         let mut out = Message::new();
@@ -377,6 +387,7 @@ impl<'a> Responder<'a> {
             key,
             peer,
             psk,
+            peer_key_sequence,
             ephemeral,
             peer_public: pp,
         };
@@ -394,6 +405,7 @@ impl<'a> Responder<'a> {
             key,
             peer,
             psk,
+            peer_key_sequence,
             ephemeral,
             peer_public,
         } = state
@@ -444,6 +456,7 @@ impl<'a> Responder<'a> {
                 peer,
                 psk,
                 key_sequence: self.key_sequence,
+                peer_key_sequence,
             },
         ))
     }
@@ -631,6 +644,7 @@ impl Initiator {
             peer,
             psk: self.psk,
             key_sequence,
+            peer_key_sequence: None,
         })
     }
 }
@@ -697,12 +711,14 @@ mod tests {
         m2.extend_from_slice(&buf[..n]).unwrap();
         let mut pp = Vec::new();
         pp.extend_from_slice(peer_public).unwrap();
-        static SECRETS: fn(Psk) -> Option<Secret<'static>> = |_| Some(Secret::Anonymous);
+        static SECRETS: fn(Psk, Option<u8>) -> Option<Secret<'static>> =
+            |_, _| Some(Secret::Anonymous);
         let mut r = Responder::new(method, local, None, &SECRETS);
         r.state = ResponderState::AwaitingMessage3 {
             key: key.clone(),
             peer,
             psk: Psk::Anonymous,
+            peer_key_sequence: None,
             ephemeral,
             peer_public: pp.clone(),
         };
@@ -813,7 +829,7 @@ mod tests {
 
     #[test]
     fn responder_refuses_wrong_method_and_psk() {
-        static NO_ANON: fn(Psk) -> Option<Secret<'static>> = |p| match p {
+        static NO_ANON: fn(Psk, Option<u8>) -> Option<Secret<'static>> = |p, _| match p {
             Psk::Anonymous => None,
             _ => Some(Secret::Anonymous),
         };

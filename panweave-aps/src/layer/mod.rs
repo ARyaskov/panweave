@@ -322,6 +322,9 @@ pub enum TransportedKey {
         sequence: KeySequenceNumber,
         /// Originator (all ones in a distributed network).
         source: ExtendedAddress,
+        /// The command was broadcast (destination all zeros): a router
+        /// unicasts it to its rx-off children (§4.4.2.3).
+        broadcast: bool,
     },
     /// Trust Center link key (0x04), already installed in the key-pair
     /// set as UNVERIFIED.

@@ -10,7 +10,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_storage::Storage;
 use panweave_types::{
-    Channel, ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
+    Channel, ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Instant, Key128, KeyAttributes,
     KeySequenceNumber, LogicalDeviceType, NwkStatus, PanId, ShortAddress,
 };
 
@@ -179,6 +179,61 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.nwk
             .leave(None, rejoin, remove_children)
             .map_err(|_| NwkStatus::InvalidRequest)
+    }
+
+    /// Trust Center network key update (§4.6.3.4.1): `key` becomes the
+    /// alternate network key with the next sequence number, is broadcast
+    /// to all rx-on devices under the current key (sleepy children get
+    /// their copies when they poll), and after
+    /// `nwkNetworkBroadcastDeliveryTime` a Switch Key broadcast makes it
+    /// active everywhere, this device included. Returns the new sequence
+    /// number. One update at a time.
+    pub fn update_network_key(&mut self, key: Key128) -> Result<KeySequenceNumber, NwkStatus> {
+        if !self.aps.config.is_trust_center
+            || self.aps.aib.is_distributed()
+            || self.phase != Phase::Operating
+        {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        if self.key_update.is_some() {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let sequence = KeySequenceNumber(self.network_key_sequence.0.wrapping_add(1));
+        self.nwk.set_network_key(sequence, key.clone(), false);
+        self.aps
+            .transport_network_key(
+                ExtendedAddress::ZERO,
+                &key,
+                sequence,
+                panweave_aps::layer::KeyRoute::Broadcast,
+            )
+            .map_err(|_| NwkStatus::InvalidRequest)?;
+        // The Trust Center's own rx-off children never hear the
+        // broadcast (§4.4.2.3 last paragraph).
+        let tc = self.aps.aib.trust_center_address;
+        self.relay_network_key_to_sleepy_children(&key, sequence, tc);
+        let at = self
+            .now
+            .saturating_add(self.nwk.nib.network_broadcast_delivery_time);
+        self.key_update = Some((sequence, at));
+        self.pump();
+        Ok(sequence)
+    }
+
+    /// Second half of [`Stack::update_network_key`]: the Switch Key
+    /// broadcast and the local switch (§4.6.3.4.1 / §4.6.3.4.2).
+    pub(crate) fn poll_key_update(&mut self, now: Instant) {
+        let Some((sequence, at)) = self.key_update else {
+            return;
+        };
+        if !now.has_reached(at) {
+            return;
+        }
+        self.key_update = None;
+        let _ = self.aps.switch_key(sequence);
+        if self.nwk.switch_network_key(sequence) {
+            self.network_key_sequence = sequence;
+        }
     }
 
     /// Asks the Trust Center for an application link key shared with

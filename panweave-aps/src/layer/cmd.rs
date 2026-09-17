@@ -465,6 +465,43 @@ impl<
         self.finish_command(id, ApsCommandId::RequestKey)
     }
 
+    /// A router's unicast of the Trust Center's broadcast network key
+    /// update to an rx-off child (§4.4.2.3 last paragraph): the same
+    /// command, NWK-secured, APS-unsecured, naming the Trust Center as
+    /// its source and the child as its destination.
+    pub fn relay_network_key_to_child(
+        &mut self,
+        child: ExtendedAddress,
+        child_short: ShortAddress,
+        key: &Key128,
+        sequence: KeySequenceNumber,
+        trust_center: ExtendedAddress,
+    ) -> Result<RequestId, ApsError> {
+        if self.state != DeviceState::JoinedAuthorized {
+            return Err(ApsError::NotJoined);
+        }
+        let id = self.alloc_request();
+        let cmd = ApsCommand::TransportKey(TransportKey {
+            descriptor: KeyDescriptor::NetworkKey {
+                key: key.clone(),
+                sequence,
+                destination: child,
+                source: trust_center,
+            },
+        });
+        self.send_command(
+            id,
+            child_short,
+            &cmd,
+            None,
+            KeyType::StandardNetworkKey,
+            true,
+            true,
+            None,
+        )?;
+        self.finish_command(id, ApsCommandId::TransportKey)
+    }
+
     /// APSME-SWITCH-KEY.request (§4.4.6.1.3, §4.6.3.4.1): broadcast to
     /// all rx-on devices, NWK-secured only.
     pub fn switch_key(&mut self, sequence: KeySequenceNumber) -> Result<RequestId, ApsError> {
@@ -971,6 +1008,7 @@ impl<
                                 key: key.clone(),
                                 sequence: *sequence,
                                 source: *source,
+                                broadcast: *destination == ExtendedAddress::ZERO,
                             },
                             authorizes: true,
                         });
@@ -997,6 +1035,7 @@ impl<
                                 key: key.clone(),
                                 sequence: *sequence,
                                 source: *source,
+                                broadcast: *destination == ExtendedAddress::ZERO,
                             },
                             authorizes: false,
                         });

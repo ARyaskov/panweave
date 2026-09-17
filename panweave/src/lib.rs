@@ -276,6 +276,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             if let Some(d) = self.direct_outcome(&e) {
                 self.push(d);
             }
+            #[cfg(feature = "direct")]
+            if let StackEvent::NetworkKeySwitched { previous, .. } = &e {
+                self.direct_on_key_switched(*previous);
+            }
             match &e {
                 StackEvent::NetworkFormed { .. } | StackEvent::Joined { .. } => {
                     self.bdb.set_on_network(true);
@@ -301,6 +305,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// starts the Rejoin procedure (end devices).
     pub fn initialize(&mut self) -> Result<Restored, StorageError> {
         let restored = self.stack.restore()?;
+        #[cfg(feature = "direct")]
+        self.restore_direct_past_keys()?;
         if restored == Restored::OnNetwork {
             self.bdb.set_on_network(true);
             if self.stack.config.role == LogicalDeviceType::EndDevice {

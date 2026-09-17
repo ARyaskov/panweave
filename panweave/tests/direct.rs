@@ -325,3 +325,123 @@ fn zdd_form_open_join_adopt_and_leave() {
     assert_eq!(r.unwrap().status.joined, JoinedStatus::NotCommissioned);
     assert_eq!(direct_done(&w, r1, Domain::LeaveNetwork), None);
 }
+
+/// Network key rotation (ZD 1.1 §9.1): the ZDD keeps the network key it
+/// switched away from, persists it, and a ZVD whose Basic authorization
+/// key was derived from that key still gets a Limited Authorization
+/// session; the Transport Key filter keeps network keys off the tunnel.
+#[test]
+fn zdd_keeps_past_network_keys_for_limited_authorization() {
+    use panweave::types::{Key128, KeySequenceNumber};
+    use panweave_direct::rotation::{Forwarding, SessionClass, forwarding_decision};
+    use panweave_direct::session::{Initiator, Responder, Secret};
+    use panweave_direct::tlv::{Method, Psk};
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let old_key = Key128::from_bytes([0x5a; 16]);
+    let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
+        .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    let c = w.add(coord);
+    w.nodes[c].0.form_network_with_key(old_key.clone()).unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    assert!(w.nodes[c].0.direct.past_network_keys.is_empty());
+    // A first rotation gives the network a non-zero sequence number
+    // (the session TLV treats 0 as "none").
+    let old_key = Key128::from_bytes([0xa5; 16]);
+    let old_seq = w.nodes[c]
+        .0
+        .stack
+        .update_network_key(old_key.clone())
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(60), |w| {
+        w.nodes[c].2.iter().any(|e| {
+            matches!(
+                e,
+                Event::Stack(StackEvent::NetworkKeySwitched { sequence, .. }) if *sequence == old_seq
+            )
+        })
+    }));
+    assert_eq!(w.nodes[c].0.direct.past_network_keys.len(), 1);
+
+    // The ZVD derived its Basic key from the current network key.
+    let zvd = ExtendedAddress(0x001F_EE00_0000_0001);
+    let basic_old = panweave_direct::auth::basic_key::<SoftwareAes>(zvd, &old_key);
+
+    // The Trust Center rotates the key.
+    let new_key = Key128::from_bytes([0xc3; 16]);
+    let new_seq = w.nodes[c]
+        .0
+        .stack
+        .update_network_key(new_key.clone())
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(60), |w| {
+        w.nodes[c].2.iter().any(|e| {
+            matches!(
+                e,
+                Event::Stack(StackEvent::NetworkKeySwitched { sequence, .. }) if *sequence == new_seq
+            )
+        })
+    }));
+    assert_eq!(
+        w.nodes[c].0.direct.past_network_keys.get(old_seq),
+        Some(&old_key)
+    );
+    // Persisted: a restart restores it.
+    let storage = w.nodes[c].0.stack.storage.clone();
+    let mut again = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
+        .build::<SoftwareAes, _, _>(TestRng::seed(2), storage);
+    again.restore_direct_past_keys().unwrap();
+    assert_eq!(again.direct.past_network_keys.get(old_seq), Some(&old_key));
+
+    // A ZVD opening a session with the old Basic key and the old
+    // sequence number gets a Limited Authorization session (§9.1).
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0001);
+    let past = w.nodes[c].0.direct.past_network_keys.clone();
+    let active = new_seq;
+    let secrets = move |psk: Psk, seq: Option<u8>| -> Option<Secret<'static>> {
+        match (psk, seq) {
+            (Psk::BasicAuthorization, Some(s)) if s != active.0 => {
+                let k = past.basic_key::<SoftwareAes>(zvd, KeySequenceNumber(s))?;
+                Some(Secret::Key(Box::leak(Box::new(k))))
+            }
+            _ => None,
+        }
+    };
+    let secrets: &'static dyn Fn(Psk, Option<u8>) -> Option<Secret<'static>> =
+        Box::leak(Box::new(secrets));
+    let mut rng = TestRng::seed(9);
+    let mut zdd = Responder::new(Method::Curve25519AesMmo, zdd_ieee, Some(new_seq.0), secrets);
+    let mut zvd_side = Initiator::new(Method::Curve25519AesMmo, zvd, Psk::BasicAuthorization);
+    let m1 = zvd_side
+        .message1::<SoftwareAes, _>(&mut rng, &Secret::Key(&basic_old), Some(old_seq.0))
+        .unwrap();
+    let m2 = zdd.on_message1::<SoftwareAes, _>(&mut rng, &m1).unwrap();
+    let m3 = zvd_side.on_message2::<SoftwareAes>(&m2).unwrap();
+    let (m4, established) = zdd.on_message3::<SoftwareAes>(&m3).unwrap();
+    let on_zvd = zvd_side.on_message4::<SoftwareAes>(&m4).unwrap();
+    assert_eq!(on_zvd.key, established.key);
+    // The ZVD sees the rotation in Message 2; the ZDD classifies the
+    // session as Limited.
+    assert_eq!(on_zvd.key_sequence, Some(new_seq.0));
+    assert_eq!(established.peer_key_sequence, Some(old_seq.0));
+    assert_eq!(
+        SessionClass::classify(established.psk, established.peer_key_sequence, new_seq),
+        SessionClass::Limited
+    );
+    // The ZDD never tunnels the Transport Key that would carry the new
+    // network key to the ZVD (§9).
+    assert_eq!(
+        forwarding_decision(&[0x01, 0x10, 0x05, 0x01]),
+        Forwarding::Decline
+    );
+}

@@ -1198,11 +1198,15 @@ impl<
 
     /// Switches the active network key (APSME-SWITCH-KEY).
     pub fn switch_network_key(&mut self, sequence: KeySequenceNumber) -> bool {
+        let previous = self.security.keys.active().map(|s| s.sequence);
         let ok = self.security.switch_key(sequence);
         if ok {
             self.maybe_reserve_counter();
             self.push_action(NwkAction::Persist);
-            self.push_event(NwkEvent::KeySwitched);
+            self.push_event(NwkEvent::KeySwitched {
+                previous: previous.filter(|p| *p != sequence),
+                sequence,
+            });
         }
         ok
     }

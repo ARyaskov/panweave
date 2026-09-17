@@ -56,6 +56,9 @@ pub enum Kind {
     Application,
     /// Green Power Proxy Table entry; `id` is the entry index.
     GreenPower,
+    /// Past network keys a Zigbee Direct device keeps for Limited
+    /// Authorization sessions (ZD 1.1 §9.1).
+    DirectPastKeys,
 }
 
 /// A record key.

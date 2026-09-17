@@ -44,7 +44,7 @@ heapless = { workspace = true }
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-sim = { workspace = true }
-panweave-direct = { workspace = true }
+panweave-direct = { workspace = true, features = ["curve25519"] }
 panweave = { path = ".", features = ["direct", "smart-energy"] }
 
 [[test]]

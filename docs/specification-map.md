@@ -58,6 +58,7 @@ clusters referenced by BDB), BDB3.1 (device behaviour on top of the stack).
 | §4.4 APS security | Transport key, update device, remove device, request key, switch key, verify key, confirm key, key negotiation (DLK), secured APDU, security AIB | `panweave-security::aps`, `panweave-aps::security_commands` |
 | §4.5 Common elements | Auxiliary frame header, security parameters, key hierarchy (hashed keys, key-load / key-transport keys) | `panweave-security::{aux_header, key_hierarchy}` |
 | §4.6 Functional description | Security initialisation, Trust Center application, joining/authentication procedures, key update/switch, device leaving | `panweave-security::procedures`, `panweave-bdb` |
+| §4.6.3.4 Network key update | Alternate key transport, Switch Key, sleepy children | `panweave-runtime::provision::update_network_key`, ADR-0014 |
 | §4.7 Centralized networks | Trust Center policies (§4.7.1), TC link keys, policy values (§4.7.3), TC swap-out (§4.7.4) | `panweave-security::trust_center`; `panweave-runtime::swap_out` (backup / restore) with `panweave-aps::security::ApsSecurity::unsecure_swap_out` (node side) |
 | §4.8 Distributed networks | Distributed TC address, network key updates, link keys | `panweave-security::distributed` |
 | §4.9 Device operations | Joining device policies, TC address handling, receiving/negotiating link keys, passphrase update | `panweave-security::device` |
@@ -199,7 +200,7 @@ BLE core (GATT) — abstracted in Panweave.
 | 6 | Security model, session establishment (P-256 ECDHE-PSK and Curve25519 SPEKE variants), CCM nonce/counters, security service characteristics and TLVs, ZVD provisioning | `panweave-direct::{session, secure, auth, tlv}` |
 | 7 | ZDD behaviour: BLE advertising extension, commissioning service (form/permit/join/leave/status/manage joiners/identify/finding&binding), tunnel service (NPDU characteristic), trusted-link pre/post processing hooks into NWK | `panweave-direct::{advertisement, gatt, commissioning, tunnel}` (binding to the runtime stack: planned) |
 | 8 | ZVD behaviour: discovery, security, reconnection, commissioning/tunnel clients, EUI-64 allocation | `panweave-direct::{advertisement, session, commissioning}` (ZVD encoders / decoders; discovery and reconnection: planned) |
-| 9–10 | Network key rotation with limited authorisation sessions; legacy-network support (ephemeral authorisation, routing on behalf of ZVD) | `panweave-direct::sessions` |
+| 9–10 | Network key rotation with limited authorisation sessions; legacy-network support (ephemeral authorisation, routing on behalf of ZVD) | `panweave-direct::rotation` (past keys, session class, Transport Key forwarding decision), `panweave::direct` (`DirectState::past_network_keys`); legacy support not implemented |
 
 Security-sensitive: everything in chapters 6, 9, 10.
 

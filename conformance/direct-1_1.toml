@@ -89,10 +89,10 @@ id = "PW-ZD-KEY-001"
 section = "§9"
 summary = "Network key rotation with limited authorization sessions"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::sessions"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-direct::rotation"
+tests = ["past_keys_are_kept_and_derive_basic_keys", "sessions_are_classified", "transport_key_messages_are_not_tunnelled", "zdd_keeps_past_network_keys_for_limited_authorization"]
+notes = "The past-network-key store (PastNetworkKeys, at least one key, persisted by the facade under Kind::DirectPastKeys and recorded on every StackEvent::NetworkKeySwitched), the Basic authorization key derived from a past key, the network key sequence number of Session Establishment Message 1 handed to the secret resolver and reported in Established::peer_key_sequence, the Limited Authorization classification (SessionClass: tunnel rules of a provisioning session, no commissioning, no Basic key translation outside it) and the APSME forwarding decision for Transport Key messages conveying a network key (unsecured StandardKeyType 0x01 or APS-secured under the key-transport key: decline and close the connection) are implemented. Applying the decision inside the NWK forwarding path and closing the BLE connection need the tunnel integration of PW-ZD-ZDD-003; the section 10 translation to a basic-key Transport Key belongs to PW-ZD-LEGACY-001."
 [[requirement]]
 id = "PW-ZD-LEGACY-001"
 section = "§10"

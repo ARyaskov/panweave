@@ -37,8 +37,8 @@ use panweave_mac::service::{ScanKind, TxHandle, TxStatus};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::frame_counter::Reservation;
 use panweave_types::{
-    Channel, ChannelMask, ChannelPage, Duration, ExtendedAddress, Instant, MacCapability,
-    MacStatus, NwkStatus, PanId, Rng, ShortAddress,
+    Channel, ChannelMask, ChannelPage, Duration, ExtendedAddress, Instant, KeySequenceNumber,
+    MacCapability, MacStatus, NwkStatus, PanId, Rng, ShortAddress,
 };
 
 use crate::address_map::AddressMap;
@@ -433,7 +433,13 @@ pub enum NwkEvent {
         delta_db: Option<i8>,
     },
     /// The active network key sequence changed (Switch Key applied).
-    KeySwitched,
+    KeySwitched {
+        /// The key that was active before, still held in its slot until
+        /// the next update (a Zigbee Direct device stores it, ZD §9.1).
+        previous: Option<KeySequenceNumber>,
+        /// The key now active.
+        sequence: KeySequenceNumber,
+    },
     /// NLME-ED-SCAN.confirm: energy levels indexed by channel number
     /// for the channels of `channels` (Mgmt_NWK_Update_req processing).
     EnergyScanConfirm {
