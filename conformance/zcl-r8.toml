@@ -307,10 +307,10 @@ id = "PW-ZCL-MEAS-003"
 section = "§4.10–§4.13"
 summary = "Electrical Conductivity, pH, Wind Speed and Concentration Measurement clusters"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters"
-tests = []
-notes = "Not implemented; metadata entries only (TODO(PW-ZCL-MEAS-EXTRA))."
+status = "implemented"
+module = "panweave-zcl::clusters::measurement"
+tests = ["scalar_and_concentration_servers"]
+notes = "Electrical Conductivity (0x040a, 10 x mS/m), pH (0x0409, 100 x pH up to 0x0578) and Wind Speed (0x040b, 100 x m/s) as uint16 servers with the §4.1.3 range attributes and default reporting; the Concentration Measurement clusters 0x040c–0x0429 as single-precision fraction-of-one servers with NaN as the unknown value and a floating-point reportable change. Tolerance is defined but not instantiated by default."
 [[requirement]]
 id = "PW-ZCL-LIGHT-001"
 section = "§5.2"

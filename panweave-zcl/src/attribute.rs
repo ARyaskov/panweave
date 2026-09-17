@@ -123,8 +123,16 @@ pub struct DefaultReporting {
     pub min: u16,
     /// Maximum reporting interval (seconds; 0 = change-only).
     pub max: u16,
-    /// Reportable change (analog types).
+    /// Reportable change (analog types): the magnitude for integer
+    /// types, [`float_change`] for single / double precision types.
     pub change: u64,
+}
+
+/// The reportable-change encoding of a floating-point magnitude (the
+/// `f64` bit pattern), as stored in [`DefaultReporting::change`] and
+/// [`ReportState::change`] for single / double precision attributes.
+pub const fn float_change(magnitude: f64) -> u64 {
+    magnitude.to_bits()
 }
 
 /// An attribute with its current value.
@@ -247,11 +255,21 @@ impl Attribute {
             let last = Value::decode(&mut r, ty).ok();
             let mut r = Reader::new(&self.value);
             let now_v = Value::decode(&mut r, ty).ok();
-            let delta = match (last, now_v) {
-                (Some(a), Some(b)) => analog_delta(&a, &b).unwrap_or(u64::MAX),
-                _ => u64::MAX,
+            let reached = match (last, now_v) {
+                // Floating-point types compare magnitudes; a change of
+                // zero reports every change.
+                (Some(Value::Single(a)), Some(Value::Single(b))) => {
+                    let delta = f64::from((a - b).abs());
+                    delta > 0.0 && delta >= f64::from_bits(rep.change)
+                }
+                (Some(Value::Double(a)), Some(Value::Double(b))) => {
+                    let delta = (a - b).abs();
+                    delta > 0.0 && delta >= f64::from_bits(rep.change)
+                }
+                (Some(a), Some(b)) => analog_delta(&a, &b).unwrap_or(u64::MAX) >= rep.change.max(1),
+                _ => true,
             };
-            if delta >= rep.change.max(1) {
+            if reached {
                 rep.pending = true;
             }
         } else {

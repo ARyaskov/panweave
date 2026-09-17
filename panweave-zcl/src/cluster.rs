@@ -779,7 +779,11 @@ impl<const A: usize> ClusterInstance<A> {
                     a.configure_reporting(0, 0xffff, 0, now);
                     return ZclStatus::Success;
                 }
-                let change = change.as_ref().and_then(Value::as_u64).unwrap_or(0);
+                let change = match change {
+                    Some(Value::Single(f)) => f64::from(f).to_bits(),
+                    Some(Value::Double(f)) => f.to_bits(),
+                    other => other.as_ref().and_then(Value::as_u64).unwrap_or(0),
+                };
                 a.configure_reporting(min, max, change, now);
                 ZclStatus::Success
             }
@@ -938,10 +942,9 @@ fn change_value(ty: DataType, change: u64) -> Value<'static> {
             width: w,
             value: i64::try_from(change).unwrap_or(i64::MAX),
         },
-        #[allow(clippy::cast_precision_loss)]
-        DataType::Single => Value::Single(change as f32),
-        #[allow(clippy::cast_precision_loss)]
-        DataType::Double => Value::Double(change as f64),
+        #[allow(clippy::cast_possible_truncation)]
+        DataType::Single => Value::Single(f64::from_bits(change) as f32),
+        DataType::Double => Value::Double(f64::from_bits(change)),
         #[allow(clippy::cast_possible_truncation)]
         DataType::Semi => Value::Semi(change as u16),
         #[allow(clippy::cast_possible_truncation)]

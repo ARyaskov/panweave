@@ -420,6 +420,175 @@ pub mod water_content {
     }
 }
 
+/// The uint16 measurement clusters of §4.10–§4.12 — Electrical
+/// Conductivity (`10 · mS/m`), pH (`100 · pH`, at most 0x0578) and Wind
+/// Speed (`100 · m/s`) — which share the Table 4-44 – 4-46 layout.
+pub mod scalar {
+    use super::*;
+
+    /// Electrical Conductivity Measurement (§4.10).
+    pub const ELECTRICAL_CONDUCTIVITY: ClusterId = ClusterId(0x040a);
+    /// pH Measurement (§4.11).
+    pub const PH: ClusterId = ClusterId(0x0409);
+    /// Wind Speed Measurement (§4.12).
+    pub const WIND_SPEED: ClusterId = ClusterId(0x040b);
+    /// `MeasuredValue` (uint16, reportable).
+    pub const MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0000, DataType::Uint(2), Access::RO_REPORT);
+    /// `MinMeasuredValue`.
+    pub const MIN_MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0001, DataType::Uint(2), Access::RO);
+    /// `MaxMeasuredValue`.
+    pub const MAX_MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0002, DataType::Uint(2), Access::RO);
+    /// `Tolerance`.
+    pub const TOLERANCE: AttributeDef = AttributeDef::new(0x0003, DataType::Uint(2), Access::RO);
+    /// Unknown measurement / undefined bound.
+    pub const UNKNOWN: u16 = 0xffff;
+    /// Largest pH value (14.00).
+    pub const MAX_PH: u16 = 0x0578;
+
+    /// The largest `MaxMeasuredValue` of `cluster`.
+    const fn max_of(cluster: ClusterId) -> u16 {
+        if cluster.0 == PH.0 { MAX_PH } else { 0xfffe }
+    }
+
+    /// Builds a server of `cluster` (one of the three identifiers)
+    /// measuring `min..=max` in the cluster's unit, reporting a change
+    /// of `change`.
+    pub fn server<const A: usize>(
+        cluster: ClusterId,
+        min: u16,
+        max: u16,
+        change: u16,
+    ) -> Result<ClusterInstance<A>, ZclStatus> {
+        if !matches!(cluster, ELECTRICAL_CONDUCTIVITY | PH | WIND_SPEED)
+            || (max > max_of(cluster) && max != UNKNOWN)
+            || (min != UNKNOWN && max != UNKNOWN && min >= max)
+        {
+            return Err(ZclStatus::InvalidValue);
+        }
+        let mut c = ClusterInstance::new(def(cluster), Role::Server);
+        c.add_reported_attribute(
+            MEASURED_VALUE,
+            &uint16(UNKNOWN),
+            reporting(u64::from(change)),
+        )?;
+        c.add_attribute(MIN_MEASURED_VALUE, &uint16(min))?;
+        c.add_attribute(MAX_MEASURED_VALUE, &uint16(max))?;
+        Ok(c)
+    }
+
+    /// Builds a client instance of `cluster`.
+    pub fn client<const A: usize>(cluster: ClusterId) -> ClusterInstance<A> {
+        client_of(cluster)
+    }
+
+    /// Sets the measured value (`None` = unknown); values beyond the
+    /// cluster's range are refused.
+    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<u16>) -> bool {
+        match value {
+            Some(v) if v > max_of(c.def.id) => false,
+            v => c.set_u16(MEASURED_VALUE.id, v.unwrap_or(UNKNOWN)),
+        }
+    }
+
+    /// The measured value, `None` when unknown.
+    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+        c.u16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
+    }
+}
+
+/// Concentration Measurement (§4.13): the clusters 0x040c–0x0429 of
+/// Table 4-48 sharing one attribute set, `MeasuredValue` a single
+/// precision fraction of 1 (NaN = unknown).
+pub mod concentration {
+    use super::*;
+
+    /// First concentration cluster (Carbon Monoxide).
+    pub const FIRST: ClusterId = ClusterId(0x040c);
+    /// Last concentration cluster (Sodium).
+    pub const LAST: ClusterId = ClusterId(0x0429);
+    /// Carbon Monoxide (CO).
+    pub const CARBON_MONOXIDE: ClusterId = ClusterId(0x040c);
+    /// Carbon Dioxide (CO₂).
+    pub const CARBON_DIOXIDE: ClusterId = ClusterId(0x040d);
+    /// Oxygen (O₂).
+    pub const OXYGEN: ClusterId = ClusterId(0x0414);
+    /// Ozone (O₃).
+    pub const OZONE: ClusterId = ClusterId(0x0415);
+    /// Turbidity.
+    pub const TURBIDITY: ClusterId = ClusterId(0x0420);
+    /// `MeasuredValue` (single, reportable).
+    pub const MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0000, DataType::Single, Access::RO_REPORT);
+    /// `MinMeasuredValue`.
+    pub const MIN_MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0001, DataType::Single, Access::RO);
+    /// `MaxMeasuredValue`.
+    pub const MAX_MEASURED_VALUE: AttributeDef =
+        AttributeDef::new(0x0002, DataType::Single, Access::RO);
+    /// `Tolerance`.
+    pub const TOLERANCE: AttributeDef = AttributeDef::new(0x0003, DataType::Single, Access::RO);
+
+    /// Whether `cluster` is a concentration measurement cluster.
+    pub const fn is_concentration(cluster: ClusterId) -> bool {
+        cluster.0 >= FIRST.0 && cluster.0 <= LAST.0
+    }
+
+    /// Builds a server of `cluster` measuring `min..=max` (fractions of
+    /// 1, `NAN` for undefined) and reporting a change of `change`.
+    pub fn server<const A: usize>(
+        cluster: ClusterId,
+        min: f32,
+        max: f32,
+        change: f32,
+    ) -> Result<ClusterInstance<A>, ZclStatus> {
+        if !is_concentration(cluster)
+            || (!min.is_nan() && !(0.0..1.0).contains(&min))
+            || (!max.is_nan() && !(0.0..=1.0).contains(&max))
+            || (!min.is_nan() && !max.is_nan() && min >= max)
+        {
+            return Err(ZclStatus::InvalidValue);
+        }
+        let mut c = ClusterInstance::new(def(cluster), Role::Server);
+        c.add_reported_attribute(
+            MEASURED_VALUE,
+            &Value::Single(f32::NAN),
+            DefaultReporting {
+                min: 10,
+                max: 300,
+                change: crate::attribute::float_change(f64::from(change)),
+            },
+        )?;
+        c.add_attribute(MIN_MEASURED_VALUE, &Value::Single(min))?;
+        c.add_attribute(MAX_MEASURED_VALUE, &Value::Single(max))?;
+        Ok(c)
+    }
+
+    /// Builds a client instance of `cluster`.
+    pub fn client<const A: usize>(cluster: ClusterId) -> ClusterInstance<A> {
+        client_of(cluster)
+    }
+
+    /// Sets the measured concentration (`None` = unknown); values
+    /// outside 0…1 are refused.
+    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<f32>) -> bool {
+        match value {
+            Some(v) if !(0.0..=1.0).contains(&v) => false,
+            v => c.set(MEASURED_VALUE.id, &Value::Single(v.unwrap_or(f32::NAN))),
+        }
+    }
+
+    /// The measured concentration, `None` when unknown.
+    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<f32> {
+        match c.attributes.value(MEASURED_VALUE.id) {
+            Some(Value::Single(v)) if !v.is_nan() => Some(v),
+            _ => None,
+        }
+    }
+}
+
 /// Occupancy Sensing (§4.8).
 pub mod occupancy {
     use super::*;
@@ -628,5 +797,48 @@ mod tests {
         let mut f: ClusterInstance<8> = flow::server(0, 0xfffe).unwrap();
         assert!(flow::set_measured(&mut f, Some(12)));
         assert_eq!(flow::measured(&f), Some(12));
+    }
+
+    #[test]
+    fn scalar_and_concentration_servers() {
+        use panweave_types::time::Instant;
+        let mut ph: ClusterInstance<8> = scalar::server(scalar::PH, 0, scalar::MAX_PH, 10).unwrap();
+        assert!(scalar::server::<8>(scalar::PH, 0, 0x0579, 1).is_err());
+        assert!(scalar::server::<8>(ClusterId(0x0408), 0, 100, 1).is_err());
+        assert!(scalar::server::<8>(scalar::WIND_SPEED, 50, 50, 1).is_err());
+        assert_eq!(scalar::measured(&ph), None);
+        assert!(!scalar::set_measured(&mut ph, Some(0x0579)));
+        assert!(scalar::set_measured(&mut ph, Some(700)));
+        assert_eq!(scalar::measured(&ph), Some(700));
+        let w: ClusterInstance<8> = scalar::server(scalar::WIND_SPEED, 0, 0xfffe, 100).unwrap();
+        assert_eq!(w.def.id, scalar::WIND_SPEED);
+
+        let now = Instant::from_millis(0);
+        let mut co2: ClusterInstance<8> =
+            concentration::server(concentration::CARBON_DIOXIDE, 0.0, 1.0, 0.01).unwrap();
+        assert!(concentration::server::<8>(ClusterId(0x042a), 0.0, 1.0, 0.0).is_err());
+        assert!(concentration::server::<8>(concentration::OXYGEN, 0.5, 0.2, 0.0).is_err());
+        assert!(concentration::is_concentration(concentration::TURBIDITY));
+        assert_eq!(concentration::measured(&co2), None);
+        assert!(!concentration::set_measured(&mut co2, Some(1.5)));
+        assert!(concentration::set_measured(&mut co2, Some(0.04)));
+        assert_eq!(concentration::measured(&co2), Some(0.04));
+        // The reportable change is a floating-point magnitude: a change
+        // of 0.005 does not trigger a report, 0.02 does.
+        let a = co2
+            .attributes
+            .get_mut(concentration::MEASURED_VALUE.id, None)
+            .unwrap();
+        a.configure_reporting(0, 0, crate::attribute::float_change(0.01), now);
+        let due = |c: &ClusterInstance<8>| {
+            c.attributes
+                .get(concentration::MEASURED_VALUE.id, None)
+                .unwrap()
+                .report_due(now)
+        };
+        assert!(concentration::set_measured(&mut co2, Some(0.045)));
+        assert!(!due(&co2));
+        assert!(concentration::set_measured(&mut co2, Some(0.065)));
+        assert!(due(&co2));
     }
 }

@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* `panweave-zcl::clusters::measurement::{scalar, concentration}`: the
+  Electrical Conductivity, pH and Wind Speed clusters (ZCL8 §4.10–4.12)
+  and the Concentration Measurement clusters 0x040c–0x0429 (§4.13,
+  single-precision fractions); reportable changes of single / double
+  precision attributes are floating-point magnitudes
+  (`attribute::float_change`) in Configure Reporting, Read Reporting
+  Configuration and the change detection.
 * `panweave-zcl::clusters::configuration`: Device Temperature
   Configuration (§3.4, threshold dwell timers raising through the
   Alarms server), On/Off Switch Configuration (§3.9), Ballast
