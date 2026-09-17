@@ -70,14 +70,14 @@ pub enum BuildError {
     Full,
 }
 
-fn server_instance(id: ClusterId) -> Result<ClusterInstance<24>, BuildError> {
+fn server_instance(id: ClusterId) -> Result<ClusterInstance<36>, BuildError> {
     if let Some(r) = se::server(id) {
         return r.map_err(|_| BuildError::Full);
     }
     endpoints::server(id).ok_or(BuildError::Unimplemented(id))
 }
 
-fn client_instance(id: ClusterId) -> Result<ClusterInstance<24>, BuildError> {
+fn client_instance(id: ClusterId) -> Result<ClusterInstance<36>, BuildError> {
     if let Some(r) = se::client(id) {
         return r.map_err(|_| BuildError::Full);
     }

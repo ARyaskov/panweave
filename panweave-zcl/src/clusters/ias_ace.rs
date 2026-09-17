@@ -776,7 +776,7 @@ mod tests {
         }
     }
 
-    fn cie() -> ClusterInstance<24> {
+    fn cie() -> ClusterInstance<36> {
         let mut c = server(Some(Code::new(b"1234").unwrap()));
         for (id, status) in [(0, 0), (1, 1), (2, 0), (17, 0x0003)] {
             add_zone(&mut c, zone(id, status)).unwrap();
@@ -784,7 +784,7 @@ mod tests {
         c
     }
 
-    fn arm(c: &mut ClusterInstance<24>, mode: u8, code: &[u8]) -> Outcome {
+    fn arm(c: &mut ClusterInstance<36>, mode: u8, code: &[u8]) -> Outcome {
         let mut buf = [0u8; 16];
         let n = encode_arm(mode, code, 0xff, &mut buf).unwrap();
         handle(c, CMD_ARM, &buf[..n])
@@ -874,7 +874,7 @@ mod tests {
             ZclStatus::InvalidField
         );
         // A code-less panel accepts an empty code.
-        let mut open: ClusterInstance<24> = server(None);
+        let mut open: ClusterInstance<36> = server(None);
         let o = arm(&mut open, arm_mode::ALL, &[]);
         assert_eq!(
             o.response.unwrap().payload.as_slice(),

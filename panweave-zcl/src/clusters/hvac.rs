@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn setpoints_limits_dead_band_and_running_mode() {
-        let mut c: ClusterInstance<24> = server(Capability::HeatingAndCooling).unwrap();
+        let mut c: ClusterInstance<36> = server(Capability::HeatingAndCooling).unwrap();
         let g = c.write_guard.unwrap();
         // 20 °C heat / 26 °C cool; a cool setpoint within 2.5 °C of heat
         // is INVALID_VALUE, as is one beyond the limits.
@@ -827,7 +827,7 @@ mod tests {
         apply_scene_fields(&mut c, &f);
         assert_eq!(c.i16(OCCUPIED_HEATING_SETPOINT.id), Some(2500));
         // A heating-only valve has no cooling setpoint or dead band.
-        let v: ClusterInstance<24> = server(Capability::Heating).unwrap();
+        let v: ClusterInstance<36> = server(Capability::Heating).unwrap();
         assert!(v.i16(OCCUPIED_COOLING_SETPOINT.id).is_none());
         assert_eq!(
             v.u8(CONTROL_SEQUENCE_OF_OPERATION.id),

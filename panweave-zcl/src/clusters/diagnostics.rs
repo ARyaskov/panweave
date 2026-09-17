@@ -111,16 +111,42 @@ pub struct Counters {
     pub resets: Option<u16>,
     /// Persistent memory writes.
     pub persistent_writes: Option<u16>,
+    /// MAC broadcast receptions.
+    pub mac_rx_bcast: Option<u32>,
+    /// MAC broadcast transmissions.
+    pub mac_tx_bcast: Option<u32>,
+    /// MAC unicast receptions.
+    pub mac_rx_ucast: Option<u32>,
     /// MAC unicast transmissions.
     pub mac_tx_ucast: Option<u32>,
+    /// MAC unicast retransmissions.
+    pub mac_tx_ucast_retry: Option<u16>,
     /// MAC unicast transmission failures.
     pub mac_tx_ucast_fail: Option<u16>,
+    /// APS broadcast receptions.
+    pub aps_rx_bcast: Option<u16>,
+    /// APS broadcast transmissions.
+    pub aps_tx_bcast: Option<u16>,
+    /// APS unicast receptions.
+    pub aps_rx_ucast: Option<u16>,
+    /// APS unicast transmissions confirmed.
+    pub aps_tx_ucast_success: Option<u16>,
     /// APS unicast retransmissions.
     pub aps_tx_ucast_retry: Option<u16>,
     /// APS unicast transmissions that failed after all retries.
     pub aps_tx_ucast_fail: Option<u16>,
     /// Route discoveries initiated.
     pub route_disc_initiated: Option<u16>,
+    /// Neighbor table entries added.
+    pub neighbor_added: Option<u16>,
+    /// Neighbor table entries removed.
+    pub neighbor_removed: Option<u16>,
+    /// Neighbor table entries gone stale.
+    pub neighbor_stale: Option<u16>,
+    /// Join indications.
+    pub join_indication: Option<u16>,
+    /// Children that moved to another parent.
+    pub child_moved: Option<u16>,
     /// NWK frame counter failures (replays).
     pub nwk_fc_failure: Option<u16>,
     /// APS frame counter failures.
@@ -137,6 +163,10 @@ pub struct Counters {
     pub relayed_ucast: Option<u16>,
     /// Frames dropped by validation.
     pub packet_validate_drop_count: Option<u16>,
+    /// Frames refused because the MAC transmit queue was full.
+    pub phy_to_mac_queue_limit_reached: Option<u16>,
+    /// Average MAC retries per APS message sent.
+    pub average_mac_retry_per_aps_message_sent: Option<u16>,
     /// LQI of the last received message.
     pub last_lqi: Option<u8>,
     /// RSSI of the last received message.
@@ -147,11 +177,24 @@ pub struct Counters {
 pub const SERVER_ATTRIBUTES: &[AttributeDef] = &[
     NUMBER_OF_RESETS,
     PERSISTENT_MEMORY_WRITES,
+    MAC_RX_BCAST,
+    MAC_TX_BCAST,
+    MAC_RX_UCAST,
     MAC_TX_UCAST,
+    MAC_TX_UCAST_RETRY,
     MAC_TX_UCAST_FAIL,
+    APS_RX_BCAST,
+    APS_TX_BCAST,
+    APS_RX_UCAST,
+    APS_TX_UCAST_SUCCESS,
     APS_TX_UCAST_RETRY,
     APS_TX_UCAST_FAIL,
     ROUTE_DISC_INITIATED,
+    NEIGHBOR_ADDED,
+    NEIGHBOR_REMOVED,
+    NEIGHBOR_STALE,
+    JOIN_INDICATION,
+    CHILD_MOVED,
     NWK_FC_FAILURE,
     APS_FC_FAILURE,
     APS_UNAUTHORIZED_KEY,
@@ -159,7 +202,9 @@ pub const SERVER_ATTRIBUTES: &[AttributeDef] = &[
     APS_DECRYPT_FAILURES,
     PACKET_BUFFER_ALLOCATE_FAILURES,
     RELAYED_UCAST,
+    PHY_TO_MAC_QUEUE_LIMIT_REACHED,
     PACKET_VALIDATE_DROP_COUNT,
+    AVERAGE_MAC_RETRY_PER_APS_MESSAGE_SENT,
     LAST_MESSAGE_LQI,
     LAST_MESSAGE_RSSI,
 ];
@@ -193,19 +238,46 @@ fn set_u16<const A: usize>(c: &mut ClusterInstance<A>, def: AttributeDef, v: Opt
 pub fn update<const A: usize>(c: &mut ClusterInstance<A>, k: &Counters) {
     set_u16(c, NUMBER_OF_RESETS, k.resets);
     set_u16(c, PERSISTENT_MEMORY_WRITES, k.persistent_writes);
-    if let Some(v) = k.mac_tx_ucast {
-        c.set(
-            MAC_TX_UCAST.id,
-            &Value::Uint {
-                width: 4,
-                value: u64::from(v),
-            },
-        );
+    for (def, v) in [
+        (MAC_RX_BCAST, k.mac_rx_bcast),
+        (MAC_TX_BCAST, k.mac_tx_bcast),
+        (MAC_RX_UCAST, k.mac_rx_ucast),
+        (MAC_TX_UCAST, k.mac_tx_ucast),
+    ] {
+        if let Some(v) = v {
+            c.set(
+                def.id,
+                &Value::Uint {
+                    width: 4,
+                    value: u64::from(v),
+                },
+            );
+        }
     }
+    set_u16(c, MAC_TX_UCAST_RETRY, k.mac_tx_ucast_retry);
     set_u16(c, MAC_TX_UCAST_FAIL, k.mac_tx_ucast_fail);
+    set_u16(c, APS_RX_BCAST, k.aps_rx_bcast);
+    set_u16(c, APS_TX_BCAST, k.aps_tx_bcast);
+    set_u16(c, APS_RX_UCAST, k.aps_rx_ucast);
+    set_u16(c, APS_TX_UCAST_SUCCESS, k.aps_tx_ucast_success);
     set_u16(c, APS_TX_UCAST_RETRY, k.aps_tx_ucast_retry);
     set_u16(c, APS_TX_UCAST_FAIL, k.aps_tx_ucast_fail);
     set_u16(c, ROUTE_DISC_INITIATED, k.route_disc_initiated);
+    set_u16(c, NEIGHBOR_ADDED, k.neighbor_added);
+    set_u16(c, NEIGHBOR_REMOVED, k.neighbor_removed);
+    set_u16(c, NEIGHBOR_STALE, k.neighbor_stale);
+    set_u16(c, JOIN_INDICATION, k.join_indication);
+    set_u16(c, CHILD_MOVED, k.child_moved);
+    set_u16(
+        c,
+        PHY_TO_MAC_QUEUE_LIMIT_REACHED,
+        k.phy_to_mac_queue_limit_reached,
+    );
+    set_u16(
+        c,
+        AVERAGE_MAC_RETRY_PER_APS_MESSAGE_SENT,
+        k.average_mac_retry_per_aps_message_sent,
+    );
     set_u16(c, NWK_FC_FAILURE, k.nwk_fc_failure);
     set_u16(c, APS_FC_FAILURE, k.aps_fc_failure);
     set_u16(c, APS_UNAUTHORIZED_KEY, k.aps_unauthorized_key);
@@ -244,7 +316,7 @@ mod tests {
 
     #[test]
     fn counters_land_in_attributes() {
-        let mut c: ClusterInstance<24> = server().unwrap();
+        let mut c: ClusterInstance<36> = server().unwrap();
         update(
             &mut c,
             &Counters {

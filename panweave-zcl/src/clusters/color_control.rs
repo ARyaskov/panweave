@@ -1296,7 +1296,7 @@ mod tests {
     #[test]
     fn hue_directions_and_timed_transition() {
         let t0 = Instant::from_millis(0);
-        let mut c: ClusterInstance<32> = server(ALL, (153, 500)).unwrap();
+        let mut c: ClusterInstance<36> = server(ALL, (153, 500)).unwrap();
         // Move to hue 200 (of 254) the shortest way from 0: down through
         // the wrap, in 1 s.
         let out = handle(
@@ -1387,7 +1387,7 @@ mod tests {
     #[test]
     fn xy_temperature_and_color_loop() {
         let t0 = Instant::from_millis(0);
-        let mut c: ClusterInstance<32> = server(ALL, (153, 500)).unwrap();
+        let mut c: ClusterInstance<36> = server(ALL, (153, 500)).unwrap();
         // Move to colour in 1 s.
         handle(
             &mut c,

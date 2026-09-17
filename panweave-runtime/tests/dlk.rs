@@ -37,7 +37,7 @@ const ROUTER: ExtendedAddress = ExtendedAddress(0x00EE_0000_0000_0002);
 const JOINER: ExtendedAddress = ExtendedAddress(0x00EE_0000_0000_0003);
 const NETWORK_KEY: Key128 = Key128::from_bytes([0x77; 16]);
 
-fn endpoint() -> (SimpleDescriptor, EndpointInstance<8, 24>) {
+fn endpoint() -> (SimpleDescriptor, EndpointInstance<8, 36>) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,

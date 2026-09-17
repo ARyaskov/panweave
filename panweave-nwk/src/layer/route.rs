@@ -89,6 +89,7 @@ impl<
                 }
             }
         }
+        self.stats.route_discoveries = self.stats.route_discoveries.saturating_add(1);
         self.rreq_id = self.rreq_id.wrapping_add(1);
         let id = self.rreq_id;
         self.nib.next_routing_sequence();
@@ -142,6 +143,7 @@ impl<
         radius: Option<u8>,
         no_route_cache: bool,
     ) -> Result<(), NwkError> {
+        self.stats.route_discoveries = self.stats.route_discoveries.saturating_add(1);
         self.rreq_id = self.rreq_id.wrapping_add(1);
         let id = self.rreq_id;
         self.nib.next_routing_sequence();

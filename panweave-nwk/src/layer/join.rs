@@ -1561,6 +1561,7 @@ impl<
         let tlvs = self.pending_joiner_tlvs.take().unwrap_or_default();
         self.update_beacon_payload();
         self.push_action(NwkAction::Persist);
+        self.stats.join_indications = self.stats.join_indications.saturating_add(1);
         self.push_event(NwkEvent::JoinIndication {
             device,
             network_address: short,

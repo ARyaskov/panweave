@@ -1411,11 +1411,11 @@ mod tests {
 
     const T0: Instant = Instant::from_millis(1_000);
 
-    fn lock() -> ClusterInstance<24> {
+    fn lock() -> ClusterInstance<36> {
         server(lock_type::DEAD_BOLT, 4, true).unwrap()
     }
 
-    fn set_pin(c: &mut ClusterInstance<24>, id: u16, status: u8, kind: u8, pin: &[u8]) -> u8 {
+    fn set_pin(c: &mut ClusterInstance<36>, id: u16, status: u8, kind: u8, pin: &[u8]) -> u8 {
         let mut buf = [0u8; 16];
         let n = encode_set_pin_code(id, status, kind, pin, &mut buf).unwrap();
         let o = handle(c, CMD_SET_PIN_CODE, &buf[..n], T0, NO_TIME);
@@ -1424,7 +1424,7 @@ mod tests {
         f.payload[0]
     }
 
-    fn operate(c: &mut ClusterInstance<24>, cmd: CommandId, pin: &[u8], now: Instant) -> Outcome {
+    fn operate(c: &mut ClusterInstance<36>, cmd: CommandId, pin: &[u8], now: Instant) -> Outcome {
         let mut buf = [0u8; 16];
         let n = encode_operation(pin, &mut buf).unwrap();
         handle(c, cmd, &buf[..n], now, 1234)

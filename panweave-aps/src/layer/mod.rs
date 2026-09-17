@@ -476,6 +476,16 @@ pub struct ApsStats {
     pub events_dropped: u32,
     /// Actions dropped because the queue was full.
     pub actions_dropped: u32,
+    /// Broadcast data frames received.
+    pub rx_bcast: u32,
+    /// Unicast data frames received.
+    pub rx_ucast: u32,
+    /// Broadcast data frames sent.
+    pub tx_bcast: u32,
+    /// Unicast transmissions confirmed successful.
+    pub tx_ucast_success: u32,
+    /// Frames rejected by the incoming frame counter check.
+    pub fc_failures: u32,
 }
 
 /// Loopback delivery of a locally originated frame (group member or

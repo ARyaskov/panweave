@@ -494,6 +494,7 @@ impl<
         if let Some(n) = self.neighbors.by_short_mut(src) {
             n.relationship = Relationship::LostChild;
         }
+        self.stats.children_moved = self.stats.children_moved.saturating_add(1);
         self.push_event(NwkEvent::LostChild { device });
     }
 

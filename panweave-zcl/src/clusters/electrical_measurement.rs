@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn dc_server_tracks_extremes_and_alarms() {
-        let mut c: ClusterInstance<24> = server(Capability::DC).unwrap();
+        let mut c: ClusterInstance<36> = server(Capability::DC).unwrap();
         assert_eq!(
             c.u64(MEASUREMENT_TYPE.id),
             Some(u64::from(measurement_type::DC))
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn ac_server_readings_and_alarms() {
-        let mut c: ClusterInstance<24> = server(Capability::AC).unwrap();
+        let mut c: ClusterInstance<36> = server(Capability::AC).unwrap();
         assert_eq!(c.u16(ac::RMS_VOLTAGE.id), Some(ac::UNKNOWN_U16));
         c.set(
             ac::ALARMS_MASK.id,

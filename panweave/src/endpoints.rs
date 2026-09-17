@@ -25,7 +25,7 @@ use panweave_zcl::{ClusterDef, ClusterInstance, Role};
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 /// An endpoint definition: descriptor plus cluster instances.
-pub type Built = (SimpleDescriptor, EndpointInstance<8, 24>);
+pub type Built = (SimpleDescriptor, EndpointInstance<8, 36>);
 
 /// Clusters this crate can instantiate (server side).
 const IMPLEMENTED_SERVERS: &[ClusterId] = &[
@@ -101,7 +101,7 @@ pub fn unsupported_clusters(device: &DeviceType) -> Vec<ClusterId, 16> {
 }
 
 /// A server instance of `id` with its defaults, when implemented.
-pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
+pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
     match id {
         identify::ID => identify::server().ok(),
         groups::ID => groups::server().ok(),
@@ -170,7 +170,7 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
 }
 
 /// A client instance of `id`, when implemented.
-pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
+pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
     match id {
         identify::ID => Some(identify::client()),
         groups::ID => Some(groups::client()),
@@ -372,7 +372,7 @@ pub fn temperature_sensor(endpoint: Endpoint) -> Option<Built> {
 }
 
 /// Definition of a cluster instance for custom endpoints.
-pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<24> {
+pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<36> {
     ClusterInstance::new(def, role)
 }
 

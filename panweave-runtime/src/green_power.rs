@@ -87,7 +87,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         )
         .ok_or(EndpointError)?;
         let mut ep = EndpointInstance::new(gp_cluster::ENDPOINT, gp_cluster::PROFILE);
-        let client: ClusterInstance<24> = ClusterInstance::new(
+        let client: ClusterInstance<36> = ClusterInstance::new(
             ClusterDef {
                 id: gp_cluster::ID,
                 revision: gp_cluster::REVISION,

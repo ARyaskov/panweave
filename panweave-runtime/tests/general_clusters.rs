@@ -457,6 +457,17 @@ fn ias_zone_auto_enroll_request_and_status_notification() {
         .cluster(EP, diagnostics::ID, Role::Server)
         .unwrap();
     assert!(d.u64(diagnostics::MAC_TX_UCAST.id).unwrap() > 0);
+    assert!(d.u64(diagnostics::MAC_RX_UCAST.id).unwrap() > 0);
+    assert!(d.u64(diagnostics::MAC_RX_BCAST.id).unwrap() > 0);
+    assert!(d.u16(diagnostics::APS_RX_UCAST.id).unwrap() > 0);
+    assert!(d.u16(diagnostics::APS_TX_UCAST_SUCCESS.id).unwrap() > 0);
+    assert!(d.u16(diagnostics::NEIGHBOR_ADDED.id).unwrap() > 0);
+    assert_eq!(d.u16(diagnostics::JOIN_INDICATION.id), Some(0));
+    assert_eq!(d.u16(diagnostics::APS_FC_FAILURE.id), Some(0));
+    assert_eq!(
+        d.u16(diagnostics::PHY_TO_MAC_QUEUE_LIMIT_REACHED.id),
+        Some(0)
+    );
     assert_eq!(d.u8(diagnostics::LAST_MESSAGE_LQI.id), Some(200));
     assert_eq!(d.u16(diagnostics::NWK_DECRYPT_FAILURES.id), Some(0));
     assert!(!sim.stack(r).refresh_diagnostics(Endpoint(9)));

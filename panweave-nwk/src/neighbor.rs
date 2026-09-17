@@ -271,6 +271,12 @@ impl NeighborEntry {
 #[derive(Clone, Debug, Default)]
 pub struct NeighborTable<const N: usize> {
     entries: Vec<NeighborEntry, N>,
+    /// Entries added since start (Diagnostics `NeighborAdded`).
+    pub added: u32,
+    /// Entries removed since start (Diagnostics `NeighborRemoved`).
+    pub removed: u32,
+    /// Router entries that went stale (Diagnostics `NeighborStale`).
+    pub stale: u32,
 }
 
 /// Why an insertion failed.
@@ -286,6 +292,9 @@ impl<const N: usize> NeighborTable<N> {
     pub const fn new() -> Self {
         NeighborTable {
             entries: Vec::new(),
+            added: 0,
+            removed: 0,
+            stale: 0,
         }
     }
 
@@ -374,6 +383,7 @@ impl<const N: usize> NeighborTable<N> {
         self.entries
             .push(entry)
             .map_err(|_| NeighborTableError::Full)?;
+        self.added = self.added.saturating_add(1);
         let last = self.entries.len() - 1;
         Ok(&mut self.entries[last])
     }
@@ -381,18 +391,25 @@ impl<const N: usize> NeighborTable<N> {
     /// Removes the entry with `addr`.
     pub fn remove_extended(&mut self, addr: ExtendedAddress) -> Option<NeighborEntry> {
         let pos = self.entries.iter().position(|e| e.extended == addr)?;
+        self.removed = self.removed.saturating_add(1);
         Some(self.entries.swap_remove(pos))
     }
 
     /// Removes the entry with `addr`.
     pub fn remove_short(&mut self, addr: ShortAddress) -> Option<NeighborEntry> {
         let pos = self.entries.iter().position(|e| e.short == addr)?;
+        self.removed = self.removed.saturating_add(1);
         Some(self.entries.swap_remove(pos))
     }
 
     /// Removes entries matching `pred`.
     pub fn retain(&mut self, pred: impl FnMut(&NeighborEntry) -> bool) {
+        let before = self.entries.len();
         self.entries.retain(pred);
+        let gone = before.saturating_sub(self.entries.len());
+        self.removed = self
+            .removed
+            .saturating_add(u32::try_from(gone).unwrap_or(u32::MAX));
     }
 
     /// Number of child entries (authenticated or not).
@@ -444,6 +461,9 @@ impl<const N: usize> NeighborTable<N> {
                 newly_stale += 1;
             }
         }
+        self.stale = self
+            .stale
+            .saturating_add(u32::try_from(newly_stale).unwrap_or(u32::MAX));
         newly_stale
     }
 
@@ -484,6 +504,9 @@ impl<const N: usize> NeighborTable<N> {
             }
             keep
         });
+        self.removed = self
+            .removed
+            .saturating_add(u32::try_from(expired.len()).unwrap_or(u32::MAX));
         for e in self.entries.iter_mut() {
             if e.security_timer_secs != 0 {
                 e.security_timer_secs = e.security_timer_secs.saturating_sub(secs16);

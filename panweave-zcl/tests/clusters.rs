@@ -34,7 +34,7 @@ const CLIENT: ShortAddress = ShortAddress(0x1234);
 const EP: Endpoint = Endpoint(1);
 const T0: Instant = Instant::from_millis(1000);
 
-type Node = Zcl<2, 8, 24>;
+type Node = Zcl<2, 8, 36>;
 
 fn lamp() -> Node {
     let mut zcl = Node::new();

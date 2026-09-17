@@ -205,7 +205,10 @@ impl<
                     self.stats.security_dropped = self.stats.security_dropped.saturating_add(1);
                     return None;
                 }
-                Err(_) => {
+                Err(err) => {
+                    if err == SecurityError::BadFrameCounter {
+                        self.stats.fc_failures = self.stats.fc_failures.saturating_add(1);
+                    }
                     // §4.7.4.1.2.7: during a Trust Center rejoin an APS
                     // command that fails may come from a replacement
                     // Trust Center under the hashed link key.
@@ -256,6 +259,11 @@ impl<
                 self.handle_command(buf, start, end, &header, ctx, sec, view, depth)
             }
             FrameType::Data => {
+                if ctx.dst.is_broadcast() {
+                    self.stats.rx_bcast = self.stats.rx_bcast.saturating_add(1);
+                } else {
+                    self.stats.rx_ucast = self.stats.rx_ucast.saturating_add(1);
+                }
                 let start = payload_range.start;
                 let end = payload_range.end;
                 self.handle_data(buf, start, end, &header, ctx, sec)

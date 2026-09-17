@@ -454,6 +454,13 @@ Keep a Changelog; versions follow SemVer.
 * ZCL reporting: a report spanning several Report Attributes frames
   ends each frame with `AttributeReportingStatus` (Pending / Complete,
   ZCL8 §2.3.4.5.2).
+* Diagnostics cluster (ZCL8 §3.15): every attribute is instantiated
+  and fed by the stack — MAC broadcast / unicast receptions and
+  transmissions, retries, failures and queue overflows
+  (`MacService::stats`), APS broadcast / unicast traffic, successes and
+  frame counter failures, route discoveries initiated, neighbor table
+  additions / removals / stale entries, join indications, children that
+  moved and the average MAC retries per APS message.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
@@ -505,9 +512,10 @@ Keep a Changelog; versions follow SemVer.
   sleepy child could previously be overtaken by later transmissions the
   child overheard and be dropped as a replay. A device's own broadcast
   copies for sleepy children take the same path.
-* The runtime's ZCL attribute capacity per cluster instance is 24
-  (`Zcl<2, 8, 24>`, `EndpointInstance<8, 24>`) so a full-capability
-  Color Control server fits; scene extension field sets hold 32 octets.
+* The runtime's ZCL attribute capacity per cluster instance is 36
+  (`Zcl<2, 8, 36>`, `EndpointInstance<8, 36>`) so a full-capability
+  Color Control server and the complete Diagnostics server fit; scene
+  extension field sets hold 32 octets.
 
 * On/Off commands are no longer delivered to the application as
   `StackEvent::ZclCommand`: the stack applies them and reports

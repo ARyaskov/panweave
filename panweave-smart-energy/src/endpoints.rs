@@ -54,7 +54,7 @@ fn bits(width: u8, bits: u64) -> Value<'static> {
 
 /// A server instance of `id` with its mandatory attributes at their
 /// defaults, or `None` for a cluster this crate does not provide.
-pub fn server(id: ClusterId) -> Option<Result<ClusterInstance<24>, ZclStatus>> {
+pub fn server(id: ClusterId) -> Option<Result<ClusterInstance<36>, ZclStatus>> {
     Some(match id {
         cluster::KEY_ESTABLISHMENT => key_establishment::server(ALL_SUITES),
         cluster::PRICE => Ok(ClusterInstance::new(price::SERVER_DEF, Role::Server)),
@@ -88,7 +88,7 @@ pub fn server(id: ClusterId) -> Option<Result<ClusterInstance<24>, ZclStatus>> {
 }
 
 /// A client instance of `id` with its mandatory attributes, or `None`.
-pub fn client(id: ClusterId) -> Option<Result<ClusterInstance<24>, ZclStatus>> {
+pub fn client(id: ClusterId) -> Option<Result<ClusterInstance<36>, ZclStatus>> {
     Some(match id {
         cluster::KEY_ESTABLISHMENT => key_establishment::client(ALL_SUITES),
         cluster::PRICE => Ok(ClusterInstance::new(price::CLIENT_DEF, Role::Client)),
@@ -116,7 +116,7 @@ pub fn client(id: ClusterId) -> Option<Result<ClusterInstance<24>, ZclStatus>> {
 
 /// A Metering server with the Table D-11 / D-24 / D-25 mandatory
 /// attributes: an electric kWh meter reading zero.
-pub fn metering_server() -> Result<ClusterInstance<24>, ZclStatus> {
+pub fn metering_server() -> Result<ClusterInstance<36>, ZclStatus> {
     let mut c = ClusterInstance::new(metering::SERVER_DEF, Role::Server);
     c.add_attribute(metering::CURRENT_SUMMATION_DELIVERED, &uint(6, 0))?;
     c.add_attribute(metering::STATUS, &bits(1, 0))?;
@@ -136,7 +136,7 @@ pub fn metering_server() -> Result<ClusterInstance<24>, ZclStatus> {
 
 /// A DRLC client with the Table D-7 attributes at their defaults for
 /// a device of `device_class` bits.
-pub fn drlc_client_for(device_class: u16) -> Result<ClusterInstance<24>, ZclStatus> {
+pub fn drlc_client_for(device_class: u16) -> Result<ClusterInstance<36>, ZclStatus> {
     let mut c = ClusterInstance::new(drlc::CLIENT_DEF, Role::Client);
     c.add_attribute(drlc::UTILITY_ENROLLMENT_GROUP, &uint(1, 0))?;
     c.add_attribute(
@@ -148,12 +148,12 @@ pub fn drlc_client_for(device_class: u16) -> Result<ClusterInstance<24>, ZclStat
     Ok(c)
 }
 
-fn drlc_client() -> Result<ClusterInstance<24>, ZclStatus> {
+fn drlc_client() -> Result<ClusterInstance<36>, ZclStatus> {
     drlc_client_for(drlc::device_class::SIMPLE_MISC_LOADS)
 }
 
 /// A Prepayment server with the mandatory information-set attributes.
-pub fn prepayment_server() -> Result<ClusterInstance<24>, ZclStatus> {
+pub fn prepayment_server() -> Result<ClusterInstance<36>, ZclStatus> {
     let mut c = ClusterInstance::new(prepayment::SERVER_DEF, Role::Server);
     let def = |id: panweave_types::AttributeId, ty| AttributeDef::new(id.0, ty, Access::RO);
     c.add_attribute(
@@ -175,7 +175,7 @@ pub fn prepayment_server() -> Result<ClusterInstance<24>, ZclStatus> {
 }
 
 /// An Energy Management server with the Table D-192 attributes.
-pub fn energy_management_server() -> Result<ClusterInstance<24>, ZclStatus> {
+pub fn energy_management_server() -> Result<ClusterInstance<36>, ZclStatus> {
     let mut c = ClusterInstance::new(energy_management::SERVER_DEF, Role::Server);
     c.add_attribute(energy_management::LOAD_CONTROL_STATE, &bits(1, 0))?;
     c.add_attribute(

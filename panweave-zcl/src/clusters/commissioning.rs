@@ -660,7 +660,7 @@ pub fn encode_index(options: u8, index: u8, out: &mut [u8]) -> Result<usize, Cod
 mod tests {
     use super::*;
 
-    fn cs() -> ClusterInstance<24> {
+    fn cs() -> ClusterInstance<36> {
         let mut set = StartupSet::default();
         set.extended_pan_id = 0x1122_3344_5566_7788;
         set.network_key = Key128::from_bytes([7; 16]);
@@ -851,7 +851,7 @@ mod tests {
             guard(&c.attributes, STARTUP_CONTROL.id, &Value::Enum8(2)),
             ZclStatus::Success
         );
-        let mut d: ClusterInstance<24> = server(&StartupSet::default()).unwrap();
+        let mut d: ClusterInstance<36> = server(&StartupSet::default()).unwrap();
         assert_eq!(
             guard(&d.attributes, STARTUP_CONTROL.id, &Value::Enum8(2)),
             ZclStatus::Failure,

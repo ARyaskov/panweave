@@ -684,6 +684,17 @@ pub struct NwkStats {
     pub unknown_commands: u32,
     /// Frames dropped because no route existed.
     pub no_route: u32,
+    /// Broadcasts originated by this device.
+    pub broadcasts_sent: u32,
+    /// Broadcasts received (new transactions).
+    pub broadcasts_received: u32,
+    /// Route discoveries this device initiated.
+    pub route_discoveries: u32,
+    /// Join indications (children joined or rejoined).
+    pub join_indications: u32,
+    /// Children that moved to another parent (rejoined elsewhere or
+    /// claimed by another router).
+    pub children_moved: u32,
 }
 
 impl<

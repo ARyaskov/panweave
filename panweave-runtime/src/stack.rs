@@ -31,7 +31,7 @@ pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
 pub type StackZdo = Zdo<4>;
 /// ZCL with 2 endpoints × 8 clusters × 16 attributes.
-pub type StackZcl = Zcl<2, 8, 24>;
+pub type StackZcl = Zcl<2, 8, 36>;
 
 /// Queue capacity for stack events.
 pub const EVENT_CAPACITY: usize = 16;
@@ -776,7 +776,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        mut instance: EndpointInstance<8, 24>,
+        mut instance: EndpointInstance<8, 36>,
     ) -> Result<(), EndpointError> {
         if instance
             .cluster(basic::ID, panweave_zcl::Role::Server)

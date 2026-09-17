@@ -416,12 +416,34 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         use panweave_zcl::clusters::diagnostics::{self, Counters, wrap16};
         let nwk = self.nwk.stats;
         let aps = self.aps.stats;
+        let mac = self.mac.stats;
+        let neighbors = &self.nwk.neighbors;
+        let aps_sent = aps.tx_ucast_success.saturating_add(aps.ack_failures);
         let counters = Counters {
-            mac_tx_ucast: Some(u32::from(self.nwk.nib.tx_total)),
-            mac_tx_ucast_fail: Some(self.nwk.nib.tx_failures),
+            mac_rx_bcast: Some(mac.rx_bcast),
+            mac_tx_bcast: Some(mac.tx_bcast),
+            mac_rx_ucast: Some(mac.rx_ucast),
+            mac_tx_ucast: Some(mac.tx_ucast),
+            mac_tx_ucast_retry: Some(wrap16(mac.tx_ucast_retry)),
+            mac_tx_ucast_fail: Some(wrap16(mac.tx_ucast_fail)),
+            aps_rx_bcast: Some(wrap16(aps.rx_bcast)),
+            aps_tx_bcast: Some(wrap16(aps.tx_bcast)),
+            aps_rx_ucast: Some(wrap16(aps.rx_ucast)),
+            aps_tx_ucast_success: Some(wrap16(aps.tx_ucast_success)),
             aps_tx_ucast_retry: Some(wrap16(aps.retries)),
             aps_tx_ucast_fail: Some(wrap16(aps.ack_failures)),
+            route_disc_initiated: Some(wrap16(nwk.route_discoveries)),
+            neighbor_added: Some(wrap16(neighbors.added)),
+            neighbor_removed: Some(wrap16(neighbors.removed)),
+            neighbor_stale: Some(wrap16(neighbors.stale)),
+            join_indication: Some(wrap16(nwk.join_indications)),
+            child_moved: Some(wrap16(nwk.children_moved)),
+            phy_to_mac_queue_limit_reached: Some(wrap16(mac.queue_limit_reached)),
+            average_mac_retry_per_aps_message_sent: Some(wrap16(
+                mac.tx_ucast_retry.checked_div(aps_sent).unwrap_or(0),
+            )),
             nwk_fc_failure: Some(wrap16(nwk.replays)),
+            aps_fc_failure: Some(wrap16(aps.fc_failures)),
             aps_unauthorized_key: Some(wrap16(aps.policy_dropped)),
             nwk_decrypt_failures: Some(wrap16(nwk.security_failures)),
             aps_decrypt_failures: Some(wrap16(aps.security_dropped)),

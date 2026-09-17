@@ -480,6 +480,27 @@ impl Default for Pib {
     }
 }
 
+/// Traffic counters of the MAC service (the Diagnostics cluster's MAC
+/// attributes, ZCL8 §3.15.2.2.2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct MacStats {
+    /// Broadcast data frames received.
+    pub rx_bcast: u32,
+    /// Broadcast data frames transmitted.
+    pub tx_bcast: u32,
+    /// Unicast data frames received.
+    pub rx_ucast: u32,
+    /// Unicast data transactions started.
+    pub tx_ucast: u32,
+    /// Retransmissions of unicast data frames.
+    pub tx_ucast_retry: u32,
+    /// Unicast data transactions that failed after all retries.
+    pub tx_ucast_fail: u32,
+    /// Frames refused because the transmit queue was full.
+    pub queue_limit_reached: u32,
+}
+
 /// The MAC service state machine.
 pub struct MacService {
     config: MacServiceConfig,
@@ -502,6 +523,8 @@ pub struct MacService {
     now: Instant,
     /// Power Control Information Table (Annex D.11.2.3).
     power: PowerControlTable<POWER_ENTRIES>,
+    /// Traffic counters.
+    pub stats: MacStats,
 }
 
 impl MacService {
@@ -528,6 +551,7 @@ impl MacService {
             config_dirty: true,
             now: Instant::ZERO,
             power: PowerControlTable::new(config_limits),
+            stats: MacStats::default(),
         }
     }
 
@@ -780,6 +804,9 @@ impl MacService {
     }
 
     fn enqueue(&mut self, q: QueuedTx) -> Result<(), MacError> {
+        if self.tx_queue.is_full() {
+            self.stats.queue_limit_reached = self.stats.queue_limit_reached.saturating_add(1);
+        }
         self.tx_queue.push_back(q).map_err(|_| MacError::QueueFull)
     }
 
@@ -1268,6 +1295,16 @@ impl MacService {
             InFlightKind::Data { handle } | InFlightKind::IndirectData { handle } => handle,
             _ => TxHandle(0),
         };
+        if matches!(
+            q.kind,
+            InFlightKind::Data { .. } | InFlightKind::IndirectData { .. }
+        ) {
+            if q.ack_request {
+                self.stats.tx_ucast = self.stats.tx_ucast.saturating_add(1);
+            } else {
+                self.stats.tx_bcast = self.stats.tx_bcast.saturating_add(1);
+            }
+        }
         let retries = if q.ack_request && !self.config.radio.retries {
             self.config.max_frame_retries
         } else {
@@ -1331,6 +1368,12 @@ impl MacService {
     }
 
     fn retransmit(&mut self, mut f: InFlight) {
+        if matches!(
+            f.kind,
+            InFlightKind::Data { .. } | InFlightKind::IndirectData { .. }
+        ) {
+            self.stats.tx_ucast_retry = self.stats.tx_ucast_retry.saturating_add(1);
+        }
         f.awaiting_tx = true;
         f.ack_deadline = None;
         let handle = match f.kind {
@@ -1359,6 +1402,9 @@ impl MacService {
             InFlightKind::Data { handle }
             | InFlightKind::IndirectData { handle }
             | InFlightKind::DeferredData { handle } => {
+                if f.ack_request && status != TxStatus::Success {
+                    self.stats.tx_ucast_fail = self.stats.tx_ucast_fail.saturating_add(1);
+                }
                 self.push_event(MacEvent::DataConfirm {
                     handle,
                     status,
@@ -1692,6 +1738,11 @@ impl MacService {
                 }
             }
             FrameType::Data => {
+                if h.dst.is_broadcast() {
+                    self.stats.rx_bcast = self.stats.rx_bcast.saturating_add(1);
+                } else {
+                    self.stats.rx_ucast = self.stats.rx_ucast.saturating_add(1);
+                }
                 if h.frame_control.ack_request() && !h.dst.is_broadcast() {
                     let pending = self.has_indirect_for(h.src, h.src.extended());
                     if let Some(seq) = h.sequence {

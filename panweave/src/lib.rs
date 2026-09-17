@@ -295,7 +295,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        instance: EndpointInstance<8, 24>,
+        instance: EndpointInstance<8, 36>,
     ) -> Result<(), EndpointError> {
         self.stack.add_endpoint(descriptor, instance)
     }

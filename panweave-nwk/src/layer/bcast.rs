@@ -42,6 +42,7 @@ impl<
         secure: bool,
     ) -> Result<(), NwkError> {
         let src = self.nib.network_address;
+        self.stats.broadcasts_sent = self.stats.broadcasts_sent.saturating_add(1);
         let sequence = *plaintext.get(7).unwrap_or(&0);
         let dst = ShortAddress(u16::from_le_bytes([
             *plaintext.get(2).unwrap_or(&0xFF),
@@ -277,6 +278,7 @@ impl<
             // Table full: drop without delivery or relay (§3.6.6).
             return false;
         }
+        self.stats.broadcasts_received = self.stats.broadcasts_received.saturating_add(1);
         // Relay after jitter when we are a started router and the radius
         // permits (radius is decremented once on reception).
         if self.nib.is_router_or_coordinator() && self.nib.router_started && radius > 1 {

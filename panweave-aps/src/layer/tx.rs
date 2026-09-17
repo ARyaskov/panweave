@@ -817,6 +817,13 @@ impl<
             return;
         }
         let p = self.pending.swap_remove(idx);
+        if status.is_success() && p.kind == TxKind::Data {
+            if p.dst.is_broadcast() {
+                self.stats.tx_bcast = self.stats.tx_bcast.saturating_add(1);
+            } else {
+                self.stats.tx_ucast_success = self.stats.tx_ucast_success.saturating_add(1);
+            }
+        }
         if status.is_success()
             && let Some(PostAction::ReplaceKey { partner, key }) = p.post.clone()
         {

@@ -618,7 +618,7 @@ mod tests {
         encoder: false,
     };
 
-    fn blind() -> ClusterInstance<24> {
+    fn blind() -> ClusterInstance<36> {
         server(covering_type::TILT_BLIND_LIFT_AND_TILT, LIFT, TILT).unwrap()
     }
 
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(lift_percentage(&c), None);
         assert!(in_maintenance(&c));
 
-        let shade: ClusterInstance<24> = server(
+        let shade: ClusterInstance<36> = server(
             covering_type::ROLLERSHADE,
             Control::OpenLoop,
             Control::Unsupported,
@@ -720,7 +720,7 @@ mod tests {
             Outcome::Default(ZclStatus::UnsupportedClusterCommand)
         );
 
-        let mut shade: ClusterInstance<24> = server(
+        let mut shade: ClusterInstance<36> = server(
             covering_type::ROLLERSHADE,
             Control::OpenLoop,
             Control::Unsupported,
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(apply_scene_fields(&c, &[0xff, 0xff], 25), None);
         assert_eq!(apply_scene_fields(&c, &[40], 25), None);
 
-        let mut shade: ClusterInstance<24> = server(
+        let mut shade: ClusterInstance<36> = server(
             covering_type::ROLLERSHADE,
             Control::OpenLoop,
             Control::Unsupported,

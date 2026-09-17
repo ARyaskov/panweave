@@ -1826,6 +1826,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         for child in rsp.children.iter() {
             if self.nwk.neighbors.remove_extended(child).is_some() {
                 removed = true;
+                self.nwk.stats.children_moved = self.nwk.stats.children_moved.saturating_add(1);
                 self.push_event(StackEvent::ChildClaimed {
                     ieee: child,
                     by: src,
