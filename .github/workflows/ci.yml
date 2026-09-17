@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gate:
+    name: fmt / clippy / test / doc / conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo check --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo test --doc --workspace
+      - run: cargo run --quiet -p xtask -- conformance --check
+      - name: no_std builds
+        run: |
+          for crate in panweave-types panweave-codec panweave-mac panweave-security panweave-nwk panweave-aps panweave-zdo panweave-zcl panweave-storage panweave-runtime panweave-bdb panweave-device-library panweave-green-power panweave-direct panweave-smart-energy panweave; do
+            cargo build -p "$crate" --no-default-features --target thumbv7em-none-eabihf
+          done
+
+  feature-matrix:
+    name: feature matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: ["", "std", "alloc", "serde", "defmt"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: build with features "${{ matrix.features }}"
+        run: cargo build --workspace --no-default-features ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
+
+  msrv:
+    name: MSRV 1.95
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
+  fuzz-build:
+    name: fuzz targets build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz build
+      - name: short fuzz smoke run
+        run: |
+          for t in $(cargo fuzz list); do
+            cargo fuzz run "$t" -- -max_total_time=20 -max_len=256
+          done
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

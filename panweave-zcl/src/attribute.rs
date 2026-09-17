@@ -143,9 +143,7 @@ impl Attribute {
     }
 
     fn store(&mut self, v: &Value<'_>) -> Result<(), ZclStatus> {
-        if v.data_type() != self.def.ty
-            && !matches!((v.data_type(), self.def.ty), (DataType::Bitmap(a), DataType::Data(b)) if a == b)
-        {
+        if v.data_type() != self.def.ty {
             return Err(ZclStatus::InvalidDataType);
         }
         let mut buf = [0u8; MAX_ATTRIBUTE_BYTES];

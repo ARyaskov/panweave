@@ -1,0 +1,77 @@
+[package]
+name = "panweave-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+panweave-types = { path = "../panweave-types" }
+panweave-codec = { path = "../panweave-codec" }
+panweave-mac = { path = "../panweave-mac" }
+panweave-security = { path = "../panweave-security", features = ["crypto-software"] }
+panweave-nwk = { path = "../panweave-nwk" }
+panweave-aps = { path = "../panweave-aps" }
+panweave-zdo = { path = "../panweave-zdo" }
+panweave-zcl = { path = "../panweave-zcl" }
+
+[[bin]]
+name = "mac_frame"
+path = "fuzz_targets/mac_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "nwk_frame"
+path = "fuzz_targets/nwk_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "aps_frame"
+path = "fuzz_targets/aps_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "zdp_frame"
+path = "fuzz_targets/zdp_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "zcl_frame"
+path = "fuzz_targets/zcl_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "tlv"
+path = "fuzz_targets/tlv.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "security_frame"
+path = "fuzz_targets/security_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "mac_service"
+path = "fuzz_targets/mac_service.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "aps_rx"
+path = "fuzz_targets/aps_rx.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = 1

@@ -249,7 +249,14 @@ pub enum Value<'a> {
     NoData,
     /// Boolean; `None` is the invalid value 0xff.
     Bool(Option<bool>),
-    /// General data or bitmap of `width` octets.
+    /// General data of `width` octets.
+    Data {
+        /// Octets.
+        width: u8,
+        /// Value.
+        bits: u64,
+    },
+    /// Bitmap of `width` octets.
     Bits {
         /// Octets.
         width: u8,
@@ -323,6 +330,7 @@ impl<'a> Value<'a> {
         match self {
             Value::NoData => DataType::NoData,
             Value::Bool(_) => DataType::Bool,
+            Value::Data { width, .. } => DataType::Data(*width),
             Value::Bits { width, .. } => DataType::Bitmap(*width),
             Value::Uint { width, .. } => DataType::Uint(*width),
             Value::Int { width, .. } => DataType::Int(*width),
@@ -356,7 +364,11 @@ impl<'a> Value<'a> {
                     });
                 }
             }),
-            DataType::Data(n) | DataType::Bitmap(n) => Value::Bits {
+            DataType::Data(n) => Value::Data {
+                width: n,
+                bits: r.uint_le(usize::from(n))?,
+            },
+            DataType::Bitmap(n) => Value::Bits {
                 width: n,
                 bits: r.uint_le(usize::from(n))?,
             },
@@ -426,9 +438,10 @@ impl<'a> Value<'a> {
         match self {
             Value::NoData => 0,
             Value::Bool(_) | Value::Enum8(_) => 1,
-            Value::Bits { width, .. } | Value::Uint { width, .. } | Value::Int { width, .. } => {
-                usize::from(*width)
-            }
+            Value::Data { width, .. }
+            | Value::Bits { width, .. }
+            | Value::Uint { width, .. }
+            | Value::Int { width, .. } => usize::from(*width),
             Value::Enum16(_) | Value::Semi(_) | Value::ClusterId(_) | Value::AttributeId(_) => 2,
             Value::Single(_) | Value::Time { .. } | Value::BacnetOid(_) => 4,
             Value::Double(_) | Value::Eui64(_) => 8,
@@ -450,7 +463,9 @@ impl<'a> Value<'a> {
         match self {
             Value::NoData => Ok(()),
             Value::Bool(b) => w.u8(b.map_or(0xff, u8::from)),
-            Value::Bits { width, bits } => w.uint_le(*bits, usize::from(*width)),
+            Value::Data { width, bits } | Value::Bits { width, bits } => {
+                w.uint_le(*bits, usize::from(*width))
+            }
             Value::Uint { width, value } => w.uint_le(*value, usize::from(*width)),
             Value::Int { width, value } =>
             {
@@ -504,7 +519,7 @@ impl<'a> Value<'a> {
     pub fn as_u64(&self) -> Option<u64> {
         Some(match self {
             Value::Bool(b) => u64::from(b.unwrap_or(false)),
-            Value::Bits { bits, .. } => *bits,
+            Value::Data { bits, .. } | Value::Bits { bits, .. } => *bits,
             Value::Uint { value, .. } => *value,
             #[allow(clippy::cast_sign_loss)]
             Value::Int { value, .. } => *value as u64,
