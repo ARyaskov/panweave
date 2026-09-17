@@ -1137,6 +1137,8 @@ pub struct Account {
     pub debts: Vec<DebtRecord, MAX_DEBT_RECORDS>,
     /// Outstanding debt per type (1–3).
     pub debt_remaining: [u32; 3],
+    /// When the payment mode last changed (0: never).
+    pub payment_mode_changed_at: u32,
 }
 
 impl Account {
@@ -1159,6 +1161,7 @@ impl Account {
             top_ups: Vec::new(),
             debts: Vec::new(),
             debt_remaining: [0; 3],
+            payment_mode_changed_at: 0,
         }
     }
 
@@ -1376,6 +1379,191 @@ impl Account {
             total_commands: 1,
             records,
         }
+    }
+}
+
+/// A timed prepayment command awaiting its start / implementation time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Timed {
+    /// Emergency Credit Setup.
+    EmergencyCredit(EmergencyCreditSetup),
+    /// Credit Adjustment.
+    CreditAdjustment(CreditAdjustment),
+    /// Change Payment Mode.
+    PaymentMode(ChangePaymentMode),
+    /// Set Maximum Credit Limit.
+    MaximumCredit(SetMaximumCreditLimit),
+    /// Set Overall Debt Cap.
+    DebtCap(SetOverallDebtCap),
+}
+
+impl Timed {
+    /// The command's start / implementation time.
+    pub const fn time(&self) -> u32 {
+        match self {
+            Timed::EmergencyCredit(c) => c.start_time,
+            Timed::CreditAdjustment(c) => c.start_time,
+            Timed::PaymentMode(c) => c.implementation_time,
+            Timed::MaximumCredit(c) => c.implementation_time,
+            Timed::DebtCap(c) => c.implementation_time,
+        }
+    }
+
+    /// Issuer event id.
+    pub const fn issuer_event_id(&self) -> u32 {
+        match self {
+            Timed::EmergencyCredit(c) => c.issuer_event_id,
+            Timed::CreditAdjustment(c) => c.issuer_event_id,
+            Timed::PaymentMode(c) => c.issuer_event_id,
+            Timed::MaximumCredit(c) => c.issuer_event_id,
+            Timed::DebtCap(c) => c.issuer_event_id,
+        }
+    }
+
+    /// Provider id, for the commands that carry one.
+    pub const fn provider_id(&self) -> Option<u32> {
+        match self {
+            Timed::EmergencyCredit(_) | Timed::CreditAdjustment(_) => None,
+            Timed::PaymentMode(c) => Some(c.provider_id),
+            Timed::MaximumCredit(c) => Some(c.provider_id),
+            Timed::DebtCap(c) => Some(c.provider_id),
+        }
+    }
+
+    const fn kind(&self) -> u8 {
+        match self {
+            Timed::EmergencyCredit(_) => 0,
+            Timed::CreditAdjustment(_) => 1,
+            Timed::PaymentMode(_) => 2,
+            Timed::MaximumCredit(_) => 3,
+            Timed::DebtCap(_) => 4,
+        }
+    }
+
+    /// Applies the command to the account at `now`.
+    pub fn apply(&self, account: &mut Account, now: u32) -> bool {
+        match self {
+            Timed::EmergencyCredit(c) => {
+                account.setup_emergency_credit(c);
+                true
+            }
+            Timed::CreditAdjustment(c) => account.adjust_credit(c),
+            Timed::PaymentMode(c) => {
+                account.configuration = c.proposed_configuration;
+                if c.cut_off_value != -1 {
+                    account.cut_off = c.cut_off_value;
+                }
+                account.payment_mode_changed_at = now;
+                true
+            }
+            Timed::MaximumCredit(c) => {
+                account.set_maximum_credit(c);
+                true
+            }
+            Timed::DebtCap(c) => {
+                account.overall_debt_cap = c.cap;
+                true
+            }
+        }
+    }
+}
+
+/// What the scheduler did with a timed command.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Scheduling {
+    /// Applied immediately.
+    Applied,
+    /// Queued for its time (replacing an older pending command of the
+    /// same kind).
+    Scheduled,
+    /// A pending command was cancelled.
+    Cancelled,
+    /// A cancellation named no pending command (NOT_FOUND).
+    NotFound,
+    /// Older than a pending command of the same kind: ignored.
+    Stale,
+    /// The command is malformed (FAILURE).
+    Rejected,
+}
+
+/// Scheduler of the timed prepayment commands (D.7.2.3.4, .6, .7, .11,
+/// .12): a start / implementation time of 0 applies now, 0xFFFFFFFF
+/// cancels the pending command with the same issuer event id (and
+/// provider, where carried), a newer pending command of the same kind
+/// replaces an older one, and [`Pending::poll`] applies due commands.
+#[derive(Clone, Debug, Default)]
+pub struct Pending {
+    queue: Vec<Timed, 8>,
+}
+
+impl Pending {
+    /// Nothing pending.
+    pub const fn new() -> Self {
+        Pending { queue: Vec::new() }
+    }
+
+    /// Schedules (or applies, or cancels) `cmd` at `now`.
+    pub fn schedule(&mut self, cmd: Timed, account: &mut Account, now: u32) -> Scheduling {
+        if cmd.time() == CANCEL {
+            let before = self.queue.len();
+            self.queue.retain(|p| {
+                !(p.kind() == cmd.kind()
+                    && p.issuer_event_id() == cmd.issuer_event_id()
+                    && p.provider_id() == cmd.provider_id())
+            });
+            return if self.queue.len() != before {
+                Scheduling::Cancelled
+            } else {
+                Scheduling::NotFound
+            };
+        }
+        if cmd.time() == IMMEDIATELY || cmd.time() <= now {
+            return if cmd.apply(account, now) {
+                Scheduling::Applied
+            } else {
+                Scheduling::Rejected
+            };
+        }
+        if self
+            .queue
+            .iter()
+            .any(|p| p.kind() == cmd.kind() && p.issuer_event_id() > cmd.issuer_event_id())
+        {
+            return Scheduling::Stale;
+        }
+        self.queue.retain(|p| p.kind() != cmd.kind());
+        match self.queue.push(cmd) {
+            Ok(()) => Scheduling::Scheduled,
+            Err(_) => Scheduling::Rejected,
+        }
+    }
+
+    /// Applies the commands whose time has come; returns them.
+    pub fn poll(&mut self, account: &mut Account, now: u32) -> Vec<Timed, 8> {
+        let mut due = Vec::new();
+        let mut i = 0;
+        while i < self.queue.len() {
+            if self.queue[i].time() <= now {
+                let cmd = self.queue.remove(i);
+                cmd.apply(account, now);
+                let _ = due.push(cmd);
+            } else {
+                i += 1;
+            }
+        }
+        due
+    }
+
+    /// When the next command is due.
+    pub fn next_deadline(&self) -> Option<u32> {
+        self.queue.iter().map(Timed::time).min()
+    }
+
+    /// The pending commands.
+    pub fn pending(&self) -> &[Timed] {
+        &self.queue
     }
 }
 
@@ -1736,5 +1924,117 @@ mod tests {
         assert_eq!(log.records.len(), 1);
         assert_eq!(attr::debt_amount(3), AttributeId(0x0231));
         assert_eq!(attr::top_up_code(5), AttributeId(0x0143));
+    }
+
+    #[test]
+    fn timed_commands_are_scheduled_cancelled_and_applied() {
+        let mut account = Account::new(0);
+        let mut pending = Pending::new();
+        let now = 1000;
+        let setup = EmergencyCreditSetup {
+            issuer_event_id: 1,
+            start_time: 5000,
+            limit: 500,
+            threshold: 100,
+        };
+        assert_eq!(
+            pending.schedule(Timed::EmergencyCredit(setup), &mut account, now),
+            Scheduling::Scheduled
+        );
+        assert_eq!(account.emergency_limit, 0);
+        // An older one is stale, a newer one replaces.
+        assert_eq!(
+            pending.schedule(
+                Timed::EmergencyCredit(EmergencyCreditSetup {
+                    issuer_event_id: 0,
+                    ..setup
+                }),
+                &mut account,
+                now
+            ),
+            Scheduling::Stale
+        );
+        assert_eq!(
+            pending.schedule(
+                Timed::EmergencyCredit(EmergencyCreditSetup {
+                    issuer_event_id: 2,
+                    limit: 600,
+                    ..setup
+                }),
+                &mut account,
+                now
+            ),
+            Scheduling::Scheduled
+        );
+        assert_eq!(pending.pending().len(), 1);
+        // Immediate commands apply at once.
+        let mode = ChangePaymentMode {
+            provider_id: 7,
+            issuer_event_id: 3,
+            implementation_time: IMMEDIATELY,
+            proposed_configuration: 0x0001,
+            cut_off_value: -1,
+        };
+        assert_eq!(
+            pending.schedule(Timed::PaymentMode(mode), &mut account, now),
+            Scheduling::Applied
+        );
+        assert_eq!(account.configuration, 0x0001);
+        assert_eq!(account.payment_mode_changed_at, now);
+        // A delayed debt cap, cancelled by provider and issuer event.
+        let cap = SetOverallDebtCap {
+            provider_id: 7,
+            issuer_event_id: 4,
+            implementation_time: 8000,
+            cap: 1000,
+        };
+        assert_eq!(
+            pending.schedule(Timed::DebtCap(cap), &mut account, now),
+            Scheduling::Scheduled
+        );
+        assert_eq!(pending.next_deadline(), Some(5000));
+        assert_eq!(
+            pending.schedule(
+                Timed::DebtCap(SetOverallDebtCap {
+                    provider_id: 8,
+                    implementation_time: CANCEL,
+                    ..cap
+                }),
+                &mut account,
+                now
+            ),
+            Scheduling::NotFound
+        );
+        assert_eq!(
+            pending.schedule(
+                Timed::DebtCap(SetOverallDebtCap {
+                    implementation_time: CANCEL,
+                    ..cap
+                }),
+                &mut account,
+                now
+            ),
+            Scheduling::Cancelled
+        );
+        // Due commands apply on poll.
+        assert!(pending.poll(&mut account, 4999).is_empty());
+        let due = pending.poll(&mut account, 5000);
+        assert_eq!(due.len(), 1);
+        assert_eq!(account.emergency_limit, 600);
+        assert_eq!(pending.next_deadline(), None);
+        // A reserved adjustment type is rejected.
+        assert_eq!(
+            pending.schedule(
+                Timed::CreditAdjustment(CreditAdjustment {
+                    issuer_event_id: 5,
+                    start_time: 0,
+                    adjustment_type: 0x77,
+                    value: 1,
+                }),
+                &mut account,
+                now
+            ),
+            Scheduling::Rejected
+        );
     }
 }

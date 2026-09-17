@@ -352,6 +352,11 @@ Keep a Changelog; versions follow SemVer.
   flags, supply control) with `FastPoll`, `Sampler`, `Snapshots` /
   `SnapshotAssembler`, `SupplyControl` and `MirrorTable` state helpers;
   `metering::FULL_SERVER_DEF` / `FULL_CLIENT_DEF`.
+* `panweave-smart-energy::clusters::prepayment::Pending`: the scheduler
+  of the timed prepayment commands (immediate / delayed / 0xFFFFFFFF
+  cancellation, newer replaces older, applied on poll), with
+  `Timed::apply` covering Change Payment Mode and Set Overall Debt Cap
+  on the `Account`.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
