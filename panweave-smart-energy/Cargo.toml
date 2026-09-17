@@ -21,6 +21,7 @@ panweave-types = { workspace = true }
 panweave-security = { workspace = true }
 panweave-codec = { workspace = true }
 panweave-zcl = { workspace = true }
+panweave-aps = { workspace = true }
 heapless = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
@@ -31,7 +32,6 @@ defmt = { workspace = true, optional = true }
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-sim = { workspace = true }
 panweave-runtime = { workspace = true, features = ["std"] }
-panweave-aps = { workspace = true }
 panweave-mac = { workspace = true }
 panweave-zdo = { workspace = true }
 panweave-storage = { workspace = true }

@@ -289,6 +289,15 @@ Keep a Changelog; versions follow SemVer.
   are never reported superseded and leave no artificial gap, and an
   event for a subset of the device classes supersedes only when it
   covers every class of the previous event this device has.
+* `panweave-aps::interpan`: the stub APS header now carries the
+  Security, ACK Request (APS counter) and Extended Header (fragment)
+  bits; `secure` / `unsecure` protect an inter-PAN frame with the
+  partner's APS link key. Group delivery is encoded as 0b11 per R23.2
+  §G.3.3 (it was 0b01).
+* `panweave-smart-energy::interpan`: the Annex B enhanced inter-PAN
+  policy — every cluster secured except Key Establishment, the
+  reception filter dropping non-conforming frames, and the B.6 channel
+  survey list picking the strongest receiver (ADR-0013).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

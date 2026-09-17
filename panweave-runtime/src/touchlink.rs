@@ -277,7 +277,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let Ok((ip, zcl)) = InterPanHeader::decode(frame.payload) else {
             return;
         };
-        if ip.cluster != tl::ID || ip.profile != tl::PROFILE_ID {
+        if ip.cluster != tl::ID || ip.profile != tl::PROFILE_ID || ip.secured {
             return;
         }
         let Ok((header, n)) = Header::decode_prefix(zcl) else {
@@ -487,13 +487,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> TouchlinkNode for Stack<C, R, S> 
         };
         let mut buf = [0u8; 100];
         let mut w = Writer::new(&mut buf);
-        InterPanHeader {
-            delivery,
-            cluster: tl::ID,
-            profile: tl::PROFILE_ID,
-        }
-        .encode(&mut w)
-        .map_err(|_| NodeError::Unsupported)?;
+        InterPanHeader::new(delivery, tl::ID, tl::PROFILE_ID)
+            .encode(&mut w)
+            .map_err(|_| NodeError::Unsupported)?;
         let header = Header::cluster_specific(TransactionSequence(seq), command, direction)
             .disable_default_response(true);
         ZclFrame { header, payload }

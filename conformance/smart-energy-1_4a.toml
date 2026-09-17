@@ -153,10 +153,10 @@ id = "PW-SE-CL-009"
 section = "Annex B"
 summary = "Enhanced inter-PAN transmission"
 level = "optional"
-status = "not-implemented"
-module = "panweave-aps::interpan"
-tests = []
-
+status = "requires-hardware-validation"
+module = "panweave-smart-energy::interpan"
+tests = ["security_policy_follows_annex_b", "survey_keeps_the_best_beacon_per_device", "secured_frames_round_trip_between_link_key_holders"]
+notes = "The stub APS header carries the Security / ACK Request (APS counter) / Extended Header bits of Figure B-7, group delivery uses 0b11, and panweave-aps::interpan::secure / unsecure protect a frame with the APS link key of the partner (extended nonce, replay refused). The SE policy of B.4 / B.8 (every cluster secured except Key Establishment, non-conforming frames dropped) and the B.6 channel-survey candidate list are in panweave-smart-energy::interpan. The exempt cluster is taken as 0x0800 and the authenticated data starts at the APS frame control (ADR-0013); both await a captured frame from another implementation. The runtime dispatches only touchlink inter-PAN frames; SE clusters over inter-PAN are driven by the application through the MAC service (TODO(PW-SE-INTERPAN-RUNTIME))."
 [[requirement]]
 id = "PW-SE-EV-001"
 section = "Annex E"
