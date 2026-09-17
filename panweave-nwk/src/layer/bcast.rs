@@ -6,7 +6,7 @@ use heapless::Vec;
 use panweave_security::cipher::BlockCipher;
 use panweave_types::{Instant, Rng, ShortAddress, ShortAddressKind};
 
-use super::{BroadcastBuf, NpduBuf, Nwk, NwkAction, NwkError};
+use super::{BroadcastBuf, NpduBuf, Nwk, NwkAction, NwkError, PendingTx, TxKind};
 use crate::broadcast::{BroadcastRecord, PASSIVE_ACK_TRACKED};
 use crate::nib::constants;
 
@@ -100,11 +100,23 @@ impl<
         if self.btt.insert(record, self.now).is_none() {
             return Err(NwkError::Busy);
         }
-        self.transmit_broadcast(src, sequence, on_air, dst, true)
+        self.transmit_broadcast(
+            src,
+            sequence,
+            on_air,
+            dst,
+            true,
+            Some((plaintext, header_len, secure)),
+        )
     }
 
     /// Transmits (or retransmits) a broadcast and arms the passive-ack
     /// timer.
+    ///
+    /// `own` carries the plaintext of a broadcast this device originates:
+    /// its copies for sleepy children are then secured only when each
+    /// child polls (fresh counters, §3.6.2.2). Relayed broadcasts keep
+    /// the originator's protection and are copied as received.
     fn transmit_broadcast(
         &mut self,
         src: ShortAddress,
@@ -112,6 +124,7 @@ impl<
         on_air: NpduBuf,
         dst: ShortAddress,
         first: bool,
+        own: Option<(NpduBuf, usize, bool)>,
     ) -> Result<(), NwkError> {
         let handle = self.alloc_mac_handle();
         self.push_action(NwkAction::MacData {
@@ -132,6 +145,27 @@ impl<
             }
         }
         for child in &sleepy {
+            if let Some((plaintext, header_len, secure)) = &own {
+                let id = self.alloc_tx_id();
+                let _ = self.transmit_pending(PendingTx {
+                    id,
+                    frame: plaintext.clone(),
+                    header_len: *header_len,
+                    dst: *child,
+                    next_hop: *child,
+                    mac_handle: None,
+                    retries_left: 0,
+                    retry_at: None,
+                    awaiting_route: false,
+                    secure: *secure,
+                    indirect: true,
+                    relayed_from: None,
+                    source_route: false,
+                    kind: TxKind::Command,
+                    created: self.now,
+                });
+                continue;
+            }
             let handle = self.alloc_mac_handle();
             self.push_action(NwkAction::MacData {
                 handle,
@@ -319,6 +353,7 @@ impl<
                 .iter()
                 .find(|b| b.source == src && b.sequence == seq)
                 .and_then(|b| b.plaintext.clone());
+            let own = parked.clone();
             if let Some((plain, header_len, secure)) = parked {
                 match self.finalize_frame(&plain, header_len, secure) {
                     Ok(on_air) => {
@@ -357,7 +392,7 @@ impl<
                     *frame.get(2).unwrap_or(&0xFF),
                     *frame.get(3).unwrap_or(&0xFF),
                 ]));
-                let _ = self.transmit_broadcast(src, seq, frame, dst, first);
+                let _ = self.transmit_broadcast(src, seq, frame, dst, first, own);
             } else if let Some(rec) = self.btt.get_mut(src, seq) {
                 rec.next_tx = None;
             }

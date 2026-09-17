@@ -322,6 +322,19 @@ impl<
     /// counter reservation is pending the entry is parked and retried by
     /// [`Self::service_pending`].
     pub(crate) fn transmit_pending(&mut self, mut entry: PendingTx) -> Result<(), NwkError> {
+        if entry.indirect {
+            // A sleepy child's frame is secured only when it polls
+            // (§3.6.2.2 freshness: a counter taken now could be overtaken
+            // by frames sent before the poll).
+            let handle = self.alloc_mac_handle();
+            entry.mac_handle = Some(handle);
+            entry.awaiting_route = false;
+            entry.retry_at = None;
+            let dst = entry.next_hop;
+            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+            self.push_action(NwkAction::MacDataDeferred { handle, dst });
+            return Ok(());
+        }
         let on_air = match self.finalize_frame(&entry.frame, entry.header_len, entry.secure) {
             Ok(f) => f,
             Err(NwkError::CounterPending) => {
@@ -460,6 +473,48 @@ impl<
             kind: TxKind::Command,
             created: self.now,
         });
+    }
+
+    /// The sleepy child a [`NwkAction::MacDataDeferred`] transaction was
+    /// registered for has polled and is listening: secure the frame now
+    /// and hand it to the MAC as a direct transmission under the same
+    /// handle.
+    pub fn on_mac_indirect_ready(&mut self, handle: TxHandle) {
+        let Some(pos) = self
+            .pending
+            .iter()
+            .position(|p| p.mac_handle == Some(handle))
+        else {
+            return;
+        };
+        let (frame, header_len, secure, dst) = {
+            let p = &self.pending[pos];
+            (p.frame.clone(), p.header_len, p.secure, p.next_hop)
+        };
+        match self.finalize_frame(&frame, header_len, secure) {
+            Ok(on_air) => {
+                self.nib.tx_total = self.nib.tx_total.saturating_add(1);
+                self.push_action(NwkAction::MacData {
+                    handle,
+                    dst,
+                    frame: on_air,
+                    ack: true,
+                    indirect: false,
+                });
+            }
+            Err(NwkError::CounterPending) => {
+                // The counter reservation is not committed yet: register
+                // the transaction again for the child's next poll.
+                let mut entry = self.pending.swap_remove(pos);
+                entry.mac_handle = None;
+                entry.retry_at = Some(self.now + COUNTER_RETRY_DELAY);
+                let _ = self.pending.push(entry);
+            }
+            Err(_) => {
+                let entry = self.pending.swap_remove(pos);
+                self.on_unicast_failed(entry, TxStatus::RadioError);
+            }
+        }
     }
 
     /// MCPS-DATA.confirm for a frame handed out via

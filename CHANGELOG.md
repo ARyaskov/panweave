@@ -422,6 +422,15 @@ Keep a Changelog; versions follow SemVer.
 
 ### Changed
 
+* Frames for sleepy children are secured when the child polls: the NWK
+  registers a deferred indirect transaction
+  (`NwkAction::MacDataDeferred`, `MacService::data_request_deferred`),
+  the MAC answers the poll with frame pending and raises
+  `MacEvent::IndirectReady`, and `Nwk::on_mac_indirect_ready` secures
+  and sends the frame directly with a fresh counter. A frame held for a
+  sleepy child could previously be overtaken by later transmissions the
+  child overheard and be dropped as a replay. A device's own broadcast
+  copies for sleepy children take the same path.
 * The runtime's ZCL attribute capacity per cluster instance is 24
   (`Zcl<2, 8, 24>`, `EndpointInstance<8, 24>`) so a full-capability
   Color Control server fits; scene extension field sets hold 32 octets.

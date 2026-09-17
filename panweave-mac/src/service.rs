@@ -180,6 +180,14 @@ pub enum TxStatus {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MacEvent {
+    /// A child polled and a deferred indirect transaction
+    /// ([`MacService::data_request_deferred`]) is due: the poll was
+    /// acknowledged with frame pending, so the caller must hand the
+    /// frame over now with [`MacService::data_request`] (direct).
+    IndirectReady {
+        /// The deferred transaction.
+        handle: TxHandle,
+    },
     /// A Data Request (poll) command was received from a child (R23.2
     /// §3.6.10 keepalive by MAC data poll).
     PollIndication {
@@ -290,14 +298,25 @@ pub enum MacRequest {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum InFlightKind {
-    Data { handle: TxHandle },
+    Data {
+        handle: TxHandle,
+    },
     Beacon,
     BeaconRequest,
     AssocRequest,
     AssocDataRequest,
     Poll,
-    IndirectData { handle: TxHandle },
-    IndirectAssocResponse { device: ExtendedAddress },
+    IndirectData {
+        handle: TxHandle,
+    },
+    /// An indirect frame the caller builds only once the child polls
+    /// (see [`MacService::data_request_deferred`]).
+    DeferredData {
+        handle: TxHandle,
+    },
+    IndirectAssocResponse {
+        device: ExtendedAddress,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -765,6 +784,28 @@ impl MacService {
         Ok(handle)
     }
 
+    /// Registers an indirect transaction whose frame is produced only
+    /// when the child polls: the pending-address list and the frame
+    /// pending bit of the poll acknowledgement include `dst`, and the
+    /// poll raises [`MacEvent::IndirectReady`] instead of transmitting.
+    /// The caller then secures the frame with a fresh counter and sends
+    /// it with [`data_request`](Self::data_request) while the child is
+    /// listening, so a frame secured at queue time can never be
+    /// overtaken by later transmissions (NWK freshness, R23.2 §3.6.2.2).
+    /// Expires like any indirect transaction (`DataConfirm` with
+    /// `TransactionExpired`).
+    pub fn data_request_deferred(&mut self, dst: MacAddress) -> Result<TxHandle, MacError> {
+        let handle = self.alloc_handle();
+        self.add_indirect(IndirectEntry {
+            dst,
+            kind: InFlightKind::DeferredData { handle },
+            frame: FrameBuf::new(),
+            seq: 0,
+            expires: self.now + self.config.transaction_persistence,
+        })?;
+        Ok(handle)
+    }
+
     /// Queues an inter-PAN data frame (ZCL8 §13.3.4.5): destination PAN
     /// `dst_pan` (the broadcast PAN for touchlink), an explicit source
     /// PAN and the extended source address, never indirect.
@@ -811,8 +852,13 @@ impl MacService {
     /// Removes a queued indirect frame (MCPS-PURGE).
     pub fn purge(&mut self, handle: TxHandle) -> bool {
         let before = self.indirect.len();
-        self.indirect
-            .retain(|e| !matches!(e.kind, InFlightKind::IndirectData { handle: h } if h == handle));
+        self.indirect.retain(|e| {
+            !matches!(
+                e.kind,
+                InFlightKind::IndirectData { handle: h } | InFlightKind::DeferredData { handle: h }
+                    if h == handle
+            )
+        });
         let removed = self.indirect.len() != before;
         if removed {
             self.update_pending_list();
@@ -1212,7 +1258,9 @@ impl MacService {
 
     fn finish_in_flight(&mut self, f: InFlight, status: TxStatus, frame_pending: bool) {
         match f.kind {
-            InFlightKind::Data { handle } | InFlightKind::IndirectData { handle } => {
+            InFlightKind::Data { handle }
+            | InFlightKind::IndirectData { handle }
+            | InFlightKind::DeferredData { handle } => {
                 self.push_event(MacEvent::DataConfirm {
                     handle,
                     status,
@@ -1311,7 +1359,8 @@ impl MacService {
             self.update_pending_list();
             for k in expired {
                 match k {
-                    InFlightKind::IndirectData { handle } => {
+                    InFlightKind::IndirectData { handle }
+                    | InFlightKind::DeferredData { handle } => {
                         self.push_event(MacEvent::DataConfirm {
                             handle,
                             status: TxStatus::TransactionExpired,
@@ -1603,6 +1652,12 @@ impl MacService {
                 if let Some(idx) = pending_idx {
                     let entry = self.indirect.swap_remove(idx);
                     self.update_pending_list();
+                    if let InFlightKind::DeferredData { handle } = entry.kind {
+                        // The child listens now: the caller produces the
+                        // frame and sends it directly.
+                        self.push_event(MacEvent::IndirectReady { handle });
+                        return RxDisposition::Handled;
+                    }
                     let q = QueuedTx {
                         kind: entry.kind,
                         frame: entry.frame,

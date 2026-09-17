@@ -179,6 +179,17 @@ pub enum NwkAction {
         /// Queue for indirect transmission to a sleepy child.
         indirect: bool,
     },
+    /// Register an indirect transaction for a sleepy child without the
+    /// frame (`MacService::data_request_deferred`); the frame follows as
+    /// a direct [`NwkAction::MacData`] with the same `handle` once the
+    /// MAC reports the child's poll to [`Nwk::on_mac_indirect_ready`].
+    MacDataDeferred {
+        /// Internal identifier, reused by the direct transmission and
+        /// echoed in [`Nwk::on_mac_data_confirm`].
+        handle: TxHandle,
+        /// The child.
+        dst: ShortAddress,
+    },
     /// Start a MAC scan.
     MacScan {
         /// Active or energy.

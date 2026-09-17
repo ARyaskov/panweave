@@ -254,6 +254,11 @@ impl Net {
                     }
                 }
             }
+            NwkAction::MacDataDeferred { handle, dst } => {
+                // Held without a frame until the child polls.
+                self.log.push(format!("{i}: MacDataDeferred dst={dst}"));
+                self.nodes[i].indirect.push((dst, Vec::new(), handle));
+            }
             NwkAction::MacAssociateResponse {
                 device,
                 short,
@@ -295,6 +300,12 @@ impl Net {
                     self.nodes[p].indirect = keep;
                     let psrc = self.nodes[p].short;
                     for (mut frame, handle) in deliver {
+                        if frame.is_empty() {
+                            // Deferred: the parent secures it now and sends
+                            // it directly (performed by the settle loop).
+                            self.nodes[p].nwk.on_mac_indirect_ready(handle);
+                            continue;
+                        }
                         self.deliver(i, &mut frame, psrc);
                         self.nodes[p]
                             .nwk
@@ -527,15 +538,32 @@ fn sleepy_end_device_receives_via_indirect_delivery() {
         "frame is held for the sleepy child"
     );
     assert!(net.nodes[ei].received.is_empty());
+    // A broadcast the child overhears meanwhile must not make the held
+    // frame stale: it is secured only when the child polls (§3.6.2.2).
+    net.nodes[ci]
+        .nwk
+        .data_request(ShortAddress::BROADCAST_ALL, b"news", None, false, true)
+        .unwrap();
+    net.settle();
+    assert_eq!(
+        net.nodes[ei].received.last().unwrap(),
+        &(ShortAddress::COORDINATOR, b"news".to_vec())
+    );
+    let replays = net.nodes[ei].nwk.stats.replays;
     // The child polls.
     net.nodes[ei]
         .nwk
         .request(panweave_nwk::layer::NwkRequest::Poll);
     net.settle();
-    assert_eq!(
-        net.nodes[ei].received.last().unwrap(),
-        &(ShortAddress::COORDINATOR, b"wake".to_vec())
+    // Both held frames (the unicast and the broadcast's copy) arrive,
+    // freshly secured: no replay.
+    assert!(
+        net.nodes[ei]
+            .received
+            .contains(&(ShortAddress::COORDINATOR, b"wake".to_vec()))
     );
+    assert_eq!(net.nodes[ei].nwk.stats.replays, replays);
+    assert!(net.nodes[ci].indirect.is_empty());
     let evs = net.take_events(ci);
     assert!(evs.iter().any(|e| matches!(
         e,

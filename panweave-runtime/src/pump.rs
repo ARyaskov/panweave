@@ -365,6 +365,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     .nwk
                     .on_mac_poll_confirm(status == TxStatus::Success, frame_pending),
                 MacEvent::PollIndication { device } => self.nwk.on_mac_poll_indication(device),
+                MacEvent::IndirectReady { handle } => {
+                    // The deferred transaction is consumed; the direct
+                    // transmission that follows registers a new mapping.
+                    if let Some(i) = self.mac_handles.iter().position(|(m, _)| *m == handle) {
+                        let (_, nwk_handle) = self.mac_handles.swap_remove(i);
+                        self.nwk.on_mac_indirect_ready(nwk_handle);
+                    }
+                }
                 MacEvent::PanIdConflict { .. } => {
                     // The NWK detects conflicts from beacons (§3.6.1.10);
                     // nothing further to do here.
@@ -405,6 +413,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         Err(_) => self
                             .nwk
                             .on_mac_data_confirm(handle, TxStatus::ChannelAccessFailure),
+                    }
+                }
+                NwkAction::MacDataDeferred { handle, dst } => {
+                    match self.mac.data_request_deferred(MacAddress::Short(dst)) {
+                        Ok(mac_handle) => {
+                            if self.mac_handles.push((mac_handle, handle)).is_err() {
+                                let _ = self.mac.purge(mac_handle);
+                                self.nwk
+                                    .on_mac_data_confirm(handle, TxStatus::TransactionExpired);
+                            }
+                        }
+                        Err(_) => self
+                            .nwk
+                            .on_mac_data_confirm(handle, TxStatus::TransactionExpired),
                     }
                 }
                 NwkAction::MacScan {
