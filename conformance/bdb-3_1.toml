@@ -107,10 +107,10 @@ id = "PW-BDB-INIT-002"
 section = "§7.2"
 summary = "On-network TCLK update procedure: after joining a centralized network request a unique TCLK (Request Key or DLK), verify it with Verify Key / Confirm Key, retry up to bdbTCLinkKeyExchangeAttemptsMax, leave on failure if required"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::tclk"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["coordinator_and_end_device_full_stack"]
+notes = "After a join with a global key on a centralized network the joiner requests a unique TCLK (Request Key), verifies it (Verify Key) and receives Confirm Key; bdbTCLinkKeyExchangeAttemptsMax retries and the DLK variant are not implemented."
 [[requirement]]
 id = "PW-BDB-INIT-003"
 section = "§7.3"
@@ -134,28 +134,28 @@ id = "PW-BDB-FORM-001"
 section = "§8.1"
 summary = "Network formation: coordinator forms centralized network on primary then secondary channels; router forms distributed network with random extended PAN ID and network key; set permit join off; update commissioning status"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::formation"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::stack"
+tests = ["coordinator_and_end_device_full_stack"]
+notes = "Centralized formation on the configured mask with a supplied or CryptoRng-generated network key; secondary mask fallback and distributed formation by routers are not wired."
 [[requirement]]
 id = "PW-BDB-STEER-001"
 section = "§9.1"
 summary = "Network discovery procedure across primary then secondary channel masks with bdbScanDuration"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::steering::discovery"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::stack"
+tests = ["coordinator_and_end_device_full_stack"]
+notes = "Discovery over the configured mask (primary); secondary mask fallback not implemented."
 [[requirement]]
 id = "PW-BDB-STEER-002"
 section = "§9.2, §9.3"
 summary = "Join using symmetric key exchange: select network with permit join, MAC associate, receive network key with preconfigured link key (global or install code), then TCLK update"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::steering::join"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::stack"
+tests = ["coordinator_and_end_device_full_stack"]
+notes = "Discovery, network selection, Network Commissioning / MAC association join and network key reception are implemented for the primary channel mask; the secondary mask fallback and per-network retry ordering of BDB 3.1 are not."
 [[requirement]]
 id = "PW-BDB-STEER-003"
 section = "§9.4, §9.5"
@@ -188,10 +188,10 @@ id = "PW-BDB-STEER-006"
 section = "§9.8"
 summary = "Off-network steering: discovery, join attempt per network, on success TCLK update, broadcast permit joining, device announce"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::steering::off_network"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::pump"
+tests = ["coordinator_and_end_device_full_stack"]
+notes = "Join, TCLK update and Device_annce are performed; the broadcast Mgmt_Permit_Joining_req after joining is left to the application."
 [[requirement]]
 id = "PW-BDB-STEER-007"
 section = "§9.9"

@@ -481,7 +481,9 @@ impl<
             }),
             TxKind::Leave { device } => self.on_leave_sent(device, NwkStatus::Success),
             TxKind::JoinRequest => self.on_join_request_sent(true),
-            TxKind::JoinResponse { device } => self.on_join_response_delivered(device, true),
+            TxKind::JoinResponse { device, method } => {
+                self.on_join_response_delivered(device, true, method);
+            }
             TxKind::TimeoutRequest => self.on_timeout_request_sent(true),
             TxKind::Command | TxKind::RouteReply { .. } => {}
         }
@@ -538,7 +540,9 @@ impl<
             }
             TxKind::Leave { device } => self.on_leave_sent(device, Self::mac_status_to_nwk(status)),
             TxKind::JoinRequest => self.on_join_request_sent(false),
-            TxKind::JoinResponse { device } => self.on_join_response_delivered(device, false),
+            TxKind::JoinResponse { device, method } => {
+                self.on_join_response_delivered(device, false, method);
+            }
             TxKind::TimeoutRequest => self.on_timeout_request_sent(false),
             TxKind::RouteReply { responder } => {
                 // §3.6.4.5.2.1: report link failure toward the responder.

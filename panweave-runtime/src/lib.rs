@@ -1,4 +1,17 @@
-//! Panweave runtime layer. See `docs/architecture.md`.
+//! Sans-I/O stack driver: composes the MAC service, NWK, APS, ZDO and ZCL
+//! layers into one [`Stack`] that a runtime (RTOS task, async executor or
+//! the simulator) drives with a radio, a clock and a storage backend.
+//!
+//! The stack owns no I/O: the runtime feeds received frames through
+//! [`Stack::on_radio_frame`], reports transmissions with
+//! [`Stack::on_tx_complete`], drains [`Stack::next_radio_action`] and
+//! calls [`Stack::poll`] whenever [`Stack::next_deadline`] passes or any
+//! input arrived. Application-level results are delivered as
+//! [`StackEvent`]s.
+//!
+//! Layer wiring follows the primitives of R23.2: NLDE/NLME ↔ MAC (§3.2,
+//! Annex D), APSDE/APSME ↔ NWK (§2.2), ZDO ↔ APS (§2.4, §2.5), and the
+//! Trust Center authorization procedure (§4.6.3.2, §4.7.3).
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -14,3 +27,12 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+mod context;
+mod pump;
+mod stack;
+
+pub use stack::{
+    EndpointError, JoinMode, Stack, StackAps, StackConfig, StackEvent, StackNwk, StackZcl,
+    StackZdo, ZclFrame, ZdpData,
+};

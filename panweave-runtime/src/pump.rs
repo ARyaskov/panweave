@@ -1,0 +1,982 @@
+//! Action / event pumping between the layers, the receive path and the
+//! join / authorization logic.
+
+use heapless::Vec;
+use panweave_aps::command::{RequestKeyType, UpdateDeviceStatus};
+use panweave_aps::layer::NwkView;
+use panweave_aps::layer::{
+    ApsAction, ApsEvent, DataIndication, DataRequest, Delivery, Destination, DeviceState, KeyRoute,
+    TransportedKey, TxOptions,
+};
+use panweave_codec::Encode;
+use panweave_mac::frame::{FrameType as MacFrameType, MacAddress};
+use panweave_mac::radio::RxMetadata;
+use panweave_mac::service::{MacEvent, RxDisposition, TxStatus};
+use panweave_nwk::layer::{JoinMethod, JoinParams};
+use panweave_nwk::layer::{NwkAction, NwkEvent, RxOutcome};
+use panweave_security::cipher::BlockCipher;
+use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
+use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy};
+use panweave_storage::{Key, Kind, Storage};
+use panweave_types::{
+    ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyType, LogicalDeviceType, NwkStatus,
+    ProfileId, ShortAddress,
+};
+use panweave_zcl::layer::{ZclAction, ZclIndication};
+use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
+
+use crate::context::{AddrView, ZdoCtx};
+use crate::stack::{PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData};
+
+/// Largest NWK payload copied out of a MAC frame.
+const NPDU_BUF: usize = 116;
+/// Largest APS frame copied out of an NWK data indication.
+const APDU_BUF: usize = 108;
+/// Largest ASDU copied out of an APS data indication.
+const ASDU_BUF: usize = panweave_aps::MAX_ASDU;
+
+/// An owned copy of an APS data indication (the APS layer borrows itself
+/// while an indication is alive; copying lets the ZDO/ZCL handlers
+/// reach the APS again).
+struct OwnedIndication {
+    src: ShortAddress,
+    src_ieee: Option<ExtendedAddress>,
+    src_endpoint: Endpoint,
+    delivery: Delivery,
+    profile: ProfileId,
+    cluster: panweave_types::ClusterId,
+    asdu: Vec<u8, ASDU_BUF>,
+    security: panweave_aps::layer::SecurityStatus,
+    lqi: u8,
+    relayed: Option<panweave_aps::layer::RelayInfo>,
+    counter: u8,
+    nwk_broadcast: bool,
+}
+
+impl OwnedIndication {
+    fn from(ind: &DataIndication<'_>) -> Option<Self> {
+        Some(OwnedIndication {
+            src: ind.src,
+            src_ieee: ind.src_ieee,
+            src_endpoint: ind.src_endpoint,
+            delivery: ind.delivery,
+            profile: ind.profile,
+            cluster: ind.cluster,
+            asdu: Vec::from_slice(ind.asdu).ok()?,
+            security: ind.security,
+            lqi: ind.lqi,
+            relayed: ind.relayed,
+            counter: ind.counter,
+            nwk_broadcast: ind.nwk_broadcast,
+        })
+    }
+
+    fn borrow(&self) -> DataIndication<'_> {
+        DataIndication {
+            src: self.src,
+            src_ieee: self.src_ieee,
+            src_endpoint: self.src_endpoint,
+            delivery: self.delivery,
+            profile: self.profile,
+            cluster: self.cluster,
+            asdu: &self.asdu,
+            security: self.security,
+            lqi: self.lqi,
+            relayed: self.relayed,
+            counter: self.counter,
+            nwk_broadcast: self.nwk_broadcast,
+        }
+    }
+}
+
+impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+    /// Runs the inter-layer pump until nothing moves.
+    pub(crate) fn pump(&mut self) {
+        for _ in 0..64 {
+            let mut progressed = false;
+            progressed |= self.pump_mac_events();
+            progressed |= self.pump_nwk_actions();
+            progressed |= self.pump_nwk_events();
+            progressed |= self.pump_aps_actions();
+            progressed |= self.pump_aps_events();
+            progressed |= self.pump_zdo();
+            progressed |= self.pump_zcl_actions();
+            if !progressed {
+                break;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Receive path
+    // ---------------------------------------------------------------
+
+    pub(crate) fn handle_radio_frame(&mut self, bytes: &[u8], meta: RxMetadata) {
+        let channel = meta.channel.unwrap_or(self.nwk.nib.channel);
+        let lqi = meta.lqi;
+        match self.mac.on_receive(bytes, meta) {
+            RxDisposition::Handled | RxDisposition::Other { .. } => {}
+            RxDisposition::Beacon { header, beacon, .. } => {
+                self.nwk.on_mac_beacon(
+                    header
+                        .src_pan
+                        .or(header.dst_pan)
+                        .unwrap_or(self.nwk.nib.pan_id),
+                    header.src,
+                    &beacon,
+                    channel,
+                    self.nwk.nib.channel_page,
+                    lqi,
+                );
+            }
+            RxDisposition::Data { frame, .. } => {
+                if frame.header.frame_control.frame_type() != MacFrameType::Data {
+                    return;
+                }
+                let Some(mac_src) = frame.header.src.short() else {
+                    return;
+                };
+                let Ok(mut npdu) = Vec::<u8, NPDU_BUF>::from_slice(frame.payload) else {
+                    return;
+                };
+                let owned = match self.nwk.on_mac_data(&mut npdu, mac_src, lqi) {
+                    RxOutcome::Data {
+                        src,
+                        dst,
+                        src_ieee,
+                        secured,
+                        lqi,
+                        payload,
+                        ..
+                    } => {
+                        let Ok(mut apdu) = Vec::<u8, APDU_BUF>::from_slice(payload) else {
+                            return;
+                        };
+                        let view = AddrView(&self.nwk);
+                        self.aps
+                            .on_nwk_data(&mut apdu, src, dst, src_ieee, secured, lqi, &view)
+                            .as_ref()
+                            .and_then(OwnedIndication::from)
+                    }
+                    RxOutcome::None | RxOutcome::InterPan { .. } => None,
+                };
+                if let Some(ind) = owned {
+                    self.dispatch_indication(&ind);
+                }
+            }
+        }
+    }
+
+    fn dispatch_indication(&mut self, ind: &OwnedIndication) {
+        let borrowed = ind.borrow();
+        let to_zdo = ind.profile == ProfileId::ZDP
+            || matches!(ind.delivery, Delivery::Endpoint(Endpoint(0)));
+        if to_zdo {
+            let Stack {
+                zdo,
+                nwk,
+                aps,
+                config,
+                ..
+            } = self;
+            let is_tc = aps.config.is_trust_center;
+            let mut ctx = ZdoCtx {
+                nwk,
+                aps,
+                policy: &config.trust_center_policy,
+                is_trust_center: is_tc,
+            };
+            let out = zdo.on_data(&borrowed, &mut ctx);
+            match out {
+                Some(ZdoIndication::Response {
+                    src,
+                    seq,
+                    cluster,
+                    data,
+                    matched,
+                }) => {
+                    if let Ok(data) = Vec::from_slice(data) {
+                        self.push_event(StackEvent::Zdp(ZdpData {
+                            src,
+                            seq,
+                            cluster,
+                            data,
+                            matched,
+                        }));
+                    }
+                }
+                Some(ZdoIndication::DeviceAnnounce {
+                    ieee,
+                    short,
+                    capability,
+                    ..
+                }) => {
+                    self.push_event(StackEvent::DeviceAnnounce {
+                        ieee,
+                        short,
+                        capability,
+                    });
+                }
+                None => {}
+            }
+            return;
+        }
+        let groups = &self.aps.groups;
+        let out = match ind.delivery {
+            Delivery::Group(g) => self.zcl.on_data(&borrowed, |ep| groups.contains(g, ep)),
+            _ => self.zcl.on_data(&borrowed, |_| true),
+        };
+        let event = match out {
+            Some(ZclIndication::Command { origin, payload }) => Vec::from_slice(payload)
+                .ok()
+                .map(|payload| StackEvent::ZclCommand(ZclFrame { origin, payload })),
+            Some(ZclIndication::Response { origin, payload }) => Vec::from_slice(payload)
+                .ok()
+                .map(|payload| StackEvent::ZclResponse(ZclFrame { origin, payload })),
+            Some(ZclIndication::Report { origin, payload }) => Vec::from_slice(payload)
+                .ok()
+                .map(|payload| StackEvent::ZclReport(ZclFrame { origin, payload })),
+            None => None,
+        };
+        if let Some(e) = event {
+            self.push_event(e);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // MAC → NWK
+    // ---------------------------------------------------------------
+
+    fn pump_mac_events(&mut self) -> bool {
+        let mut any = false;
+        while let Some(e) = self.mac.next_event() {
+            any = true;
+            match e {
+                MacEvent::DataConfirm { handle, status, .. } => {
+                    if let Some(i) = self.mac_handles.iter().position(|(m, _)| *m == handle) {
+                        let (_, nwk_handle) = self.mac_handles.swap_remove(i);
+                        self.nwk.on_mac_data_confirm(nwk_handle, status);
+                    }
+                }
+                MacEvent::ScanConfirm { kind, .. } => {
+                    let energy = *self.mac.energy_results();
+                    self.nwk.on_mac_scan_confirm(kind, &energy);
+                }
+                MacEvent::AssociateIndication {
+                    device,
+                    capability,
+                    lqi,
+                } => self
+                    .nwk
+                    .on_mac_associate_indication(device, capability, lqi),
+                MacEvent::AssociateConfirm {
+                    short_address,
+                    status,
+                } => self.nwk.on_mac_associate_confirm(short_address, status),
+                MacEvent::CommStatus { device, status } => {
+                    self.nwk.on_mac_comm_status(device, status);
+                }
+                MacEvent::PollConfirm {
+                    frame_pending,
+                    status,
+                } => self
+                    .nwk
+                    .on_mac_poll_confirm(status == TxStatus::Success, frame_pending),
+                MacEvent::PollIndication { device } => self.nwk.on_mac_poll_indication(device),
+                MacEvent::PanIdConflict { .. } => {
+                    // The NWK detects conflicts from beacons (§3.6.1.10);
+                    // nothing further to do here.
+                }
+            }
+        }
+        any
+    }
+
+    // ---------------------------------------------------------------
+    // NWK → MAC / storage
+    // ---------------------------------------------------------------
+
+    fn pump_nwk_actions(&mut self) -> bool {
+        let mut any = false;
+        while let Some(a) = self.nwk.next_action() {
+            any = true;
+            match a {
+                NwkAction::MacData {
+                    handle,
+                    dst,
+                    frame,
+                    ack,
+                    indirect,
+                } => {
+                    let pan = self.nwk.nib.pan_id;
+                    match self
+                        .mac
+                        .data_request(pan, MacAddress::Short(dst), &frame, ack, indirect)
+                    {
+                        Ok(mac_handle) => {
+                            if self.mac_handles.push((mac_handle, handle)).is_err() {
+                                let _ = self.mac.purge(mac_handle);
+                                self.nwk
+                                    .on_mac_data_confirm(handle, TxStatus::ChannelAccessFailure);
+                            }
+                        }
+                        Err(_) => self
+                            .nwk
+                            .on_mac_data_confirm(handle, TxStatus::ChannelAccessFailure),
+                    }
+                }
+                NwkAction::MacScan {
+                    kind,
+                    channels,
+                    duration,
+                } => {
+                    if self.mac.scan(kind, channels, duration).is_err() {
+                        self.nwk.on_mac_scan_confirm(kind, &[0; 27]);
+                    }
+                }
+                NwkAction::MacAssociate {
+                    pan_id,
+                    coordinator,
+                    page,
+                    channel,
+                    capability,
+                } => {
+                    self.mac.set_channel(page, channel);
+                    if self
+                        .mac
+                        .associate(pan_id, MacAddress::Short(coordinator), capability)
+                        .is_err()
+                    {
+                        self.nwk.on_mac_associate_confirm(
+                            ShortAddress::NO_SHORT_ADDRESS,
+                            panweave_types::MacStatus::ChannelAccessFailure,
+                        );
+                    }
+                }
+                NwkAction::MacAssociateResponse {
+                    device,
+                    short,
+                    status,
+                } => {
+                    if self.mac.associate_response(device, short, status).is_err() {
+                        self.nwk
+                            .on_mac_comm_status(device, TxStatus::ChannelAccessFailure);
+                    }
+                }
+                NwkAction::MacStart {
+                    pan_id,
+                    page,
+                    channel,
+                    short,
+                    coordinator,
+                    beacon_capable,
+                } => self
+                    .mac
+                    .start(pan_id, page, channel, short, coordinator, beacon_capable),
+                NwkAction::MacSetPermit(p) => self.mac.set_association_permit(p),
+                NwkAction::MacSetBeaconPayload(v) => {
+                    let _ = self.mac.set_beacon_payload(&v);
+                }
+                NwkAction::MacSetShortAddress(s) => {
+                    self.mac.set_short_address(s);
+                    self.aps.set_network_state(s, self.aps.state());
+                }
+                NwkAction::MacSetPanId(p) => self.mac.set_pan_id(p),
+                NwkAction::MacSetChannel { page, channel } => self.mac.set_channel(page, channel),
+                NwkAction::MacSetCoordinator { short, extended } => {
+                    self.mac.set_coordinator(short, extended);
+                }
+                NwkAction::MacSetRxOnWhenIdle(on) => self.mac.set_rx_on_when_idle(on),
+                NwkAction::MacPoll => {
+                    if self.mac.poll().is_err() {
+                        self.nwk.on_mac_poll_confirm(false, false);
+                    }
+                }
+                NwkAction::Persist => {
+                    // TODO(PW-STO-001): serialize the NIB and network keys.
+                    // Spec: R23.2 §3.6.1.4 (persistent data), §4.3.4.
+                }
+                NwkAction::CounterReservation(r) => {
+                    let ok = self
+                        .storage
+                        .store(
+                            Key::single(Kind::NwkFrameCounter),
+                            &r.reserved_until.to_le_bytes(),
+                        )
+                        .is_ok();
+                    if ok {
+                        self.nwk.commit_counter_reservation(r);
+                    }
+                }
+            }
+        }
+        any
+    }
+
+    // ---------------------------------------------------------------
+    // NWK events → stack logic
+    // ---------------------------------------------------------------
+
+    fn pump_nwk_events(&mut self) -> bool {
+        let mut any = false;
+        while let Some(e) = self.nwk.next_event() {
+            any = true;
+            match e {
+                NwkEvent::DataConfirm { id, status } => {
+                    if let Some(i) = self.aps_handles.iter().position(|(t, _)| *t == id) {
+                        let (_, h) = self.aps_handles.swap_remove(i);
+                        self.aps.on_nwk_data_confirm(h, status);
+                    }
+                }
+                NwkEvent::FormationConfirm { status } => {
+                    if status.is_success() {
+                        let short = self.nwk.nib.network_address;
+                        self.aps
+                            .set_network_state(short, DeviceState::JoinedAuthorized);
+                        self.phase = Phase::Operating;
+                        self.push_event(StackEvent::NetworkFormed {
+                            pan_id: self.nwk.nib.pan_id,
+                            extended_pan_id: self.nwk.nib.extended_pan_id,
+                        });
+                    } else {
+                        self.phase = Phase::Idle;
+                        self.push_event(StackEvent::FormationFailed(status));
+                    }
+                }
+                NwkEvent::DiscoveryConfirm { status } => {
+                    if let Phase::Discovering(mode) = self.phase {
+                        if status.is_success() {
+                            let params = JoinParams {
+                                extended_pan_id: None,
+                                rejoin: mode != crate::JoinMode::Association,
+                                as_router: self.config.role == LogicalDeviceType::Router,
+                                secure: mode == crate::JoinMode::SecuredRejoin,
+                                capability: self.config.capability(),
+                                require_permit: mode == crate::JoinMode::Association,
+                            };
+                            match self.nwk.join(params) {
+                                Ok(()) => self.phase = Phase::Joining(mode),
+                                Err(_) => {
+                                    self.phase = Phase::Idle;
+                                    self.push_event(StackEvent::JoinFailed(
+                                        NwkStatus::InvalidRequest,
+                                    ));
+                                }
+                            }
+                        } else {
+                            self.phase = Phase::Idle;
+                            self.push_event(StackEvent::JoinFailed(status));
+                        }
+                    }
+                }
+                NwkEvent::JoinConfirm {
+                    status,
+                    network_address,
+                    secured,
+                    rejoin,
+                    ..
+                } => {
+                    if status.is_success() {
+                        self.aps
+                            .set_network_state(network_address, Self::aps_state(secured));
+                        if secured {
+                            self.complete_join(rejoin);
+                        } else {
+                            self.phase = Phase::AwaitingKey;
+                        }
+                    } else {
+                        self.phase = Phase::Idle;
+                        self.push_event(StackEvent::JoinFailed(status));
+                    }
+                }
+                NwkEvent::JoinIndication {
+                    device,
+                    network_address,
+                    capability: _,
+                    method,
+                    joiner_tlvs,
+                } => self.on_child_joined(device, network_address, method, &joiner_tlvs),
+                NwkEvent::AuthenticationTimeout => {
+                    self.phase = Phase::Idle;
+                    self.aps
+                        .set_network_state(ShortAddress::NO_SHORT_ADDRESS, DeviceState::NotJoined);
+                    self.push_event(StackEvent::JoinFailed(NwkStatus::NoKey));
+                }
+                NwkEvent::LeaveIndication { device, rejoin } => {
+                    if device.is_none() {
+                        self.phase = Phase::Idle;
+                        self.aps.set_network_state(
+                            ShortAddress::NO_SHORT_ADDRESS,
+                            DeviceState::NotJoined,
+                        );
+                        self.push_event(StackEvent::Left { rejoin });
+                    }
+                }
+                NwkEvent::LeaveConfirm { device, status } => {
+                    if device.is_none() && status.is_success() {
+                        self.phase = Phase::Idle;
+                        self.aps.set_network_state(
+                            ShortAddress::NO_SHORT_ADDRESS,
+                            DeviceState::NotJoined,
+                        );
+                        self.push_event(StackEvent::Left { rejoin: false });
+                    }
+                }
+                NwkEvent::StartRouterConfirm { .. }
+                | NwkEvent::NetworkStatus { .. }
+                | NwkEvent::RouteDiscoveryConfirm { .. }
+                | NwkEvent::PermitJoining(_)
+                | NwkEvent::ChildRemoved { .. }
+                | NwkEvent::LostChild { .. }
+                | NwkEvent::PanIdChanged { .. }
+                | NwkEvent::ParentInformationUpdated
+                | NwkEvent::KeySwitched => {}
+            }
+        }
+        any
+    }
+
+    /// Finishes joining once the network key is active (§4.6.3.2.3.2).
+    fn complete_join(&mut self, rejoin: bool) {
+        self.phase = Phase::Operating;
+        self.aps.set_authorized();
+        if self.config.role == LogicalDeviceType::Router {
+            let _ = self.nwk.start_router();
+        }
+        let short = self.nwk.nib.network_address;
+        let _ = self
+            .zdo
+            .device_announce(short, self.config.ieee, self.config.capability());
+        // BDB 3.1 §10.2.4: request a unique Trust Center link key after a
+        // join with a global key on a centralized network.
+        let tc = self.aps.aib.trust_center_address;
+        let global = self
+            .aps
+            .security
+            .entry(tc)
+            .is_some_and(|e| e.kind == LinkKeyKind::Global);
+        if !rejoin && !self.aps.aib.is_distributed() && global {
+            let tc_short = AddrView(&self.nwk)
+                .short_of(tc)
+                .unwrap_or(ShortAddress::COORDINATOR);
+            let _ = self
+                .aps
+                .request_key(tc_short, RequestKeyType::TrustCenterLinkKey, None);
+        }
+        self.push_event(StackEvent::Joined {
+            short,
+            pan_id: self.nwk.nib.pan_id,
+            rejoin,
+        });
+    }
+
+    /// NLME-JOIN.indication at a parent (§4.6.3.2.1).
+    fn on_child_joined(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        method: JoinMethod,
+        joiner_tlvs: &[u8],
+    ) {
+        let status = match method {
+            JoinMethod::MacAssociation | JoinMethod::CommissioningJoin => {
+                UpdateDeviceStatus::UnsecuredJoin
+            }
+            JoinMethod::RejoinUnsecured | JoinMethod::CommissioningRejoinUnsecured => {
+                UpdateDeviceStatus::TrustCenterRejoin
+            }
+            JoinMethod::RejoinSecured | JoinMethod::CommissioningRejoinSecured => {
+                UpdateDeviceStatus::SecuredRejoin
+            }
+        };
+        if self.aps.config.is_trust_center {
+            self.trust_center_authorize(device, short, status, None);
+        } else if self.aps.aib.is_distributed() {
+            // Distributed network: the router hands out the network key
+            // itself (§4.6.3.2.1).
+            if status != UpdateDeviceStatus::SecuredRejoin {
+                self.send_network_key(
+                    device,
+                    short,
+                    KeyRoute::Direct {
+                        short,
+                        nwk_secure: false,
+                    },
+                );
+            }
+        } else {
+            let tc_short = AddrView(&self.nwk)
+                .short_of(self.aps.aib.trust_center_address)
+                .unwrap_or(ShortAddress::COORDINATOR);
+            let _ = self
+                .aps
+                .update_device(tc_short, device, short, status, joiner_tlvs);
+        }
+    }
+
+    /// Trust Center authorization (§4.6.3.2.2, §4.7.3). `parent` is the
+    /// router that reported the join (None when we are the parent).
+    fn trust_center_authorize(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        status: UpdateDeviceStatus,
+        parent: Option<ShortAddress>,
+    ) {
+        let kind = match status {
+            UpdateDeviceStatus::SecuredRejoin => JoinKind::SecuredRejoin,
+            UpdateDeviceStatus::UnsecuredJoin => JoinKind::UnsecuredJoin,
+            UpdateDeviceStatus::DeviceLeft => JoinKind::Left,
+            UpdateDeviceStatus::TrustCenterRejoin | UpdateDeviceStatus::Reserved(_) => {
+                JoinKind::TrustCenterRejoin
+            }
+        };
+        let decision = self.config.trust_center_policy.evaluate_join(
+            kind,
+            self.aps.security.entry(device),
+            false,
+            None,
+        );
+        match decision {
+            JoinDecision::TransportNetworkKey { create_entry }
+            | JoinDecision::NegotiateKey { create_entry } => {
+                if create_entry {
+                    let e = LinkKeyEntry::provisional(
+                        device,
+                        Key128::WELL_KNOWN_GLOBAL_TCLK,
+                        LinkKeyKind::Global,
+                    );
+                    let _ = self.aps.install_link_key(e);
+                }
+                let route = match parent {
+                    Some(p) => KeyRoute::Tunnel { parent: p },
+                    None => KeyRoute::Direct {
+                        short,
+                        nwk_secure: false,
+                    },
+                };
+                self.send_network_key(device, short, route);
+            }
+            JoinDecision::Allow => {
+                self.nwk.authenticate_child(device);
+                self.push_event(StackEvent::DeviceAuthorized {
+                    ieee: device,
+                    short,
+                });
+            }
+            JoinDecision::Ignore => {}
+            JoinDecision::Remove => {
+                let _ = self.nwk.leave(Some(device), false, false);
+            }
+        }
+    }
+
+    fn send_network_key(&mut self, device: ExtendedAddress, short: ShortAddress, route: KeyRoute) {
+        let seq = self.network_key_sequence;
+        let Some(key) = self.nwk.security.keys.get(seq).map(|s| s.key.clone()) else {
+            return;
+        };
+        if let Ok(request) = self.aps.transport_network_key(device, &key, seq, route) {
+            let _ = self.pending_children.push(PendingChild {
+                ieee: device,
+                short,
+                request,
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // APS → NWK / storage
+    // ---------------------------------------------------------------
+
+    fn pump_aps_actions(&mut self) -> bool {
+        let mut any = false;
+        while let Some(a) = self.aps.next_action() {
+            any = true;
+            match a {
+                ApsAction::NwkData {
+                    handle,
+                    dst,
+                    radius,
+                    discover_route,
+                    secure,
+                    frame,
+                } => match self
+                    .nwk
+                    .data_request(dst, &frame, radius, discover_route, secure)
+                {
+                    Ok(id) => {
+                        if self.aps_handles.push((id, handle)).is_err() {
+                            self.aps
+                                .on_nwk_data_confirm(handle, NwkStatus::FrameNotBuffered);
+                        }
+                    }
+                    Err(_) => self
+                        .aps
+                        .on_nwk_data_confirm(handle, NwkStatus::InvalidRequest),
+                },
+                ApsAction::CounterReservation {
+                    partner,
+                    reservation,
+                } => {
+                    let ok = self
+                        .storage
+                        .store(
+                            Key::with_id(Kind::ApsFrameCounter, partner.0),
+                            &reservation.reserved_until.to_le_bytes(),
+                        )
+                        .is_ok();
+                    if ok {
+                        self.aps.commit_counter_reservation(partner, reservation);
+                    }
+                }
+                ApsAction::Persist(_) => {
+                    // TODO(PW-STO-002): serialize link keys, bindings, groups
+                    // and AIB. Spec: R23.2 §2.2.8.1, §4.4.12.
+                }
+            }
+        }
+        any
+    }
+
+    // ---------------------------------------------------------------
+    // APS events → stack logic
+    // ---------------------------------------------------------------
+
+    fn pump_aps_events(&mut self) -> bool {
+        let mut any = false;
+        while let Some(e) = self.aps.next_event() {
+            any = true;
+            match e {
+                ApsEvent::DataConfirm { .. } => {}
+                ApsEvent::CommandConfirm { id, status, .. } => {
+                    if let Some(i) = self.pending_children.iter().position(|p| p.request == id) {
+                        let child = self.pending_children.swap_remove(i);
+                        if status.is_success() {
+                            self.nwk.authenticate_child(child.ieee);
+                            self.push_event(StackEvent::DeviceAuthorized {
+                                ieee: child.ieee,
+                                short: child.short,
+                            });
+                        }
+                    }
+                }
+                ApsEvent::TransportKey {
+                    key, authorizes, ..
+                } => match key {
+                    TransportedKey::Network { key, sequence, .. } => {
+                        if authorizes {
+                            self.network_key_sequence = sequence;
+                            self.nwk.set_network_key(sequence, key, true);
+                            let rejoin = matches!(self.phase, Phase::Joining(m) if m != crate::JoinMode::Association);
+                            self.complete_join(rejoin);
+                        } else {
+                            self.nwk.set_network_key(sequence, key, false);
+                        }
+                    }
+                    TransportedKey::TrustCenterLink { source } => {
+                        let tc_short = AddrView(&self.nwk)
+                            .short_of(source)
+                            .unwrap_or(ShortAddress::COORDINATOR);
+                        let _ = self
+                            .aps
+                            .verify_key(source, tc_short, KeyType::TrustCenterLinkKey);
+                    }
+                    TransportedKey::ApplicationLink { .. } => {}
+                },
+                ApsEvent::SwitchKey { sequence, .. } => {
+                    if self.nwk.switch_network_key(sequence) {
+                        self.network_key_sequence = sequence;
+                    }
+                }
+                ApsEvent::UpdateDevice {
+                    src,
+                    device,
+                    short,
+                    status,
+                    ..
+                } => {
+                    self.trust_center_authorize(device, short, status, Some(src));
+                }
+                ApsEvent::RemoveDevice { target, .. } => {
+                    let _ = self.nwk.leave(Some(target), false, false);
+                }
+                ApsEvent::RequestKey {
+                    src,
+                    src_short,
+                    key_type,
+                    ..
+                } => {
+                    if key_type == RequestKeyType::TrustCenterLinkKey
+                        && self.config.trust_center_policy.tclk_requests != TclkRequestPolicy::Never
+                    {
+                        let mut k = [0u8; 16];
+                        self.nwk.rng().fill_bytes(&mut k);
+                        let _ = self.aps.transport_trust_center_link_key(
+                            src,
+                            src_short,
+                            &Key128::from_bytes(k),
+                            &[],
+                        );
+                    }
+                }
+                ApsEvent::KeyVerified { .. } => {}
+                ApsEvent::ConfirmKey { status, .. } => {
+                    if status == ApsStatus::Success {
+                        self.push_event(StackEvent::LinkKeyUpdated);
+                    }
+                }
+            }
+        }
+        any
+    }
+
+    // ---------------------------------------------------------------
+    // ZDO / ZCL → APS
+    // ---------------------------------------------------------------
+
+    fn send_aps(
+        &mut self,
+        destination: Destination,
+        profile: ProfileId,
+        cluster: panweave_types::ClusterId,
+        src_endpoint: Endpoint,
+        asdu: &[u8],
+        options: TxOptions,
+    ) {
+        let req = DataRequest {
+            destination,
+            profile,
+            cluster,
+            src_endpoint,
+            asdu,
+            options,
+            radius: None,
+        };
+        let view = AddrView(&self.nwk);
+        let _ = self.aps.data_request(&req, &view);
+    }
+
+    fn pump_zdo(&mut self) -> bool {
+        let mut any = false;
+        while let Some(a) = self.zdo.next_action() {
+            any = true;
+            let ZdoAction::Send {
+                dst,
+                cluster,
+                frame,
+                via,
+            } = a;
+            let destination = match via {
+                Some(r) => Destination::Relayed {
+                    parent: r.parent,
+                    joiner: if self.aps.config.is_trust_center {
+                        Some(r.joiner)
+                    } else {
+                        None
+                    },
+                    endpoint: Endpoint(0),
+                },
+                None => Destination::Short {
+                    address: dst,
+                    endpoint: Endpoint(0),
+                },
+            };
+            let options = TxOptions {
+                ack: dst.is_unicast(),
+                ..TxOptions::ACKED
+            };
+            self.send_aps(
+                destination,
+                ProfileId::ZDP,
+                cluster,
+                Endpoint(0),
+                &frame,
+                options,
+            );
+        }
+        while let Some(e) = self.zdo.next_event() {
+            any = true;
+            match e {
+                ZdoEvent::Timeout { seq, cluster, .. } => {
+                    self.push_event(StackEvent::ZdpTimeout { seq, cluster });
+                }
+                ZdoEvent::NwkUpdateRequest { src, seq, req, .. } => {
+                    // TODO(PW-ZDP-014): run the energy scan / channel change.
+                    // Spec: R23.2 §2.4.3.3.9.2. Report NOT_SUPPORTED for now.
+                    let notify = panweave_zdo::zdp::MgmtNwkUpdateNotify {
+                        status: panweave_zdo::ZdpStatus::NotSupported,
+                        scanned_channels: req.scan_channels,
+                        total_transmissions: 0,
+                        transmission_failures: 0,
+                        energy: &[],
+                    };
+                    self.zdo.nwk_update_notify(src, seq, &notify);
+                }
+            }
+        }
+        any
+    }
+
+    fn pump_zcl_actions(&mut self) -> bool {
+        let mut any = false;
+        while let Some(a) = self.zcl.next_action() {
+            any = true;
+            let ZclAction::Send {
+                destination,
+                profile,
+                cluster,
+                src_endpoint,
+                frame,
+                options,
+            } = a;
+            self.send_aps(destination, profile, cluster, src_endpoint, &frame, options);
+        }
+        any
+    }
+
+    /// Sends a ZCL frame built by the application through the ZCL layer.
+    pub fn zcl_send(
+        &mut self,
+        destination: Destination,
+        profile: ProfileId,
+        cluster: panweave_types::ClusterId,
+        src_endpoint: Endpoint,
+        header: &panweave_zcl::Header,
+        payload: &[u8],
+    ) -> Result<(), panweave_zcl::ZclError> {
+        let ack = matches!(destination, Destination::Short { address, .. } if address.is_unicast());
+        self.zcl.send(
+            destination,
+            profile,
+            cluster,
+            src_endpoint,
+            header,
+            payload,
+            TxOptions {
+                ack,
+                ..TxOptions::ACKED
+            },
+        )?;
+        self.pump();
+        Ok(())
+    }
+
+    /// Encodes and sends a ZDP request.
+    pub fn zdp_request(
+        &mut self,
+        dst: ShortAddress,
+        cluster: panweave_types::ClusterId,
+        payload: &impl Encode,
+    ) -> Result<panweave_types::TransactionSequence, panweave_zdo::ZdoError> {
+        let seq = self.zdo.request(dst, cluster, payload)?;
+        self.pump();
+        Ok(seq)
+    }
+
+    /// Runs the pump after direct manipulation of a layer (e.g. after
+    /// calling [`Stack::permit_join`] or ZCL helpers).
+    pub fn flush(&mut self) {
+        self.pump();
+    }
+}

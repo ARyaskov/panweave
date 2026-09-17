@@ -1312,17 +1312,12 @@ impl<
         );
     }
 
-    pub(crate) fn on_join_response_delivered(&mut self, device: ExtendedAddress, ok: bool) {
-        let method = self
-            .neighbors
-            .by_extended(device)
-            .map_or(JoinMethod::RejoinUnsecured, |n| {
-                if n.relationship == Relationship::Child {
-                    JoinMethod::RejoinSecured
-                } else {
-                    JoinMethod::RejoinUnsecured
-                }
-            });
+    pub(crate) fn on_join_response_delivered(
+        &mut self,
+        device: ExtendedAddress,
+        ok: bool,
+        method: JoinMethod,
+    ) {
         self.on_join_response_delivered_inner(device, ok, method);
     }
 
@@ -1399,7 +1394,13 @@ impl<
             return;
         }
         if initial && !self.is_permitting_joins() {
-            self.send_commissioning_response(ctx, device, ctx.src, MacStatus::PanAccessDenied);
+            self.send_commissioning_response(
+                ctx,
+                device,
+                ctx.src,
+                MacStatus::PanAccessDenied,
+                None,
+            );
             return;
         }
         let Ok(set) = req.tlv_set() else { return };
@@ -1435,6 +1436,13 @@ impl<
         commissioning_info: Option<(bool, Vec<u8, MAX_JOINER_TLVS>)>,
     ) {
         let initial = commissioning_info.as_ref().is_some_and(|(i, _)| *i);
+        let method = match (commissioning, initial, secured) {
+            (true, true, _) => JoinMethod::CommissioningJoin,
+            (true, false, true) => JoinMethod::CommissioningRejoinSecured,
+            (true, false, false) => JoinMethod::CommissioningRejoinUnsecured,
+            (false, _, true) => JoinMethod::RejoinSecured,
+            (false, _, false) => JoinMethod::RejoinUnsecured,
+        };
         let requested = ctx.src;
         let router = capability.is_full_function_device();
         // Unsecured rejoins are rejected on distributed networks
@@ -1501,6 +1509,7 @@ impl<
                     device,
                     assigned,
                     MacStatus::from_raw(CommissioningResponse::STATUS_ADDRESS_CONFLICT),
+                    None,
                 );
                 return;
             }
@@ -1551,7 +1560,7 @@ impl<
         if let Some((_, tlvs)) = commissioning_info {
             self.pending_joiner_tlvs = Some(tlvs);
         }
-        self.send_attach_response(ctx, device, assigned, MacStatus::Success, commissioning);
+        self.send_attach_success(ctx, device, assigned, method);
     }
 
     fn send_attach_response(
@@ -1563,9 +1572,36 @@ impl<
         commissioning: bool,
     ) {
         if commissioning {
-            self.send_commissioning_response(ctx, device, address, status);
+            self.send_commissioning_response(ctx, device, address, status, None);
         } else {
-            self.send_rejoin_response(ctx, device, address, status);
+            self.send_rejoin_response(ctx, device, address, status, None);
+        }
+    }
+
+    /// Sends the successful attach response; the join indication follows
+    /// once the response is delivered.
+    fn send_attach_success(
+        &mut self,
+        ctx: &CommandContext,
+        device: ExtendedAddress,
+        address: ShortAddress,
+        method: JoinMethod,
+    ) {
+        if matches!(
+            method,
+            JoinMethod::CommissioningJoin
+                | JoinMethod::CommissioningRejoinSecured
+                | JoinMethod::CommissioningRejoinUnsecured
+        ) {
+            self.send_commissioning_response(
+                ctx,
+                device,
+                address,
+                MacStatus::Success,
+                Some(method),
+            );
+        } else {
+            self.send_rejoin_response(ctx, device, address, MacStatus::Success, Some(method));
         }
     }
 
@@ -1593,6 +1629,7 @@ impl<
         device: ExtendedAddress,
         address: ShortAddress,
         status: MacStatus,
+        method: Option<JoinMethod>,
     ) {
         let header = self.attach_response_header(ctx, device);
         let cmd = NwkCommand::RejoinResponse(RejoinResponse { address, status });
@@ -1600,10 +1637,9 @@ impl<
             .neighbors
             .by_extended(device)
             .is_some_and(|n| n.rx_on_when_idle);
-        let kind = if status == MacStatus::Success {
-            TxKind::JoinResponse { device }
-        } else {
-            TxKind::Command
+        let kind = match method {
+            Some(method) if status == MacStatus::Success => TxKind::JoinResponse { device, method },
+            _ => TxKind::Command,
         };
         let _ = self.send_command_unicast(&header, &cmd, ctx.src, ctx.secured, indirect, kind);
     }
@@ -1614,6 +1650,7 @@ impl<
         device: ExtendedAddress,
         address: ShortAddress,
         status: MacStatus,
+        method: Option<JoinMethod>,
     ) {
         let header = self.attach_response_header(ctx, device);
         let cmd = NwkCommand::CommissioningResponse(CommissioningResponse {
@@ -1625,10 +1662,9 @@ impl<
             .neighbors
             .by_extended(device)
             .is_some_and(|n| n.rx_on_when_idle);
-        let kind = if status == MacStatus::Success {
-            TxKind::JoinResponse { device }
-        } else {
-            TxKind::Command
+        let kind = match method {
+            Some(method) if status == MacStatus::Success => TxKind::JoinResponse { device, method },
+            _ => TxKind::Command,
         };
         let _ = self.send_command_unicast(&header, &cmd, ctx.src, ctx.secured, indirect, kind);
     }

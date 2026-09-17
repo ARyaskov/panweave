@@ -180,6 +180,12 @@ pub enum TxStatus {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MacEvent {
+    /// A Data Request (poll) command was received from a child (R23.2
+    /// §3.6.10 keepalive by MAC data poll).
+    PollIndication {
+        /// The polling device.
+        device: MacAddress,
+    },
     /// Completion of a data request.
     DataConfirm {
         /// The handle returned by [`MacService::data_request`].
@@ -1542,6 +1548,7 @@ impl MacService {
                 RxDisposition::Handled
             }
             MacCommand::DataRequest => {
+                self.push_event(MacEvent::PollIndication { device: h.src });
                 let pending_idx = self.indirect.iter().position(|e| {
                     e.dst == h.src
                         || matches!((e.dst, h.src.extended()), (MacAddress::Extended(x), Some(y)) if x == y)
@@ -1897,6 +1904,10 @@ mod tests {
         s.on_tx_complete(Ok(TxResult::default()));
         let seq = Frame::decode_exact(&data).unwrap().header.sequence.unwrap();
         s.on_receive(&[0x02, 0x00, seq], RxMetadata::default());
+        assert!(matches!(
+            s.next_event(),
+            Some(MacEvent::PollIndication { .. })
+        ));
         assert_eq!(
             s.next_event(),
             Some(MacEvent::DataConfirm {
@@ -2285,6 +2296,10 @@ mod tests {
         let seq = f.header.sequence.unwrap();
         s.on_tx_complete(Ok(TxResult::default()));
         s.on_receive(&[0x02, 0x00, seq], RxMetadata::default());
+        assert!(matches!(
+            s.next_event(),
+            Some(MacEvent::PollIndication { .. })
+        ));
         assert_eq!(
             s.next_event(),
             Some(MacEvent::CommStatus {

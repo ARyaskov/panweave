@@ -24,6 +24,13 @@ Early development (`0.x`). `docs/conformance.md` is the only authoritative
 statement of what is implemented; compiling code is not a claim of
 conformance.
 
+Milestone 1 is reached: `panweave-runtime/tests/milestone1.rs` runs a
+virtual coordinator and a virtual end device through the real MAC, NWK,
+APS, ZDO and ZCL layers over a virtual radio with virtual time — network
+formation, discovery, Network Commissioning join, Trust Center
+authorization (network key and unique link key), device announce, ZDO
+interview and ZCL attribute reads, commands and reports.
+
 ## Layout
 
 See `docs/architecture.md`. Quick tour:

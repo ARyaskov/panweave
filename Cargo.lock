@@ -399,7 +399,17 @@ name = "panweave-runtime"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-aps",
+ "panweave-codec",
+ "panweave-mac",
+ "panweave-nwk",
+ "panweave-security",
+ "panweave-storage",
+ "panweave-testkit",
  "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
  "serde",
 ]
 
@@ -443,6 +453,7 @@ name = "panweave-storage"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
  "panweave-types",
  "serde",
 ]
@@ -452,6 +463,8 @@ name = "panweave-testkit"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-mac",
  "panweave-types",
  "serde",
 ]

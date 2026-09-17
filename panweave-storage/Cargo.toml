@@ -13,11 +13,12 @@ categories.workspace = true
 default = []
 std = ["alloc", "panweave-types/std"]
 alloc = ["panweave-types/alloc"]
-serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+serde = ["dep:serde", "heapless/serde", "panweave-types/serde"]
+defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+heapless = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 

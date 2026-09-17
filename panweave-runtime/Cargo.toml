@@ -5,21 +5,34 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: runtime"
+description = "Panweave Zigbee stack: sans-I/O stack driver composing MAC, NWK, APS, ZDO and ZCL"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
+std = ["alloc", "panweave-types/std", "panweave-mac/std", "panweave-nwk/std", "panweave-aps/std", "panweave-zdo/std", "panweave-zcl/std", "panweave-storage/std", "panweave-security/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt", "panweave-mac/defmt", "panweave-nwk/defmt", "panweave-aps/defmt", "panweave-zdo/defmt", "panweave-zcl/defmt", "panweave-storage/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+panweave-security = { workspace = true }
+panweave-mac = { workspace = true }
+panweave-nwk = { workspace = true }
+panweave-aps = { workspace = true }
+panweave-zdo = { workspace = true }
+panweave-zcl = { workspace = true }
+panweave-storage = { workspace = true }
+heapless = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-testkit = { workspace = true }
 
 [lints]
 workspace = true

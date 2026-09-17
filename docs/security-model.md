@@ -72,7 +72,10 @@ follow `docs/specification-map.md`.
   the auxiliary header; an unknown sequence number causes a drop.
 * Incoming frame counters are tracked per source extended address; frames
   whose counter is not strictly greater than the stored value are rejected
-  (replay protection), with the reset rules of §4.3.4 applied on key switch.
+  (replay protection). On a key switch the incoming counters are reset and
+  the outgoing counter is reset to zero only when it exceeds 0x8000_0000
+  (§4.3.4); otherwise it continues, so a value is never reused under the
+  new key either.
 * The outgoing frame counter is monotonic across reboots (see below) and
   triggers a network-key update request when approaching exhaustion.
 

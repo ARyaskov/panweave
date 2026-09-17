@@ -413,6 +413,8 @@ pub(crate) enum TxKind {
     JoinResponse {
         /// Child.
         device: ExtendedAddress,
+        /// How the child attached (reported in the join indication).
+        method: JoinMethod,
     },
     /// Route reply relay (link failure → network status).
     RouteReply {

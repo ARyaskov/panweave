@@ -751,7 +751,8 @@ fn secured_rejoin_after_reboot_keeps_address() {
         evs.iter().any(|e| matches!(
             e,
             NwkEvent::JoinIndication {
-                method: panweave_nwk::layer::JoinMethod::RejoinSecured,
+                method: panweave_nwk::layer::JoinMethod::RejoinSecured
+                    | panweave_nwk::layer::JoinMethod::CommissioningRejoinSecured,
                 ..
             }
         )),

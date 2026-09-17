@@ -5,19 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: testkit"
+description = "Panweave Zigbee stack: virtual clock, deterministic RNG helpers and a virtual radio medium for tests"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
+std = ["alloc", "panweave-types/std", "panweave-mac/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "panweave-mac/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-mac = { workspace = true }
+heapless = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 
