@@ -63,10 +63,10 @@ id = "PW-SE-COMM-001"
 section = "§5.5"
 summary = "Commissioning: formation, commissioning modes, service discovery and binding"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::commissioning"
-tests = []
-
+tests = ["scan_schedule_follows_5_5_5_1", "joining_backs_out_and_paces_key_establishment", "steady_state_recovers_and_returns"]
+notes = "The §5.5.5 life-cycle is a state machine: the auto-join scan schedule (immediately, per minute for 15 minutes ± 15 s, then hourly ± 30 min), backing out of a PAN whose network key cannot be decrypted with the three-per-PAN and ten-before-rescan limits, Key Establishment retries with the fifteen-minute pause after ten failures and no leave, the leave rules of step 7 (APS Remove Device / user always, a parent's NWK leave only for end devices or unauthenticated children), rediscovery periods (3–24 h, after recovery, 60–600 s after a device announce), the 24-hour keep-alive failure limit, and rejoin-and-recovery (three rounds on the channel, scan by extended PAN ID, back to the original channel, hourly ± 30 min after four failures, ended by an APS-secured Trust Center message); the ESI rules of §5.5.5.5 (one hour before removing a device without CBKE, five devices minimum) are constants and a predicate. Network formation (§5.5.1) is the R23 runtime's; the machine is not yet driven by the runtime (scan, join, CBKE, ZDO discovery and Bind_req to every ESI are the application's), TODO(PW-SE-COMM-RUNTIME)."
 [[requirement]]
 id = "PW-SE-DEV-001"
 section = "§6.3"

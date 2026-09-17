@@ -307,6 +307,11 @@ Keep a Changelog; versions follow SemVer.
   restore), the Table 5-11 link key hash, the joiner's reaction to a
   Key Establishment result, partner-key brokering rules and the
   device-side Trust Center swap-out state machine.
+* `panweave-smart-energy::commissioning`: the §5.5.5 life-cycle state
+  machine — auto-join scan schedule, wrong-PAN back-out limits, Key
+  Establishment pacing without leaving, the leave-instruction rules,
+  rediscovery periods, the 24-hour keep-alive failure limit and the
+  rejoin-and-recovery procedure with its hourly slow-down.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
