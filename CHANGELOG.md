@@ -176,6 +176,13 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Thermostat completion (ZCL8 §6.3.2.2.3–5, §6.3.2.3.5): the setpoint
+  change tracking set (source / amount / UTC stamp from the endpoint's
+  Time server, occupied / unoccupied setbacks clamped into their
+  bounds, EmergencyHeatDelta in the running mode), the AC information
+  set with `TemperatureSetpointHoldDuration`,
+  `ThermostatProgrammingOperationMode` and `ThermostatRunningState`,
+  and the relay status log with Get Relay Status Log / Response.
 * Door Lock completion (ZCL8 §7.3): week day, year day and holiday
   schedules (Set / Get / Clear with their responses; schedule users
   gated at RF operations against the endpoint clock with the

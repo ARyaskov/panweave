@@ -1,9 +1,9 @@
 //! HVAC clusters (ZCL8 chapter 6): the Thermostat core — information
 //! and settings attributes, the setpoint limit and dead-band rules
 //! enforced on writes, Setpoint Raise/Lower, the running-mode
-//! interpretation of Table 6-17, the weekly setpoint schedule and the
-//! scene extension — and Fan Control. The relay status log and AC
-//! information sets are not implemented.
+//! interpretation of Table 6-17, the weekly setpoint schedule, the
+//! setpoint change tracking, AC information and relay status log sets
+//! and the scene extension — and Fan Control.
 
 use heapless::Vec;
 use panweave_types::time::{Duration, Instant};
@@ -102,6 +102,134 @@ pub mod thermostat {
     /// schedule leaves the setpoints alone.
     pub const TEMPERATURE_SETPOINT_HOLD: AttributeDef =
         AttributeDef::new(0x0023, DataType::Enum8, Access::RW);
+    /// `TemperatureSetpointHoldDuration` (uint16 minutes, 0…1440, 0xffff
+    /// unused).
+    pub const TEMPERATURE_SETPOINT_HOLD_DURATION: AttributeDef =
+        AttributeDef::new(0x0024, DataType::Uint(2), Access::RW);
+    /// `ThermostatProgrammingOperationMode` (map8, Table 6-23, reported).
+    pub const THERMOSTAT_PROGRAMMING_OPERATION_MODE: AttributeDef =
+        AttributeDef::new(0x0025, DataType::Bitmap(1), Access::RW_REPORT);
+    /// `ThermostatRunningState` (map16, Table 6-24).
+    pub const THERMOSTAT_RUNNING_STATE: AttributeDef =
+        AttributeDef::new(0x0029, DataType::Bitmap(2), Access::RO);
+    /// `SetpointChangeSource` (enum8, Table 6-26).
+    pub const SETPOINT_CHANGE_SOURCE: AttributeDef =
+        AttributeDef::new(0x0030, DataType::Enum8, Access::RO);
+    /// `SetpointChangeAmount` (int16 0.01 °C, 0x8000 unknown).
+    pub const SETPOINT_CHANGE_AMOUNT: AttributeDef =
+        AttributeDef::new(0x0031, DataType::Int(2), Access::RO);
+    /// `SetpointChangeSourceTimestamp` (UTC).
+    pub const SETPOINT_CHANGE_SOURCE_TIMESTAMP: AttributeDef =
+        AttributeDef::new(0x0032, DataType::UtcTime, Access::RO);
+    /// `OccupiedSetback` (uint8 0.1 °C, 0xff unused).
+    pub const OCCUPIED_SETBACK: AttributeDef =
+        AttributeDef::new(0x0034, DataType::Uint(1), Access::RW);
+    /// `OccupiedSetbackMin`.
+    pub const OCCUPIED_SETBACK_MIN: AttributeDef =
+        AttributeDef::new(0x0035, DataType::Uint(1), Access::RO);
+    /// `OccupiedSetbackMax`.
+    pub const OCCUPIED_SETBACK_MAX: AttributeDef =
+        AttributeDef::new(0x0036, DataType::Uint(1), Access::RO);
+    /// `UnoccupiedSetback`.
+    pub const UNOCCUPIED_SETBACK: AttributeDef =
+        AttributeDef::new(0x0037, DataType::Uint(1), Access::RW);
+    /// `UnoccupiedSetbackMin`.
+    pub const UNOCCUPIED_SETBACK_MIN: AttributeDef =
+        AttributeDef::new(0x0038, DataType::Uint(1), Access::RO);
+    /// `UnoccupiedSetbackMax`.
+    pub const UNOCCUPIED_SETBACK_MAX: AttributeDef =
+        AttributeDef::new(0x0039, DataType::Uint(1), Access::RO);
+    /// `EmergencyHeatDelta` (uint8 0.1 °C, 0xff unused).
+    pub const EMERGENCY_HEAT_DELTA: AttributeDef =
+        AttributeDef::new(0x003a, DataType::Uint(1), Access::RW);
+    /// `ACType` (enum8, Table 6-29).
+    pub const AC_TYPE: AttributeDef = AttributeDef::new(0x0040, DataType::Enum8, Access::RW);
+    /// `ACCapacity` (uint16, in `ACCapacityFormat`).
+    pub const AC_CAPACITY: AttributeDef = AttributeDef::new(0x0041, DataType::Uint(2), Access::RW);
+    /// `ACRefrigerantType` (enum8, Table 6-30).
+    pub const AC_REFRIGERANT_TYPE: AttributeDef =
+        AttributeDef::new(0x0042, DataType::Enum8, Access::RW);
+    /// `ACCompressorType` (enum8, Table 6-31).
+    pub const AC_COMPRESSOR_TYPE: AttributeDef =
+        AttributeDef::new(0x0043, DataType::Enum8, Access::RW);
+    /// `ACErrorCode` (map32, Table 6-32).
+    pub const AC_ERROR_CODE: AttributeDef =
+        AttributeDef::new(0x0044, DataType::Bitmap(4), Access::RW);
+    /// `ACLouverPosition` (enum8, Table 6-33).
+    pub const AC_LOUVER_POSITION: AttributeDef =
+        AttributeDef::new(0x0045, DataType::Enum8, Access::RW);
+    /// `ACCoilTemperature` (int16 0.01 °C).
+    pub const AC_COIL_TEMPERATURE: AttributeDef =
+        AttributeDef::new(0x0046, DataType::Int(2), Access::RO);
+    /// `ACCapacityFormat` (enum8, Table 6-34: 0 BTUh).
+    pub const AC_CAPACITY_FORMAT: AttributeDef =
+        AttributeDef::new(0x0047, DataType::Enum8, Access::RW);
+
+    /// Setback non-value.
+    pub const SETBACK_UNUSED: u8 = 0xff;
+    /// Hold duration non-value.
+    pub const HOLD_DURATION_UNUSED: u16 = 0xffff;
+
+    /// `SetpointChangeSource` values (Table 6-26).
+    pub mod setpoint_source {
+        /// Manual change at the thermostat.
+        pub const MANUAL: u8 = 0x00;
+        /// The schedule / internal programming.
+        pub const SCHEDULE: u8 = 0x01;
+        /// External: a command or attribute write.
+        pub const EXTERNAL: u8 = 0x02;
+    }
+
+    /// `ThermostatProgrammingOperationMode` bits (Table 6-23).
+    pub mod programming_mode {
+        /// Schedule programming enabled.
+        pub const SCHEDULE: u8 = 0x01;
+        /// Auto / recovery.
+        pub const RECOVERY: u8 = 0x02;
+        /// Economy / EnergyStar.
+        pub const ECONOMY: u8 = 0x04;
+    }
+
+    /// `ThermostatRunningState` bits (Table 6-24).
+    pub mod running_state {
+        /// Heat relay.
+        pub const HEAT: u16 = 1 << 0;
+        /// Cool relay.
+        pub const COOL: u16 = 1 << 1;
+        /// Fan relay.
+        pub const FAN: u16 = 1 << 2;
+        /// Heat second stage.
+        pub const HEAT_STAGE_2: u16 = 1 << 3;
+        /// Cool second stage.
+        pub const COOL_STAGE_2: u16 = 1 << 4;
+        /// Fan second stage.
+        pub const FAN_STAGE_2: u16 = 1 << 5;
+        /// Fan third stage.
+        pub const FAN_STAGE_3: u16 = 1 << 6;
+    }
+
+    /// Get Relay Status Log (§6.3.2.3.5).
+    pub const CMD_GET_RELAY_STATUS_LOG: CommandId = CommandId(0x04);
+    /// Get Relay Status Log Response (§6.3.2.4.2, server command).
+    pub const CMD_GET_RELAY_STATUS_LOG_RESPONSE: CommandId = CommandId(0x01);
+    /// Relay status log capacity.
+    pub const MAX_RELAY_LOG: usize = 8;
+
+    /// One relay status log record (§6.3.2.4.2).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+    pub struct RelayLogEntry {
+        /// Minutes since midnight when captured.
+        pub time_of_day: u16,
+        /// Relay bits (manufacturer mapping).
+        pub relay_status: u8,
+        /// `LocalTemperature` when captured (0.01 °C).
+        pub local_temperature: i16,
+        /// Humidity in percent (0xff unknown).
+        pub humidity: u8,
+        /// The target setpoint when captured (0.01 °C).
+        pub setpoint: i16,
+    }
 
     /// Unknown temperature (non-value).
     pub const UNKNOWN: i16 = i16::MIN;
@@ -185,12 +313,13 @@ pub mod thermostat {
         pub cool: Option<i16>,
     }
 
-    /// The weekly setpoint schedule of a server (§6.3.2.2.3).
+    /// The weekly setpoint schedule of a server (§6.3.2.2.3) and its
+    /// relay status log (§6.3.2.3.5).
     #[derive(Clone, PartialEq, Eq, Debug, Default)]
     pub struct Schedule {
         /// Transitions ordered by day then time.
         pub transitions: Vec<Transition, MAX_WEEKLY_TRANSITIONS>,
-        /// `NumberOfWeeklyTransitions`.
+        /// `NumberOfWeeklyTransitions` (0: no schedule extension).
         pub weekly: u8,
         /// `NumberOfDailyTransitions`.
         pub daily: u8,
@@ -199,6 +328,10 @@ pub mod thermostat {
         pub applied: Option<(u8, u16)>,
         /// The schedule changed and has not been run against the clock.
         pub dirty: bool,
+        /// Relay status log, oldest first.
+        pub relay_log: Vec<RelayLogEntry, MAX_RELAY_LOG>,
+        /// Unread relay log entries.
+        pub unread: u8,
     }
 
     /// Longest Get Weekly Schedule Response payload: the header and
@@ -272,6 +405,32 @@ pub mod thermostat {
             CMD_CLEAR_WEEKLY_SCHEDULE,
         ],
         generated: &[CMD_GET_WEEKLY_SCHEDULE_RESPONSE],
+    };
+
+    /// Cluster definition of a server with the weekly schedule and the
+    /// relay status log.
+    pub const FULL_DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 3,
+        received: &[
+            CMD_SETPOINT_RAISE_LOWER,
+            CMD_SET_WEEKLY_SCHEDULE,
+            CMD_GET_WEEKLY_SCHEDULE,
+            CMD_CLEAR_WEEKLY_SCHEDULE,
+            CMD_GET_RELAY_STATUS_LOG,
+        ],
+        generated: &[
+            CMD_GET_WEEKLY_SCHEDULE_RESPONSE,
+            CMD_GET_RELAY_STATUS_LOG_RESPONSE,
+        ],
+    };
+
+    /// Cluster definition of a server with the relay status log only.
+    pub const RELAY_LOG_DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 3,
+        received: &[CMD_SETPOINT_RAISE_LOWER, CMD_GET_RELAY_STATUS_LOG],
+        generated: &[CMD_GET_RELAY_STATUS_LOG_RESPONSE],
     };
 
     /// Default reporting of `LocalTemperature` (0.5 °C) and the demands.
@@ -444,7 +603,79 @@ pub mod thermostat {
                     ZclStatus::InvalidValue
                 }
             }
+            i if i == TEMPERATURE_SETPOINT_HOLD_DURATION.id => {
+                if val <= 0x05a0 || val == i64::from(HOLD_DURATION_UNUSED) {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
+            i if i == THERMOSTAT_PROGRAMMING_OPERATION_MODE.id => {
+                if v.as_u64().is_some_and(|m| m <= 0x07) {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
+            i if i == AC_TYPE.id => {
+                if val <= 0x04 {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
+            i if i == AC_REFRIGERANT_TYPE.id || i == AC_COMPRESSOR_TYPE.id => {
+                if val <= 0x03 {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
+            i if i == AC_LOUVER_POSITION.id => {
+                if (1..=5).contains(&val) {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
+            i if i == AC_CAPACITY_FORMAT.id => {
+                if val == 0 {
+                    ZclStatus::Success
+                } else {
+                    ZclStatus::InvalidValue
+                }
+            }
             _ => ZclStatus::Success,
+        }
+    }
+
+    /// Clamps a written setback into its min / max (§6.3.2.2.4.4: the
+    /// write succeeds with the bound).
+    fn after_write<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {
+        let (min_id, max_id) = if id == OCCUPIED_SETBACK.id {
+            (OCCUPIED_SETBACK_MIN.id, OCCUPIED_SETBACK_MAX.id)
+        } else if id == UNOCCUPIED_SETBACK.id {
+            (UNOCCUPIED_SETBACK_MIN.id, UNOCCUPIED_SETBACK_MAX.id)
+        } else {
+            return;
+        };
+        let Some(v) = c.u8(id) else {
+            return;
+        };
+        if v == SETBACK_UNUSED {
+            return;
+        }
+        let min = c.u8(min_id).unwrap_or(0);
+        let max = c.u8(max_id).unwrap_or(SETBACK_UNUSED);
+        let clamped = if min != SETBACK_UNUSED && v < min {
+            min
+        } else if max != SETBACK_UNUSED && v > max {
+            max
+        } else {
+            v
+        };
+        if clamped != v {
+            c.set_u8(id, clamped);
         }
     }
 
@@ -550,27 +781,236 @@ pub mod thermostat {
             },
         )?;
         c.add_attribute(TEMPERATURE_SETPOINT_HOLD, &Value::Enum8(0))?;
-        c.def = SCHEDULE_DEF;
-        c.state = ClusterState::Thermostat(Schedule {
-            weekly,
-            daily,
-            dirty: true,
-            ..Schedule::default()
-        });
+        c.def = if c.def.received.contains(&CMD_GET_RELAY_STATUS_LOG) {
+            FULL_DEF
+        } else {
+            SCHEDULE_DEF
+        };
+        let s = extras_mut(c);
+        s.weekly = weekly;
+        s.daily = daily;
+        s.dirty = true;
         Ok(())
     }
 
     /// The weekly schedule of a server (`None` without the extension).
     pub fn schedule<const A: usize>(c: &ClusterInstance<A>) -> Option<&Schedule> {
         match &c.state {
-            ClusterState::Thermostat(s) => Some(s),
+            ClusterState::Thermostat(s) if s.weekly > 0 => Some(s),
             _ => None,
         }
     }
 
+    fn extras_mut<const A: usize>(c: &mut ClusterInstance<A>) -> &mut Schedule {
+        if !matches!(c.state, ClusterState::Thermostat(_)) {
+            c.state = ClusterState::Thermostat(Schedule::default());
+        }
+        match &mut c.state {
+            ClusterState::Thermostat(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Adds the setpoint change tracking set (§6.3.2.2.4): the change
+    /// source / amount / timestamp, the occupied and unoccupied setbacks
+    /// with their bounds (0.1 °C; `SETBACK_UNUSED` disables one) and
+    /// `EmergencyHeatDelta`. Setback writes beyond the bounds are clamped.
+    pub fn enable_setpoint_tracking<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        occupied: (u8, u8),
+        unoccupied: (u8, u8),
+    ) -> Result<(), ZclStatus> {
+        let bounds_ok =
+            |(lo, hi): (u8, u8)| lo == SETBACK_UNUSED || hi == SETBACK_UNUSED || lo < hi;
+        if !bounds_ok(occupied) || !bounds_ok(unoccupied) {
+            return Err(ZclStatus::InvalidValue);
+        }
+        let u8v = |v: u8| Value::Uint {
+            width: 1,
+            value: u64::from(v),
+        };
+        c.add_attribute(
+            SETPOINT_CHANGE_SOURCE,
+            &Value::Enum8(setpoint_source::MANUAL),
+        )?;
+        c.add_attribute(SETPOINT_CHANGE_AMOUNT, &i16v(UNKNOWN))?;
+        c.add_attribute(
+            SETPOINT_CHANGE_SOURCE_TIMESTAMP,
+            &Value::Time {
+                ty: DataType::UtcTime,
+                raw: 0,
+            },
+        )?;
+        c.add_attribute(OCCUPIED_SETBACK, &u8v(SETBACK_UNUSED))?;
+        c.add_attribute(OCCUPIED_SETBACK_MIN, &u8v(occupied.0))?;
+        c.add_attribute(OCCUPIED_SETBACK_MAX, &u8v(occupied.1))?;
+        c.add_attribute(UNOCCUPIED_SETBACK, &u8v(SETBACK_UNUSED))?;
+        c.add_attribute(UNOCCUPIED_SETBACK_MIN, &u8v(unoccupied.0))?;
+        c.add_attribute(UNOCCUPIED_SETBACK_MAX, &u8v(unoccupied.1))?;
+        c.add_attribute(EMERGENCY_HEAT_DELTA, &u8v(SETBACK_UNUSED))?;
+        c.after_write = Some(after_write::<A>);
+        Ok(())
+    }
+
+    /// Adds the AC information set (§6.3.2.2.5) at its defaults, plus
+    /// `TemperatureSetpointHoldDuration`,
+    /// `ThermostatProgrammingOperationMode` and `ThermostatRunningState`.
+    pub fn enable_ac_information<const A: usize>(
+        c: &mut ClusterInstance<A>,
+    ) -> Result<(), ZclStatus> {
+        c.add_attribute(
+            TEMPERATURE_SETPOINT_HOLD_DURATION,
+            &Value::Uint {
+                width: 2,
+                value: u64::from(HOLD_DURATION_UNUSED),
+            },
+        )?;
+        c.add_reported_attribute(
+            THERMOSTAT_PROGRAMMING_OPERATION_MODE,
+            &Value::Bits { width: 1, bits: 0 },
+            DEMAND_REPORTING,
+        )?;
+        c.add_attribute(THERMOSTAT_RUNNING_STATE, &Value::Bits { width: 2, bits: 0 })?;
+        c.add_attribute(AC_TYPE, &Value::Enum8(0))?;
+        c.add_attribute(AC_CAPACITY, &Value::Uint { width: 2, value: 0 })?;
+        c.add_attribute(AC_REFRIGERANT_TYPE, &Value::Enum8(0))?;
+        c.add_attribute(AC_COMPRESSOR_TYPE, &Value::Enum8(0))?;
+        c.add_attribute(AC_ERROR_CODE, &Value::Bits { width: 4, bits: 0 })?;
+        c.add_attribute(AC_LOUVER_POSITION, &Value::Enum8(1))?;
+        c.add_attribute(AC_COIL_TEMPERATURE, &i16v(UNKNOWN))?;
+        c.add_attribute(AC_CAPACITY_FORMAT, &Value::Enum8(0))?;
+        Ok(())
+    }
+
+    /// Enables the relay status log (§6.3.2.3.5) and its command.
+    pub fn enable_relay_log<const A: usize>(c: &mut ClusterInstance<A>) {
+        let _ = extras_mut(c);
+        c.def = if c.def.received.contains(&CMD_SET_WEEKLY_SCHEDULE) {
+            FULL_DEF
+        } else {
+            RELAY_LOG_DEF
+        };
+    }
+
+    /// Records a relay status sample (§6.3.2.3.5): the relay bits with
+    /// the current local temperature, `humidity` (0xff unknown) and the
+    /// running mode's setpoint; the oldest record makes room. Also
+    /// mirrors the heat / cool bits into `ThermostatRunningState`.
+    pub fn record_relay_status<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        time_of_day: u16,
+        relay_status: u8,
+        humidity: u8,
+    ) {
+        let temp = c.i16(LOCAL_TEMPERATURE.id).unwrap_or(UNKNOWN);
+        let setpoint = match c.u8(THERMOSTAT_RUNNING_MODE.id) {
+            Some(system_mode::COOL) => c.i16(OCCUPIED_COOLING_SETPOINT.id),
+            _ => c.i16(OCCUPIED_HEATING_SETPOINT.id),
+        }
+        .unwrap_or(UNKNOWN);
+        if c.attributes
+            .get(THERMOSTAT_RUNNING_STATE.id, None)
+            .is_some()
+        {
+            c.set(
+                THERMOSTAT_RUNNING_STATE.id,
+                &Value::Bits {
+                    width: 2,
+                    bits: u64::from(relay_status),
+                },
+            );
+        }
+        let s = extras_mut(c);
+        if s.relay_log.is_full() {
+            s.relay_log.remove(0);
+        }
+        let _ = s.relay_log.push(RelayLogEntry {
+            time_of_day: time_of_day.min(1439),
+            relay_status,
+            local_temperature: temp,
+            humidity,
+            setpoint,
+        });
+        s.unread = s
+            .unread
+            .saturating_add(1)
+            .min(u8::try_from(MAX_RELAY_LOG).unwrap_or(u8::MAX));
+    }
+
+    /// Records a setpoint change for the tracking set (§6.3.2.2.4):
+    /// `source`, the delta from `previous` to `new` and, when known, the
+    /// UTC time.
+    pub fn note_setpoint_change<const A: usize>(
+        c: &mut ClusterInstance<A>,
+        source: u8,
+        previous: i16,
+        new: i16,
+        utc: Option<u32>,
+    ) {
+        if c.attributes.get(SETPOINT_CHANGE_SOURCE.id, None).is_none() {
+            return;
+        }
+        c.set(SETPOINT_CHANGE_SOURCE.id, &Value::Enum8(source));
+        let delta = i16::try_from(i32::from(new) - i32::from(previous)).unwrap_or(UNKNOWN);
+        c.set_i16(SETPOINT_CHANGE_AMOUNT.id, delta);
+        if let Some(t) = utc {
+            c.set(
+                SETPOINT_CHANGE_SOURCE_TIMESTAMP.id,
+                &Value::Time {
+                    ty: DataType::UtcTime,
+                    raw: t,
+                },
+            );
+        }
+    }
+
+    /// Stamps the last recorded setpoint change with the UTC time (the
+    /// dispatcher supplies it from the endpoint's Time server).
+    pub fn stamp_setpoint_change<const A: usize>(c: &mut ClusterInstance<A>, utc: u32) {
+        if c.attributes
+            .get(SETPOINT_CHANGE_SOURCE_TIMESTAMP.id, None)
+            .is_some()
+        {
+            c.set(
+                SETPOINT_CHANGE_SOURCE_TIMESTAMP.id,
+                &Value::Time {
+                    ty: DataType::UtcTime,
+                    raw: utc,
+                },
+            );
+        }
+    }
+
+    /// The Get Relay Status Log Response (§6.3.2.4.2): the newest unread
+    /// record (LIFO), or the newest record again once all were read.
+    fn relay_status_log_response<const A: usize>(
+        c: &mut ClusterInstance<A>,
+    ) -> Option<Vec<u8, 10>> {
+        let s = extras_mut(c);
+        let n = s.relay_log.len();
+        // The unread records are the newest `unread`; LIFO hands out the
+        // newest of them first.
+        let index = if s.unread == 0 {
+            n.checked_sub(1)?
+        } else {
+            usize::from(s.unread).min(n).checked_sub(1)?
+        };
+        let e = *s.relay_log.get(index)?;
+        s.unread = s.unread.saturating_sub(1);
+        let unread = s.unread;
+        let mut out = Vec::new();
+        let _ = out.extend_from_slice(&e.time_of_day.to_le_bytes());
+        let _ = out.push(e.relay_status);
+        let _ = out.extend_from_slice(&e.local_temperature.to_le_bytes());
+        let _ = out.push(e.humidity);
+        let _ = out.extend_from_slice(&e.setpoint.to_le_bytes());
+        let _ = out.extend_from_slice(&u16::from(unread).to_le_bytes());
+        Some(out)
+    }
+
     fn schedule_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Schedule> {
         match &mut c.state {
-            ClusterState::Thermostat(s) => Some(s),
+            ClusterState::Thermostat(s) if s.weekly > 0 => Some(s),
             _ => None,
         }
     }
@@ -623,7 +1063,12 @@ pub mod thermostat {
         now: Instant,
         local_time: u32,
     ) -> Option<(Option<i16>, Option<i16>)> {
-        let hold = c.u8(TEMPERATURE_SETPOINT_HOLD.id) == Some(1);
+        // A hold, or schedule programming switched off in
+        // ThermostatProgrammingOperationMode (Table 6-23 bit 0), keeps
+        // the schedule off the setpoints.
+        let hold = c.u8(TEMPERATURE_SETPOINT_HOLD.id) == Some(1)
+            || c.u8(THERMOSTAT_PROGRAMMING_OPERATION_MODE.id)
+                .is_some_and(|m| m & programming_mode::SCHEDULE == 0);
         let has_heat = c
             .attributes
             .get(OCCUPIED_HEATING_SETPOINT.id, None)
@@ -654,10 +1099,14 @@ pub mod thermostat {
         let heat = t.heat.filter(|_| has_heat);
         let cool = t.cool.filter(|_| has_cool);
         if let Some(h) = heat {
+            let before = c.i16(OCCUPIED_HEATING_SETPOINT.id).unwrap_or(h);
             c.set_i16(OCCUPIED_HEATING_SETPOINT.id, h);
+            note_setpoint_change(c, setpoint_source::SCHEDULE, before, h, None);
         }
         if let Some(k) = cool {
+            let before = c.i16(OCCUPIED_COOLING_SETPOINT.id).unwrap_or(k);
             c.set_i16(OCCUPIED_COOLING_SETPOINT.id, k);
+            note_setpoint_change(c, setpoint_source::SCHEDULE, before, k, None);
         }
         if heat.is_none() && cool.is_none() {
             return None;
@@ -855,7 +1304,17 @@ pub mod thermostat {
         };
         let below_heat = heat_sp.is_some_and(|h| t < h);
         let above_cool = cool_sp.is_some_and(|k| t > k);
+        // §6.3.2.2.4.10: far enough below the heating setpoint, heating
+        // runs in emergency heat mode.
+        let emergency = c
+            .u8(EMERGENCY_HEAT_DELTA.id)
+            .filter(|d| *d != SETBACK_UNUSED)
+            .zip(heat_sp)
+            .is_some_and(|(d, h)| i32::from(h) - i32::from(t) >= i32::from(d) * 10);
         match mode {
+            system_mode::HEAT | system_mode::AUTO if below_heat && emergency => {
+                system_mode::EMERGENCY_HEATING
+            }
             system_mode::HEAT | system_mode::EMERGENCY_HEATING if below_heat => system_mode::HEAT,
             system_mode::COOL | system_mode::PRECOOLING if above_cool => system_mode::COOL,
             system_mode::AUTO if below_heat => system_mode::HEAT,
@@ -879,6 +1338,8 @@ pub mod thermostat {
         Scheduled,
         /// A Get Weekly Schedule Response payload.
         Response(Vec<u8, RESPONSE_MAX>),
+        /// A Get Relay Status Log Response payload.
+        RelayLog(Vec<u8, 10>),
         /// Refused with this status.
         Default(ZclStatus),
     }
@@ -906,8 +1367,17 @@ pub mod thermostat {
                     Err(status) => Outcome::Default(status),
                 };
             }
+            CMD_GET_RELAY_STATUS_LOG => {
+                if !c.def.received.contains(&CMD_GET_RELAY_STATUS_LOG) {
+                    return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
+                }
+                return match relay_status_log_response(c) {
+                    Some(p) => Outcome::RelayLog(p),
+                    None => Outcome::Default(ZclStatus::NotFound),
+                };
+            }
             CMD_CLEAR_WEEKLY_SCHEDULE => {
-                let Some(s) = schedule_mut(c) else {
+                let Some(s) = schedule_mut(c).filter(|s| s.weekly > 0) else {
                     return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
                 };
                 s.transitions.clear();
@@ -976,6 +1446,8 @@ pub mod thermostat {
                 heat = Some((k - dead).max(min_heat));
             }
         }
+        let before_heat = c.i16(OCCUPIED_HEATING_SETPOINT.id);
+        let before_cool = c.i16(OCCUPIED_COOLING_SETPOINT.id);
         if let Some(h) = heat {
             c.set_i16(
                 OCCUPIED_HEATING_SETPOINT.id,
@@ -987,6 +1459,15 @@ pub mod thermostat {
                 OCCUPIED_COOLING_SETPOINT.id,
                 i16::try_from(k).unwrap_or(DEFAULT_COOLING_SETPOINT),
             );
+        }
+        // §6.3.2.2.4: the active setpoint's change is tracked.
+        let tracked = match (before_heat, heat, before_cool, cool) {
+            (Some(b), Some(n), _, _) if do_heat => Some((b, i16::try_from(n).unwrap_or(b))),
+            (_, _, Some(b), Some(n)) if do_cool => Some((b, i16::try_from(n).unwrap_or(b))),
+            _ => None,
+        };
+        if let Some((b, n)) = tracked {
+            note_setpoint_change(c, setpoint_source::EXTERNAL, b, n, None);
         }
         let running = running_mode(c);
         c.set(THERMOSTAT_RUNNING_MODE.id, &Value::Enum8(running));
@@ -1585,5 +2066,169 @@ mod tests {
         c.reset_to_defaults(now);
         assert!(schedule(&c).unwrap().transitions.is_empty());
         assert_eq!(schedule(&c).unwrap().weekly, 12);
+    }
+
+    #[test]
+    fn setpoint_tracking_ac_information_and_relay_log() {
+        let mut c: ClusterInstance<64> = server(Capability::HeatingAndCooling).unwrap();
+        enable_setpoint_tracking(&mut c, (5, 30), (10, 40)).unwrap();
+        enable_ac_information(&mut c).unwrap();
+        enable_relay_log(&mut c);
+        assert!(
+            enable_setpoint_tracking::<64>(
+                &mut server(Capability::Heating).unwrap(),
+                (30, 5),
+                (0xff, 0xff)
+            )
+            .is_err()
+        );
+        // A Setpoint Raise/Lower is an external change of +1.5 °C.
+        assert!(matches!(
+            handle(
+                &mut c,
+                CMD_SETPOINT_RAISE_LOWER,
+                &[raise_lower_mode::HEAT, 15]
+            ),
+            Outcome::Adjusted { .. }
+        ));
+        assert_eq!(
+            c.u8(SETPOINT_CHANGE_SOURCE.id),
+            Some(setpoint_source::EXTERNAL)
+        );
+        assert_eq!(c.i16(SETPOINT_CHANGE_AMOUNT.id), Some(150));
+        stamp_setpoint_change(&mut c, 800_000_000);
+        assert_eq!(
+            c.u64(SETPOINT_CHANGE_SOURCE_TIMESTAMP.id),
+            Some(800_000_000)
+        );
+        // Setback writes are clamped into the bounds (SUCCESS either way).
+        let g = c.write_guard.unwrap();
+        let h = c.after_write.unwrap();
+        let w = |c: &mut ClusterInstance<64>, id: AttributeId, v: u8| {
+            let val = Value::Uint {
+                width: 1,
+                value: u64::from(v),
+            };
+            assert_eq!(g(&c.attributes, id, &val), ZclStatus::Success);
+            c.set(id, &val);
+            h(c, id);
+            c.u8(id).unwrap()
+        };
+        assert_eq!(w(&mut c, OCCUPIED_SETBACK.id, 50), 30);
+        assert_eq!(w(&mut c, OCCUPIED_SETBACK.id, 2), 5);
+        assert_eq!(w(&mut c, OCCUPIED_SETBACK.id, 20), 20);
+        assert_eq!(
+            w(&mut c, UNOCCUPIED_SETBACK.id, SETBACK_UNUSED),
+            SETBACK_UNUSED
+        );
+        // AC information guards.
+        assert_eq!(
+            g(&c.attributes, AC_TYPE.id, &Value::Enum8(5)),
+            ZclStatus::InvalidValue
+        );
+        assert_eq!(
+            g(&c.attributes, AC_LOUVER_POSITION.id, &Value::Enum8(0)),
+            ZclStatus::InvalidValue
+        );
+        assert_eq!(
+            g(
+                &c.attributes,
+                TEMPERATURE_SETPOINT_HOLD_DURATION.id,
+                &Value::Uint {
+                    width: 2,
+                    value: 1441
+                }
+            ),
+            ZclStatus::InvalidValue
+        );
+        assert_eq!(
+            g(
+                &c.attributes,
+                THERMOSTAT_PROGRAMMING_OPERATION_MODE.id,
+                &Value::Bits { width: 1, bits: 8 }
+            ),
+            ZclStatus::InvalidValue
+        );
+        // Emergency heat: 2.0 °C below the 21.5 °C setpoint with a delta
+        // of 1.5 °C.
+        c.set(SYSTEM_MODE.id, &Value::Enum8(system_mode::HEAT));
+        c.set_u8(EMERGENCY_HEAT_DELTA.id, 15);
+        set_local_temperature(&mut c, Some(1950));
+        assert_eq!(
+            c.u8(THERMOSTAT_RUNNING_MODE.id),
+            Some(system_mode::EMERGENCY_HEATING)
+        );
+        set_local_temperature(&mut c, Some(2100));
+        assert_eq!(c.u8(THERMOSTAT_RUNNING_MODE.id), Some(system_mode::HEAT));
+        // The relay log: three samples, read back newest first with the
+        // unread count, then the newest again.
+        set_local_temperature(&mut c, Some(1950));
+        record_relay_status(&mut c, 360, running_state::HEAT as u8, 45);
+        record_relay_status(
+            &mut c,
+            420,
+            running_state::HEAT as u8 | running_state::FAN as u8,
+            0xff,
+        );
+        record_relay_status(&mut c, 480, 0, 50);
+        assert_eq!(c.u16(THERMOSTAT_RUNNING_STATE.id), Some(0));
+        let Outcome::RelayLog(p) = handle(&mut c, CMD_GET_RELAY_STATUS_LOG, &[]) else {
+            panic!("no relay log response");
+        };
+        assert_eq!(
+            p.as_slice(),
+            &[0xe0, 0x01, 0, 0x9e, 0x07, 50, 0x66, 0x08, 2, 0]
+        );
+        let Outcome::RelayLog(p) = handle(&mut c, CMD_GET_RELAY_STATUS_LOG, &[]) else {
+            panic!("no relay log response");
+        };
+        assert_eq!(p[0..2], [0xa4, 0x01]);
+        assert_eq!(p[8..], [1, 0]);
+        let Outcome::RelayLog(p) = handle(&mut c, CMD_GET_RELAY_STATUS_LOG, &[]) else {
+            panic!("no relay log response");
+        };
+        assert_eq!(p[0..2], [0x68, 0x01]);
+        assert_eq!(p[8..], [0, 0]);
+        let Outcome::RelayLog(p) = handle(&mut c, CMD_GET_RELAY_STATUS_LOG, &[]) else {
+            panic!("no relay log response");
+        };
+        assert_eq!(p[0..2], [0xe0, 0x01]);
+        // Without the log the command is unsupported; with the schedule
+        // both extensions coexist.
+        let mut plain: ClusterInstance<36> = server(Capability::Heating).unwrap();
+        assert_eq!(
+            handle(&mut plain, CMD_GET_RELAY_STATUS_LOG, &[]),
+            Outcome::Default(ZclStatus::UnsupportedClusterCommand)
+        );
+        enable_weekly_schedule(&mut c, 1, 12, 4).unwrap();
+        assert!(c.def.received.contains(&CMD_GET_RELAY_STATUS_LOG));
+        assert!(c.def.received.contains(&CMD_SET_WEEKLY_SCHEDULE));
+        assert!(schedule(&c).is_some());
+        assert_eq!(schedule(&c).unwrap().relay_log.len(), 3);
+        // Schedule programming is off until Table 6-23 bit 0 is set.
+        let monday = set_payload(
+            day_of_week::MONDAY,
+            schedule_mode::HEAT,
+            &[(360, Some(2300), None)],
+        );
+        assert_eq!(
+            handle(&mut c, CMD_SET_WEEKLY_SCHEDULE, &monday),
+            Outcome::Scheduled
+        );
+        let now = Instant::from_millis(0);
+        let monday_0700 = 2 * 86_400 + 7 * 3_600;
+        assert_eq!(tick(&mut c, now, monday_0700), None);
+        c.set(
+            THERMOSTAT_PROGRAMMING_OPERATION_MODE.id,
+            &Value::Bits {
+                width: 1,
+                bits: u64::from(programming_mode::SCHEDULE),
+            },
+        );
+        assert_eq!(tick(&mut c, now, monday_0700), Some((Some(2300), None)));
+        assert_eq!(
+            c.u8(SETPOINT_CHANGE_SOURCE.id),
+            Some(setpoint_source::SCHEDULE)
+        );
     }
 }

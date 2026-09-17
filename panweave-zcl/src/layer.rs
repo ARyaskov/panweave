@@ -1096,6 +1096,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 let endpoint = origin.endpoint;
                                 match hvac::thermostat::handle(c, cmd, payload) {
                                     hvac::thermostat::Outcome::Adjusted { heat, cool } => {
+                                        self.stamp_setpoint_change(i);
                                         if let Some(sc) = self
                                             .endpoints
                                             .get_mut(i)
@@ -1121,6 +1122,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                         self.reply_cluster_specific(
                                             &origin,
                                             hvac::thermostat::CMD_GET_WEEKLY_SCHEDULE_RESPONSE,
+                                            &payload,
+                                        );
+                                    }
+                                    hvac::thermostat::Outcome::RelayLog(payload) => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            hvac::thermostat::CMD_GET_RELAY_STATUS_LOG_RESPONSE,
                                             &payload,
                                         );
                                     }
@@ -1369,6 +1377,24 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         }
     }
 
+    /// Stamps the thermostat's last setpoint change with the endpoint's
+    /// UTC time (§6.3.2.2.4.3), when a Time server keeps one.
+    fn stamp_setpoint_change(&mut self, ep_index: usize) {
+        let now = self.now;
+        let Some(ep) = self.endpoints.get_mut(ep_index) else {
+            return;
+        };
+        let Some(utc) = ep
+            .cluster(time::ID, Role::Server)
+            .and_then(|t| time::now(t, now))
+        else {
+            return;
+        };
+        if let Some(c) = ep.cluster_mut(hvac::thermostat::ID, Role::Server) {
+            hvac::thermostat::stamp_setpoint_change(c, utc);
+        }
+    }
+
     /// Runs the thermostat weekly schedule of the endpoint against its
     /// Time server (§6.3.2.3.2.8); an applied transition reaches the
     /// application as [`ZclEvent::Setpoints`].
@@ -1385,6 +1411,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             if let Some(sc) = ep.cluster_mut(scenes::ID, Role::Server) {
                 scenes::invalidate(sc);
             }
+            self.stamp_setpoint_change(ep_index);
             self.push_event(ZclEvent::Setpoints {
                 endpoint,
                 heat,
