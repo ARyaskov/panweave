@@ -16,7 +16,7 @@ use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
 use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
 };
-use panweave_zcl::clusters::{door_lock, window_covering};
+use panweave_zcl::clusters::{door_lock, ias_ace, ias_wd, window_covering};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -48,6 +48,8 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     fan_control::ID,
     window_covering::ID,
     door_lock::ID,
+    ias_ace::ID,
+    ias_wd::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -71,6 +73,8 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     fan_control::ID,
     window_covering::ID,
     door_lock::ID,
+    ias_ace::ID,
+    ias_wd::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -149,6 +153,8 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
         )
         .ok(),
         door_lock::ID => door_lock::server(door_lock::lock_type::DEAD_BOLT, 4, true).ok(),
+        ias_ace::ID => Some(ias_ace::server(None)),
+        ias_wd::ID => ias_wd::server(ias_wd::DEFAULT_MAX_DURATION).ok(),
         _ => None,
     }
 }
@@ -178,6 +184,8 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
         fan_control::ID => Some(fan_control::client()),
         window_covering::ID => Some(window_covering::client()),
         door_lock::ID => Some(door_lock::client()),
+        ias_ace::ID => Some(ias_ace::client()),
+        ias_wd::ID => Some(ias_wd::client()),
         _ => None,
     }
 }
@@ -305,6 +313,17 @@ pub fn color_dimmable_light(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0102), &[], &[], false)
 }
 
+/// IAS Control and Indication Equipment (device 0x0400): the IAS ACE
+/// server (no arm code) with IAS Zone and IAS WD clients.
+pub fn ias_cie(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0400), &[], &[], false)
+}
+
+/// IAS Warning Device (device 0x0403): IAS Zone and IAS WD servers.
+pub fn ias_warning_device(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0403), &[], &[], false)
+}
+
 /// Door Lock (device 0x000a): Identify, Groups, Scenes and a dead-bolt
 /// Door Lock server with four PIN users.
 pub fn door_lock_device(endpoint: Endpoint) -> Option<Built> {
@@ -370,13 +389,15 @@ mod tests {
         assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
         assert!(ep.cluster(color_control::ID, Role::Server).is_some());
         type Builder = fn(Endpoint) -> Option<Built>;
-        let sensors: [(Builder, u16, ClusterId); 6] = [
+        let sensors: [(Builder, u16, ClusterId); 8] = [
             (light_sensor, 0x0106, illuminance::ID),
             (occupancy_sensor, 0x0107, occupancy::ID),
             (temperature_sensor, 0x0302, temperature::ID),
             (thermostat_device, 0x0301, thermostat::ID),
             (window_covering_device, 0x0202, window_covering::ID),
             (door_lock_device, 0x000a, door_lock::ID),
+            (ias_cie, 0x0400, ias_ace::ID),
+            (ias_warning_device, 0x0403, ias_wd::ID),
         ];
         for (build, id, cluster) in sensors {
             let (d, ep) = build(Endpoint(5)).unwrap();

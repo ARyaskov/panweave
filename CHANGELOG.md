@@ -189,6 +189,16 @@ Keep a Changelog; versions follow SemVer.
   door_lock_operation_event, door_lock_programming_event}` and the
   facade `door_lock_device` endpoint. PIN codes are redacted from
   `Debug` and compared in constant time.
+* `panweave-zcl::clusters::ias_ace` and `ias_wd`: the IAS ACE server
+  (bounded zone table, panel status, bypass list; Get Zone ID Map /
+  Zone Information / Panel Status / Bypassed Zone List / Zone Status
+  answered by the dispatcher, Arm and Bypass validated against the
+  arm / disarm code, Arm / Emergency / Fire / Panic handed over as
+  `ZclEvent::Ace`, Zone Status Changed and Panel Status Changed for the
+  bound clients, a CIE's IAS Zone client relaying notifications into
+  its panel) and the IAS WD server (`MaxDuration`, Start Warning
+  clamped and timed, Squawk, `ZclEvent::Warning` / `Squawk`); facade
+  `ias_cie` and `ias_warning_device` endpoints.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

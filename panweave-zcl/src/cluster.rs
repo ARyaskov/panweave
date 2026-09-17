@@ -81,6 +81,8 @@ pub enum ClusterState {
     Color(crate::clusters::color_control::Engine),
     /// Door Lock server state: PIN users and timers (§7.3).
     DoorLock(crate::clusters::door_lock::State),
+    /// IAS ACE server state: the zone table and panel status (§8.3).
+    IasAce(crate::clusters::ias_ace::Panel),
 }
 
 /// A cluster instance.
@@ -185,6 +187,14 @@ impl<const A: usize> ClusterInstance<A> {
                 ClusterState::DoorLock(crate::clusters::door_lock::State {
                     users,
                     ..crate::clusters::door_lock::State::default()
+                })
+            }
+            ClusterState::IasAce(p) => {
+                // The zone table and code are wiped; the panel is disarmed.
+                ClusterState::IasAce(crate::clusters::ias_ace::Panel {
+                    audible: p.audible,
+                    ready: true,
+                    ..crate::clusters::ias_ace::Panel::default()
                 })
             }
             ClusterState::None => ClusterState::None,

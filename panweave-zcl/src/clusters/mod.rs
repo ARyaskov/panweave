@@ -11,6 +11,8 @@ pub mod diagnostics;
 pub mod door_lock;
 pub mod groups;
 pub mod hvac;
+pub mod ias_ace;
+pub mod ias_wd;
 pub mod ias_zone;
 pub mod keep_alive;
 pub mod level;

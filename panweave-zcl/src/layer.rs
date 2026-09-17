@@ -17,8 +17,8 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
-    alarms, basic, color_control, door_lock, hvac, ias_zone, identify, level, on_off, poll_control,
-    scenes, time, window_covering,
+    alarms, basic, color_control, door_lock, hvac, ias_ace, ias_wd, ias_zone, identify, level,
+    on_off, poll_control, scenes, time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -246,6 +246,30 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// What to do.
         command: window_covering::Command,
+    },
+    /// The IAS ACE server on `endpoint` received a request for the
+    /// application (§8.3.2.3): Arm (code validated, panel status set)
+    /// or an Emergency / Fire / Panic.
+    Ace {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The request.
+        request: ias_ace::Request,
+    },
+    /// The IAS WD server on `endpoint` starts `Some(warning)` or stops
+    /// (`None`: Stop received or the duration elapsed) (§8.4.2.2.1).
+    Warning {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The warning, `None` to stop.
+        warning: Option<ias_wd::Warning>,
+    },
+    /// The IAS WD server on `endpoint` squawks (§8.4.2.2.2).
+    Squawk {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The squawk.
+        squawk: ias_wd::Squawk,
     },
     /// The Door Lock server on `endpoint` accepted an RF operation, a
     /// scene recall or an automatic relock fired (§7.3.2.15): the
@@ -830,6 +854,41 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_door_lock(i, &origin, cmd, payload);
                                 continue;
                             }
+                            ias_ace::ID => {
+                                self.handle_ias_ace(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            ias_wd::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get_mut(i)
+                                    .and_then(|e| e.cluster_mut(ias_wd::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                let now = self.now;
+                                match ias_wd::handle(c, cmd, payload, now) {
+                                    ias_wd::Outcome::Warning(w) => {
+                                        self.push_event(ZclEvent::Warning {
+                                            endpoint,
+                                            warning: w.is_active().then_some(w),
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    ias_wd::Outcome::Squawk(squawk) => {
+                                        self.push_event(ZclEvent::Squawk { endpoint, squawk });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    ias_wd::Outcome::Ignored => {
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    ias_wd::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
+                                continue;
+                            }
                             color_control::ID => {
                                 self.handle_color(i, &origin, cmd, payload);
                                 continue;
@@ -898,6 +957,15 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     } else if ind.cluster == poll_control::ID {
                         self.handle_poll_control(i, &origin, cmd, payload);
                         continue;
+                    } else if ind.cluster == ias_zone::ID
+                        && role == Role::Client
+                        && cmd == ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION
+                        && let Some(change) = ias_zone::StatusChange::parse(payload)
+                    {
+                        // A CIE relays the zone status to its ACE clients
+                        // (§8.3.2.4.4); the application still sees the
+                        // notification.
+                        self.ace_zone_status(i, change.zone_id, change.zone_status);
                     }
                     result.get_or_insert(ZclIndication::Command { origin, payload });
                 }
@@ -1201,6 +1269,119 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         };
         self.send_door_lock_frame(i, frame);
         Ok(true)
+    }
+
+    /// IAS ACE server commands (§8.3.2.3): answered from the panel
+    /// state, with Arm / Emergency / Fire / Panic handed to the
+    /// application.
+    fn handle_ias_ace(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(ias_ace::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        let outcome = ias_ace::handle(c, cmd, payload);
+        if let Some(request) = outcome.request {
+            self.push_event(ZclEvent::Ace { endpoint, request });
+        }
+        if let Some(frame) = outcome.notify {
+            self.send_ace_frame(ep_index, frame);
+        }
+        match outcome.response {
+            Some(frame) => self.reply_cluster_specific(origin, frame.command, &frame.payload),
+            None => {
+                let _ = self.default_response(origin, outcome.status);
+            }
+        }
+    }
+
+    /// Sends an IAS ACE command to the bound clients.
+    fn send_ace_frame(&mut self, ep_index: usize, frame: ias_ace::Frame) {
+        let Some(ep) = self.endpoints.get(ep_index) else {
+            return;
+        };
+        let (endpoint, profile) = (ep.endpoint, ep.profile);
+        let seq = self.next_seq();
+        let header = Header::cluster_specific(seq, frame.command, Direction::ToClient)
+            .disable_default_response(true);
+        if let Ok(fr) = Self::build(&header, &frame.payload) {
+            self.push_action(ZclAction::Send {
+                destination: Destination::Bound,
+                profile,
+                cluster: ias_ace::ID,
+                src_endpoint: endpoint,
+                frame: fr,
+                options: TxOptions::ACKED,
+            });
+        }
+    }
+
+    fn ace_zone_status(&mut self, ep_index: usize, zone_id: u8, status: u16) {
+        let frame = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(ias_ace::ID, Role::Server))
+            .and_then(|c| ias_ace::set_zone_status(c, zone_id, status));
+        if let Some(frame) = frame {
+            self.send_ace_frame(ep_index, frame);
+        }
+    }
+
+    /// Records a zone status in the IAS ACE server on `endpoint` and
+    /// sends Zone Status Changed to the bound clients (§8.3.2.4.4);
+    /// `Ok(false)` for an unknown zone.
+    pub fn ace_set_zone_status(
+        &mut self,
+        endpoint: Endpoint,
+        zone_id: u8,
+        status: u16,
+    ) -> Result<bool, ZclError> {
+        let i = self
+            .endpoints
+            .iter()
+            .position(|e| e.endpoint == endpoint)
+            .ok_or(ZclError::NotFound)?;
+        let c = self
+            .cluster_mut(endpoint, ias_ace::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let Some(frame) = ias_ace::set_zone_status(c, zone_id, status) else {
+            return Ok(false);
+        };
+        self.send_ace_frame(i, frame);
+        Ok(true)
+    }
+
+    /// Sets the panel status of the IAS ACE server on `endpoint` and
+    /// sends Panel Status Changed to the bound clients (§8.3.2.4.5).
+    pub fn ace_set_panel_status(
+        &mut self,
+        endpoint: Endpoint,
+        status: u8,
+        seconds_remaining: u8,
+        alarm: u8,
+    ) -> Result<(), ZclError> {
+        let i = self
+            .endpoints
+            .iter()
+            .position(|e| e.endpoint == endpoint)
+            .ok_or(ZclError::NotFound)?;
+        let c = self
+            .cluster_mut(endpoint, ias_ace::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let frame = ias_ace::set_panel_status(c, status, seconds_remaining, alarm)
+            .ok_or(ZclError::NotFound)?;
+        self.send_ace_frame(i, frame);
+        if status == ias_ace::panel_status::DISARMED
+            && let Some(list) = self
+                .cluster(endpoint, ias_ace::ID, Role::Server)
+                .and_then(ias_ace::bypassed_zone_list)
+        {
+            self.send_ace_frame(i, list);
+        }
+        Ok(())
     }
 
     /// Sets the zone status of the IAS Zone server on `endpoint`
@@ -1899,6 +2080,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 }
             }
             let local_time = self.local_time(i);
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(ias_wd::ID, Role::Server)
+                && ias_wd::tick(c, now)
+            {
+                self.push_event(ZclEvent::Warning {
+                    endpoint,
+                    warning: None,
+                });
+            }
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;
             };

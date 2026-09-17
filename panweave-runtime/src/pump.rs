@@ -1570,6 +1570,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     action,
                     user,
                 },
+                ZclEvent::Ace { endpoint, request } => StackEvent::Ace { endpoint, request },
+                ZclEvent::Warning { endpoint, warning } => {
+                    StackEvent::Warning { endpoint, warning }
+                }
+                ZclEvent::Squawk { endpoint, squawk } => StackEvent::Squawk { endpoint, squawk },
                 ZclEvent::Setpoints {
                     endpoint,
                     heat,

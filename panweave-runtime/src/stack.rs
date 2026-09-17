@@ -353,6 +353,29 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// An IAS ACE server received Arm (code validated, panel status
+    /// set) or an Emergency / Fire / Panic (ZCL8 §8.3.2.3).
+    Ace {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The request.
+        request: panweave_zcl::clusters::ias_ace::Request,
+    },
+    /// An IAS WD server starts a warning or stops (`None`) (ZCL8
+    /// §8.4.2.2.1).
+    Warning {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The warning, `None` to stop.
+        warning: Option<panweave_zcl::clusters::ias_wd::Warning>,
+    },
+    /// An IAS WD server squawks (ZCL8 §8.4.2.2.2).
+    Squawk {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The squawk.
+        squawk: panweave_zcl::clusters::ias_wd::Squawk,
+    },
     /// A Door Lock server accepted an RF operation, recalled a scene or
     /// its automatic relock fired (ZCL8 §7.3.2.15): the application
     /// moves the bolt and reports back with `Stack::zcl.set_lock_state`.

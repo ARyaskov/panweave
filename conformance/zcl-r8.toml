@@ -289,10 +289,10 @@ id = "PW-ZCL-IAS-002"
 section = "§8.3, §8.4"
 summary = "IAS ACE and IAS WD clusters"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters::ias"
-tests = []
-
+status = "implemented"
+module = "panweave-zcl::clusters::ias_wd"
+tests = ["zone_queries_answer_from_the_table", "arm_validates_the_code_and_tracks_the_panel", "bypass_results_and_the_list_cleared_on_disarm", "emergencies_and_status_changes", "warning_round_trips_and_is_clamped", "squawk_round_trips", "keypad_arms_the_cie_which_warns_the_siren_and_relays_zone_status"]
+notes = "IAS ACE (§8.3): a bounded zone table (16 entries; the spec allows 255) with panel status, bypass list and arm/disarm code (redacted Debug, constant-time compare); Get Zone ID Map, Get Zone Information, Get Panel Status, Get Bypassed Zone List (Set Bypassed Zone List) and Get Zone Status (mask flag, paging) answered by the dispatcher; Arm with Invalid Code / Already Disarmed / Not Ready notifications and the panel status transition, disarming clearing the bypass list (§8.3.2.4.7.4); Bypass with the Table 8-18 results; Emergency / Fire / Panic to the application (ZclEvent::Ace); Zone Status Changed and Panel Status Changed to the bound clients from the application helpers, and a CIE endpoint's IAS Zone client relaying Zone Status Change Notifications into the panel. The per-second Panel Status Changed during arming delays is the application's (it calls ace_set_panel_status). IAS WD (§8.4): MaxDuration, Start Warning (duration clamped, duty cycle rounded to tens, a new command ending the previous one, expiry timer → ZclEvent::Warning None), Squawk ignored while warning."
 [[requirement]]
 id = "PW-ZCL-OTA-001"
 section = "§11"

@@ -121,7 +121,7 @@ Dependencies: R23.2 (APS transport, endpoints), DTL2 (device composition).
 | 5 Lighting | Color Control, Ballast Configuration | `panweave-zcl::clusters::lighting` |
 | 6 HVAC | Pump, Thermostat, Fan Control, Dehumidification, Thermostat UI | `panweave-zcl::clusters::hvac` |
 | 7 Closures | Shade Configuration, Door Lock, Window Covering, Barrier Control | `panweave-zcl::clusters::{window_covering, door_lock}` |
-| 8 Security & Safety | IAS Zone, IAS ACE, IAS WD | `panweave-zcl::clusters::ias` |
+| 8 Security & Safety | IAS Zone, IAS ACE, IAS WD | `panweave-zcl::clusters::{ias_zone, ias_ace, ias_wd}` |
 | 9 Protocol Interfaces | Generic Tunnel, BACnet Tunnel, Partition | `panweave-zcl::clusters::protocol` |
 | 10 Smart Energy | Price, DRLC, Metering, Messaging, Tunneling, Key Establishment, Meter Identification | `panweave-smart-energy` |
 | 11 OTA Upgrade | OTA cluster, file format, upgrade process | `panweave-zcl::clusters::ota` |
