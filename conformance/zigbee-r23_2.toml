@@ -14,10 +14,10 @@ id = "PW-R23-GEN-001"
 section = "§1.2.5"
 summary = "Malformed Zigbee/802.15.4 frames are discarded without response and without state change"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-nwk::layer::rx"
-tests = ["frame_payload_is_borrowed", "software_filter_drops_foreign_frames"]
-notes = "Malformed NWK/MAC frames are dropped and counted; APS-level handling follows with panweave-aps."
+tests = ["frame_payload_is_borrowed", "software_filter_drops_foreign_frames", "malformed_headers_are_rejected", "aps_layer_survives_arbitrary_frames", "dispatcher_is_total"]
+notes = "Malformed frames are dropped and counted at every layer (MAC frame decode, NWK stats.malformed, APS stats.malformed, ZDO and ZCL decode failures) without a response or state change; property tests feed arbitrary bytes through the APS layer and the ZCL dispatcher."
 [[requirement]]
 id = "PW-R23-GEN-002"
 section = "§1.2.6, Annex I.1–I.2"

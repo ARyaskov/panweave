@@ -14,8 +14,8 @@ Panweave is an independent implementation; this table records the maintainers' o
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
 | ZCL8 | 36 | 25 | 10 | 1 | 0 | 0 | 0 |
-| R23.2 | 133 | 119 | 10 | 2 | 2 | 0 | 0 |
-| **All** | 237 | 179 | 49 | 5 | 3 | 1 | 0 |
+| R23.2 | 133 | 120 | 9 | 2 | 2 | 0 | 0 |
+| **All** | 237 | 180 | 48 | 5 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -155,7 +155,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Id | Section | Level | Status | Module | Summary | Tests | Notes |
 |---|---|---|---|---|---|---|---|
-| PW-R23-GEN-001 | §1.2.5 | mandatory | partially-implemented | `panweave-nwk::layer::rx` | Malformed Zigbee/802.15.4 frames are discarded without response and without state change | `frame_payload_is_borrowed`, `software_filter_drops_foreign_frames` | Malformed NWK/MAC frames are dropped and counted; APS-level handling follows with panweave-aps. |
+| PW-R23-GEN-001 | §1.2.5 | mandatory | implemented | `panweave-nwk::layer::rx` | Malformed Zigbee/802.15.4 frames are discarded without response and without state change | `frame_payload_is_borrowed`, `software_filter_drops_foreign_frames`, `malformed_headers_are_rejected`, `aps_layer_survives_arbitrary_frames`, `dispatcher_is_total` | Malformed frames are dropped and counted at every layer (MAC frame decode, NWK stats.malformed, APS stats.malformed, ZDO and ZCL decode failures) without a response or state change; property tests feed arbitrary bytes through the APS layer and the ZCL dispatcher. |
 | PW-R23-GEN-002 | §1.2.6, Annex I.1–I.2 | mandatory | implemented | `panweave-codec::tlv` | TLV encoding: tag, length-minus-one, value; unknown tags skipped; malformed TLVs invalidate the message; global tag range 64–255 | `iterates_well_formed_tlvs`, `truncated_header_or_value_is_rejected`, `duplicate_tags_rejected_except_manufacturer_specific`, `nested_encapsulation_rejected` |  |
 | PW-R23-GEN-003 | Annex I.4 | mandatory | partially-implemented | `panweave-nwk::tlv` | Global TLVs 64–76 (manufacturer specific, supported key negotiation methods, PAN ID conflict report, next PAN ID/channel change, symmetric passphrase, router information, fragmentation parameters, joiner/beacon appendix encapsulation, configuration parameters, device capability extension) | `key_negotiation_methods_round_trip_and_min_length`, `fixed_size_tlvs`, `joiner_encapsulation_nesting` | All 13 global TLVs decode/encode; BDB encapsulation (74) is opaque. |
 | PW-R23-NWK-001 | §3.3.1 | mandatory | implemented | `panweave-nwk::frame` | General NPDU header layout: 16-bit frame control, destination and source short addresses, radius, sequence number, optional destination/source IEEE addresses, optional source-route subframe | `data_header_round_trip`, `command_header_with_ieee_addresses` |  |
