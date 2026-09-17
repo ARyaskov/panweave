@@ -600,10 +600,10 @@ id = "PW-R23-APS-010"
 section = "Annex G"
 summary = "Inter-PAN transmission and reception with stub NWK header and inter-PAN APS header"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-aps::interpan"
-tests = ["round_trips_and_detects_inter_pan", "secured_frames_round_trip_between_link_key_holders", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another"]
-notes = "The stub NWK header and inter-PAN APS header (unicast, broadcast, group delivery 0b11, Security / ACK Request with APS counter / Extended Header with fragmentation) are encoded and decoded, secured frames are protected and unprotected with the APS link key of the partner, MacService::data_request_inter_pan transmits with an explicit source PAN and the extended source address, and the runtime routes received inter-PAN frames (NWK frame type 0b11) to touchlink. Only the Touchlink Commissioning cluster / profile 0xc05e is dispatched; a general INTRP-DATA service for applications is not exposed."
+tests = ["round_trips_and_detects_inter_pan", "secured_frames_round_trip_between_link_key_holders", "factory_new_remote_starts_a_network_through_a_lamp_and_adds_another", "inter_pan_frames_cross_networks_and_may_be_secured"]
+notes = "The stub NWK header and inter-PAN APS header (unicast, broadcast, group delivery 0b11, Security / ACK Request with APS counter / Extended Header with fragmentation) are encoded and decoded, secured frames are protected and unprotected with the APS link key of the partner, MacService::data_request_inter_pan transmits with an explicit source PAN and the extended source address. The runtime routes received inter-PAN frames (NWK frame type 0b11) of the Touchlink Commissioning cluster to touchlink and every other one to the application as StackEvent::InterPanData (INTRP-DATA.indication, unprotected when secured); Stack::inter_pan_request is INTRP-DATA.request over broadcast, device, network-address and group targets with optional link-key security for device targets. Inter-PAN fragmentation is decoded but not used for transmission (frames fit one MAC frame)."
 [[requirement]]
 id = "PW-R23-APS-011"
 section = "§2.2.8.1"

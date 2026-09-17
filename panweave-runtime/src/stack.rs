@@ -471,6 +471,10 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// An inter-PAN application frame arrived (INTRP-DATA.indication,
+    /// R23.2 Annex G): any cluster but Touchlink Commissioning, which
+    /// the touchlink machines handle.
+    InterPanData(crate::interpan::InterPanIndication),
     /// An ASDU needing fragmentation was not sent: `dst` does not
     /// reassemble fragments, accepts less than `len` octets, or its
     /// Node Descriptor could not be obtained (§2.2.8.4.5.1: the confirm

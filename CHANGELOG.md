@@ -176,6 +176,12 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* The inter-PAN data service (R23.2 Annex G): `Stack::inter_pan_request`
+  sends application frames to a broadcast, device, network-address or
+  group target on any PAN, optionally secured with the shared link key,
+  and received inter-PAN frames of any cluster but Touchlink
+  Commissioning arrive as `StackEvent::InterPanData`
+  (`panweave-runtime::interpan`).
 * Fragmentation discovery and caching (R23.2 §2.2.8.4.5.1):
   `panweave-runtime::fragment_cache` — an ASDU that must be fragmented
   to a unicast peer whose parameters are unknown is held while the

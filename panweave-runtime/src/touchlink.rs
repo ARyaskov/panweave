@@ -278,6 +278,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             return;
         };
         if ip.cluster != tl::ID || ip.profile != tl::PROFILE_ID || ip.secured {
+            // Not touchlink: the application's inter-PAN data service.
+            self.on_inter_pan_data(frame, rssi, channel);
             return;
         }
         let Ok((header, n)) = Header::decode_prefix(zcl) else {

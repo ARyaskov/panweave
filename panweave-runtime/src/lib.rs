@@ -35,6 +35,7 @@ mod dlk;
 pub mod fragment_cache;
 #[cfg(feature = "green-power")]
 pub mod green_power;
+pub mod interpan;
 mod keep_alive;
 pub mod ota;
 mod persist;
