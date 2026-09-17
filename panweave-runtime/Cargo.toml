@@ -33,6 +33,7 @@ defmt = { workspace = true, optional = true }
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-testkit = { workspace = true }
+panweave-sim = { workspace = true }
 
 [lints]
 workspace = true

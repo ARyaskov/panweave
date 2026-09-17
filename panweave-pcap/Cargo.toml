@@ -5,12 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: pcap (host-side)"
+description = "Panweave Zigbee stack: PCAP export and frame summaries (host-side)"
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 panweave-types = { workspace = true, features = ["std"] }
+panweave-codec = { workspace = true, features = ["std"] }
+panweave-mac = { workspace = true, features = ["std"] }
+panweave-nwk = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

@@ -5,12 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: cli (host-side)"
+description = "Panweave Zigbee stack: host-side command-line tool (simulator scenarios, PCAP export)"
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 panweave-types = { workspace = true, features = ["std"] }
+panweave-mac = { workspace = true, features = ["std"] }
+panweave-storage = { workspace = true, features = ["std"] }
+panweave-runtime = { workspace = true, features = ["std"] }
+panweave-testkit = { workspace = true, features = ["std"] }
+panweave-zcl = { workspace = true, features = ["std"] }
+panweave-zdo = { workspace = true, features = ["std"] }
+panweave-sim = { workspace = true }
+panweave-pcap = { workspace = true }
 
 [lints]
 workspace = true

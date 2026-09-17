@@ -17,6 +17,7 @@ use panweave_aps::tables::BindingDestination;
 use panweave_codec::{Decode, Encode, Writer};
 use panweave_mac::service::MacServiceConfig;
 use panweave_runtime::{JoinMode, StackConfig, StackEvent};
+use panweave_sim::{OnOffApp, SimStack, Simulator};
 use panweave_storage::MemoryStorage;
 use panweave_testkit::TestRng;
 use panweave_types::time::{Duration, Instant};
@@ -37,8 +38,21 @@ use panweave_zdo::zdp::{
     StatusRsp, ZdpStatus, cluster,
 };
 
-mod common;
-use common::{COORD_IEEE, ED_IEEE, NETWORK_KEY, Node, Sim};
+const NETWORK_KEY: panweave_types::Key128 = panweave_types::Key128::from_bytes([0x5A; 16]);
+const COORD_IEEE: panweave_types::ExtendedAddress =
+    panweave_types::ExtendedAddress(0x00AA_0000_0000_0001);
+const ED_IEEE: panweave_types::ExtendedAddress =
+    panweave_types::ExtendedAddress(0x00AA_0000_0000_0002);
+
+fn on_off_state(sim: &mut Simulator, i: usize) -> bool {
+    matches!(
+        sim.stack(i)
+            .zcl
+            .cluster(Endpoint(1), on_off::ID, Role::Server)
+            .and_then(|c| c.attributes.value(AttributeId(0))),
+        Some(Value::Bool(Some(true)))
+    )
+}
 
 fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 16>) {
     let desc = SimpleDescriptor::new(
@@ -80,10 +94,10 @@ fn controller_endpoint() -> (SimpleDescriptor, EndpointInstance<8, 16>) {
     (desc, ep)
 }
 
-fn coordinator() -> Node {
+fn coordinator() -> SimStack {
     let mut cfg = StackConfig::new(LogicalDeviceType::Coordinator, COORD_IEEE);
     cfg.trust_center_policy.allow_joins = true;
-    let mut n = Node::new(
+    let mut n = SimStack::new(
         cfg,
         MacServiceConfig::default(),
         TestRng::seed(1),
@@ -94,9 +108,9 @@ fn coordinator() -> Node {
     n
 }
 
-fn end_device() -> Node {
+fn end_device() -> SimStack {
     let cfg = StackConfig::new(LogicalDeviceType::EndDevice, ED_IEEE);
-    let mut n = Node::new(
+    let mut n = SimStack::new(
         cfg,
         MacServiceConfig::default(),
         TestRng::seed(2),
@@ -119,44 +133,40 @@ fn zdp_responses(events: &[StackEvent], cluster: ClusterId) -> Vec<Vec<u8>> {
 
 #[test]
 fn coordinator_and_end_device_full_stack() {
-    let mut sim = Sim::new();
-    let c = sim.add(coordinator());
-    let d = sim.add(end_device());
+    let mut sim = Simulator::new();
+    let c = sim.add_stack("node", coordinator(), Box::new(OnOffApp::default()));
+    let d = sim.add_stack("node", end_device(), Box::new(OnOffApp::default()));
 
     // --- Formation --------------------------------------------------
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .form_network_with_key(NETWORK_KEY.clone())
         .unwrap();
-    assert!(sim.run_until(Duration::from_secs(30), |s| {
-        s.events(c)
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
             .iter()
             .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
     }));
-    let pan = sim.nodes[c].0.pan_id();
-    assert_eq!(sim.nodes[c].0.short_address(), ShortAddress::COORDINATOR);
-    sim.nodes[c].0.permit_join(180).unwrap();
-    sim.nodes[c].0.flush();
+    let pan = sim.stack(c).pan_id();
+    assert_eq!(sim.stack(c).short_address(), ShortAddress::COORDINATOR);
+    sim.stack(c).permit_join(180).unwrap();
+    sim.stack(c).flush();
     sim.take_events(c);
 
     // --- Discovery, association, authorization -------------------
-    sim.nodes[d].0.join(JoinMode::Association).unwrap();
+    sim.stack(d).join(JoinMode::Association).unwrap();
     assert!(
-        sim.run_until(Duration::from_secs(60), |s| {
-            s.events(d)
+        sim.run_until(Duration::from_secs(60), |x| {
+            x.events(d)
                 .iter()
                 .any(|e| matches!(e, StackEvent::Joined { .. }))
         }),
-        "end device did not join: {:?} / coord {:?} / coord aps {:?} / ed aps {:?} / ed nwk {:?}",
+        "end device did not join: {:?} / coord {:?}",
         sim.events(d),
         sim.events(c),
-        sim.nodes[c].0.aps.stats,
-        sim.nodes[d].0.aps.stats,
-        sim.nodes[d].0.nwk.stats
     );
-    let ed_short = sim.nodes[d].0.short_address();
+    let ed_short = sim.stack(d).short_address();
     assert!(ed_short.is_unicast());
-    assert_eq!(sim.nodes[d].0.pan_id(), pan);
+    assert_eq!(sim.stack(d).pan_id(), pan);
     assert!(sim.events(d).iter().any(|e| matches!(
         e,
         StackEvent::Joined { short, pan_id, rejoin: false } if *short == ed_short && *pan_id == pan
@@ -164,11 +174,11 @@ fn coordinator_and_end_device_full_stack() {
     // The Trust Center authorized the child and saw its announce; the
     // end device obtained a unique Trust Center link key (BDB §10.2.4).
     assert!(
-        sim.run_until(Duration::from_secs(30), |s| {
-            s.events(c)
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(c)
                 .iter()
                 .any(|e| matches!(e, StackEvent::DeviceAnnounce { ieee, .. } if *ieee == ED_IEEE))
-                && s.events(d)
+                && x.events(d)
                     .iter()
                     .any(|e| matches!(e, StackEvent::LinkKeyUpdated))
         }),
@@ -180,7 +190,7 @@ fn coordinator_and_end_device_full_stack() {
         e,
         StackEvent::DeviceAuthorized { ieee, short } if *ieee == ED_IEEE && *short == ed_short
     )));
-    let tc_entry = sim.nodes[c].0.aps.security.entry(ED_IEEE).unwrap();
+    let tc_entry = sim.stack(c).aps.security.entry(ED_IEEE).unwrap();
     assert_eq!(
         tc_entry.attributes,
         panweave_types::KeyAttributes::VerifiedKey
@@ -189,7 +199,7 @@ fn coordinator_and_end_device_full_stack() {
         tc_entry.kind,
         panweave_security::material::LinkKeyKind::Unique
     );
-    assert_eq!(sim.nodes[d].0.aps.aib.trust_center_address, COORD_IEEE);
+    assert_eq!(sim.stack(d).aps.aib.trust_center_address, COORD_IEEE);
     sim.take_events(c);
     sim.take_events(d);
 
@@ -198,10 +208,9 @@ fn coordinator_and_end_device_full_stack() {
     let n = panweave_zdo::fragmentation_parameters_tlv(
         &mut tlv,
         ShortAddress::COORDINATOR,
-        sim.nodes[c].0.zdo.node,
+        sim.stack(c).zdo.node,
     );
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zdp_request(
             ed_short,
             cluster::NODE_DESC_REQ,
@@ -221,8 +230,7 @@ fn coordinator_and_end_device_full_stack() {
     assert_eq!(nd.logical_type, LogicalDeviceType::EndDevice);
     assert_eq!(nd.server_mask.stack_compliance_revision(), 23);
 
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zdp_request(
             ed_short,
             cluster::ACTIVE_EP_REQ,
@@ -236,8 +244,7 @@ fn coordinator_and_end_device_full_stack() {
     let eps = EndpointListRsp::decode_exact(&rsp).unwrap();
     assert_eq!(eps.endpoints, &[1]);
 
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zdp_request(
             ed_short,
             cluster::SIMPLE_DESC_REQ,
@@ -266,8 +273,8 @@ fn coordinator_and_end_device_full_stack() {
     let mut w = Writer::new(&mut buf);
     global::write_attribute_ids(&mut w, &[AttributeId(0)]).unwrap();
     let n = w.position();
-    let seq = sim.nodes[c]
-        .0
+    let seq = sim
+        .stack(c)
         .zcl
         .send_global(
             dst,
@@ -280,9 +287,9 @@ fn coordinator_and_end_device_full_stack() {
             &buf[..n],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
-    assert!(sim.run_until(Duration::from_secs(10), |s| {
-        s.events(c)
+    sim.stack(c).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c)
             .iter()
             .any(|e| matches!(e, StackEvent::ZclResponse(f) if f.origin.header.seq == seq))
     }));
@@ -302,8 +309,8 @@ fn coordinator_and_end_device_full_stack() {
     assert_eq!(recs[0].value, Some(Value::Bool(Some(false))));
     sim.take_events(c);
 
-    let seq = sim.nodes[c]
-        .0
+    let seq = sim
+        .stack(c)
         .zcl
         .send_command(
             dst,
@@ -316,14 +323,14 @@ fn coordinator_and_end_device_full_stack() {
             &[],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
-    assert!(sim.run_until(Duration::from_secs(10), |s| {
-        s.events(c).iter().any(|e| matches!(
+    sim.stack(c).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c).iter().any(|e| matches!(
             e,
             StackEvent::ZclResponse(f) if f.origin.header.seq == seq && f.origin.header.command == command::DEFAULT_RESPONSE
         ))
     }));
-    assert!(sim.on_off_state[d], "the lamp turned on");
+    assert!(on_off_state(&mut sim, d), "the lamp turned on");
     let dr = sim
         .events(c)
         .iter()
@@ -336,8 +343,7 @@ fn coordinator_and_end_device_full_stack() {
     sim.take_events(c);
 
     // --- Binding + reporting -----------------------------------------
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zdp_request(
             ed_short,
             cluster::BIND_REQ,
@@ -360,7 +366,7 @@ fn coordinator_and_end_device_full_stack() {
         StatusRsp::decode_exact(&rsp).unwrap().status,
         ZdpStatus::Success
     );
-    assert_eq!(sim.nodes[d].0.aps.bindings.len(), 1);
+    assert_eq!(sim.stack(d).aps.bindings.len(), 1);
 
     let cfg = ReportingConfig::Reported {
         id: AttributeId(0),
@@ -371,8 +377,8 @@ fn coordinator_and_end_device_full_stack() {
     };
     let mut cbuf = [0u8; 16];
     let n = cfg.encode_to_slice(&mut cbuf).unwrap();
-    let seq = sim.nodes[c]
-        .0
+    let seq = sim
+        .stack(c)
         .zcl
         .send_global(
             dst,
@@ -385,17 +391,16 @@ fn coordinator_and_end_device_full_stack() {
             &cbuf[..n],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
-    assert!(sim.run_until(Duration::from_secs(10), |s| {
-        s.events(c).iter().any(|e| matches!(
+    sim.stack(c).flush();
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.events(c).iter().any(|e| matches!(
             e,
             StackEvent::ZclResponse(f) if f.origin.header.seq == seq && f.origin.header.command == command::CONFIGURE_REPORTING_RESPONSE
         ))
     }));
     sim.take_events(c);
     // Toggle via command: the change is reported to the bound coordinator.
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zcl
         .send_command(
             dst,
@@ -408,10 +413,10 @@ fn coordinator_and_end_device_full_stack() {
             &[],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
+    sim.stack(c).flush();
     assert!(
-        sim.run_until(Duration::from_secs(10), |s| {
-            s.events(c)
+        sim.run_until(Duration::from_secs(10), |x| {
+            x.events(c)
                 .iter()
                 .any(|e| matches!(e, StackEvent::ZclReport(_)))
         }),
@@ -434,18 +439,18 @@ fn coordinator_and_end_device_full_stack() {
             value: Value::Bool(Some(false))
         }]
     );
-    assert!(!sim.on_off_state[d]);
+    assert!(!on_off_state(&mut sim, d));
     // Periodic report at the maximum interval.
     sim.take_events(c);
-    assert!(sim.run_until(Duration::from_secs(25), |s| {
-        s.events(c)
+    assert!(sim.run_until(Duration::from_secs(25), |x| {
+        x.events(c)
             .iter()
             .any(|e| matches!(e, StackEvent::ZclReport(_)))
     }));
 
     // Everything went over the virtual radio.
-    assert!(sim.medium.frames_sent > 40, "{}", sim.medium.frames_sent);
-    assert_eq!(sim.nodes[c].0.dropped_events, 0);
-    assert_eq!(sim.nodes[d].0.dropped_events, 0);
+    assert!(sim.frames > 40, "{}", sim.frames);
+    assert_eq!(sim.stack(c).dropped_events, 0);
+    assert_eq!(sim.stack(d).dropped_events, 0);
     let _ = Instant::from_millis(0);
 }

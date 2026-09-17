@@ -5,12 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: sim (host-side)"
+description = "Panweave Zigbee stack: deterministic multi-node simulator (host-side)"
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 panweave-types = { workspace = true, features = ["std"] }
+panweave-mac = { workspace = true, features = ["std"] }
+panweave-security = { workspace = true, features = ["std", "crypto-software"] }
+panweave-storage = { workspace = true, features = ["std"] }
+panweave-runtime = { workspace = true, features = ["std"] }
+panweave-testkit = { workspace = true, features = ["std"] }
+panweave-zcl = { workspace = true, features = ["std"] }
+panweave-pcap = { workspace = true }
 
 [lints]
 workspace = true

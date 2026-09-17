@@ -322,7 +322,15 @@ dependencies = [
 name = "panweave-cli"
 version = "0.1.0"
 dependencies = [
+ "panweave-mac",
+ "panweave-pcap",
+ "panweave-runtime",
+ "panweave-sim",
+ "panweave-storage",
+ "panweave-testkit",
  "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
 ]
 
 [[package]]
@@ -391,6 +399,9 @@ dependencies = [
 name = "panweave-pcap"
 version = "0.1.0"
 dependencies = [
+ "panweave-codec",
+ "panweave-mac",
+ "panweave-nwk",
  "panweave-types",
 ]
 
@@ -405,6 +416,7 @@ dependencies = [
  "panweave-mac",
  "panweave-nwk",
  "panweave-security",
+ "panweave-sim",
  "panweave-storage",
  "panweave-testkit",
  "panweave-types",
@@ -436,7 +448,14 @@ dependencies = [
 name = "panweave-sim"
 version = "0.1.0"
 dependencies = [
+ "panweave-mac",
+ "panweave-pcap",
+ "panweave-runtime",
+ "panweave-security",
+ "panweave-storage",
+ "panweave-testkit",
  "panweave-types",
+ "panweave-zcl",
 ]
 
 [[package]]

@@ -12,14 +12,30 @@
     clippy::cast_possible_truncation
 )]
 
-mod common;
-use common::{COORD_IEEE, NETWORK_KEY, Node, ROUTER_IEEE, SED_IEEE, Sim};
+const NETWORK_KEY: panweave_types::Key128 = panweave_types::Key128::from_bytes([0x5A; 16]);
+const COORD_IEEE: panweave_types::ExtendedAddress =
+    panweave_types::ExtendedAddress(0x00AA_0000_0000_0001);
+const ROUTER_IEEE: panweave_types::ExtendedAddress =
+    panweave_types::ExtendedAddress(0x00AA_0000_0000_0003);
+const SED_IEEE: panweave_types::ExtendedAddress =
+    panweave_types::ExtendedAddress(0x00AA_0000_0000_0004);
+
+fn on_off_state(sim: &mut Simulator, i: usize) -> bool {
+    matches!(
+        sim.stack(i)
+            .zcl
+            .cluster(Endpoint(1), on_off::ID, Role::Server)
+            .and_then(|c| c.attributes.value(AttributeId(0))),
+        Some(Value::Bool(Some(true)))
+    )
+}
 
 use panweave_aps::Destination;
 use panweave_aps::tables::BindingDestination;
 use panweave_codec::{Decode, Encode};
 use panweave_mac::service::MacServiceConfig;
 use panweave_runtime::{JoinMode, StackConfig, StackEvent};
+use panweave_sim::{OnOffApp, SimStack, Simulator};
 use panweave_storage::MemoryStorage;
 use panweave_testkit::TestRng;
 use panweave_types::time::Duration;
@@ -40,12 +56,12 @@ fn node(
     ieee: panweave_types::ExtendedAddress,
     seed: u64,
     sleepy: bool,
-) -> Node {
+) -> SimStack {
     let mut cfg = StackConfig::new(role, ieee);
     cfg.sleepy = sleepy;
     cfg.trust_center_policy.allow_joins = true;
     cfg.poll_interval = Duration::from_millis(1500);
-    let mut n = Node::new(
+    let mut n = SimStack::new(
         cfg,
         MacServiceConfig::default(),
         TestRng::seed(seed),
@@ -86,48 +102,58 @@ fn joined(events: &[StackEvent]) -> Option<ShortAddress> {
 
 #[test]
 fn router_and_sleepy_end_device_with_router_failure() {
-    let mut sim = Sim::new();
-    let c = sim.add(node(LogicalDeviceType::Coordinator, COORD_IEEE, 11, false));
-    let r = sim.add(node(LogicalDeviceType::Router, ROUTER_IEEE, 12, false));
-    let s = sim.add(node(LogicalDeviceType::EndDevice, SED_IEEE, 13, true));
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "node",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 11, false),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "node",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 12, false),
+        Box::new(OnOffApp::default()),
+    );
+    let s = sim.add_stack(
+        "node",
+        node(LogicalDeviceType::EndDevice, SED_IEEE, 13, true),
+        Box::new(OnOffApp::default()),
+    );
     // The sleepy end device only hears the router.
-    let (rc, rs) = (sim.nodes[c].1, sim.nodes[s].1);
-    sim.medium.block(rc, rs);
+    sim.block(c, s);
 
     // --- Coordinator forms, router joins ---------------------------------
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .form_network_with_key(NETWORK_KEY.clone())
         .unwrap();
-    assert!(sim.run_until(Duration::from_secs(30), |s| {
-        s.events(c)
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
             .iter()
             .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
     }));
-    sim.nodes[c].0.permit_join_network(180).unwrap();
-    sim.nodes[r].0.join(JoinMode::Association).unwrap();
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
     assert!(
-        sim.run_until(Duration::from_secs(60), |s| joined(s.events(r)).is_some()),
+        sim.run_until(Duration::from_secs(60), |x| joined(x.events(r)).is_some()),
         "router did not join: {:?}",
         sim.events(r)
     );
     let router_short = joined(sim.events(r)).unwrap();
-    assert!(sim.run_until(Duration::from_secs(30), |s| {
-        s.events(r)
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(r)
             .iter()
             .any(|e| matches!(e, StackEvent::LinkKeyUpdated))
     }));
-    assert!(sim.nodes[r].0.nwk.nib.router_started);
+    assert!(sim.stack(r).nwk.nib.router_started);
     // The router received the network-wide permit joining request.
-    sim.nodes[c].0.permit_join_network(180).unwrap();
+    sim.stack(c).permit_join_network(180).unwrap();
     assert!(sim.run_until(Duration::from_secs(5), |s| {
-        s.nodes[r].0.nwk.is_permitting_joins()
+        s.node(r).stack.nwk.is_permitting_joins()
     }));
     sim.take_events(c);
     sim.take_events(r);
 
     // --- Sleepy end device joins through the router ---------------------
-    sim.nodes[s].0.join(JoinMode::Association).unwrap();
+    sim.stack(s).join(JoinMode::Association).unwrap();
     assert!(
         sim.run_until(Duration::from_secs(90), |x| joined(x.events(s)).is_some()),
         "sleepy end device did not join: {:?} / router {:?} / coord {:?}",
@@ -136,7 +162,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
         sim.events(c)
     );
     let sed_short = joined(sim.events(s)).unwrap();
-    assert_eq!(sim.nodes[s].0.nwk.nib.parent_address, router_short);
+    assert_eq!(sim.stack(s).nwk.nib.parent_address, router_short);
     // The Trust Center tunnelled the key through the router and learned
     // the device from Update Device; the router now lists an authenticated
     // child.
@@ -162,8 +188,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
     sim.take_events(s);
 
     // --- Multi-hop: coordinator binds the SED's On/Off to itself ------------
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zdp_request(
             sed_short,
             cluster::BIND_REQ,
@@ -213,8 +238,8 @@ fn router_and_sleepy_end_device_with_router_failure() {
         address: sed_short,
         endpoint: Endpoint(1),
     };
-    let seq = sim.nodes[c]
-        .0
+    let seq = sim
+        .stack(c)
         .zcl
         .send_global(
             dst,
@@ -227,7 +252,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
             &cbuf[..n],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
+    sim.stack(c).flush();
     assert!(
         sim.run_until(Duration::from_secs(30), |x| {
             x.events(c).iter().any(|e| {
@@ -242,8 +267,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
     );
     sim.take_events(c);
     // Toggle the lamp: the change report travels SED → router → coordinator.
-    sim.nodes[c]
-        .0
+    sim.stack(c)
         .zcl
         .send_command(
             dst,
@@ -256,7 +280,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
             &[],
         )
         .unwrap();
-    sim.nodes[c].0.flush();
+    sim.stack(c).flush();
     assert!(
         sim.run_until(Duration::from_secs(30), |x| {
             x.events(c)
@@ -277,7 +301,7 @@ fn router_and_sleepy_end_device_with_router_failure() {
     assert_eq!(rep.origin.src, sed_short);
     let recs: Vec<AttributeValue> = Records::new(&rep.payload).map(Result::unwrap).collect();
     assert_eq!(recs[0].value, Value::Bool(Some(true)));
-    assert!(sim.on_off_state[s]);
+    assert!(on_off_state(&mut sim, s));
     sim.take_events(c);
     // Periodic reports keep arriving through the router.
     assert!(sim.run_until(Duration::from_secs(25), |x| {
@@ -289,10 +313,8 @@ fn router_and_sleepy_end_device_with_router_failure() {
     sim.take_events(s);
 
     // --- Router failure: the sleepy end device rejoins the coordinator ----
-    let rr = sim.nodes[r].1;
-    sim.medium.block(rr, rs);
-    sim.medium.block(rr, rc);
-    sim.medium.unblock(rc, rs);
+    sim.isolate(r);
+    sim.unblock(c, s);
     assert!(
         sim.run_until(Duration::from_secs(300), |x| {
             x.events(s)
@@ -303,11 +325,11 @@ fn router_and_sleepy_end_device_with_router_failure() {
         sim.events(s)
     );
     assert_eq!(
-        sim.nodes[s].0.nwk.nib.parent_address,
+        sim.stack(s).nwk.nib.parent_address,
         ShortAddress::COORDINATOR
     );
     assert_eq!(
-        sim.nodes[s].0.short_address(),
+        sim.stack(s).short_address(),
         sed_short,
         "address kept on rejoin"
     );
@@ -322,6 +344,6 @@ fn router_and_sleepy_end_device_with_router_failure() {
         "no report after rejoin: {:?}",
         sim.events(c)
     );
-    assert_eq!(sim.nodes[c].0.dropped_events, 0);
-    assert_eq!(sim.nodes[s].0.dropped_events, 0);
+    assert_eq!(sim.stack(c).dropped_events, 0);
+    assert_eq!(sim.stack(s).dropped_events, 0);
 }
