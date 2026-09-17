@@ -165,11 +165,14 @@ build) are rejected with `compile_error!` in `panweave/src/lib.rs`.
 
 ## Code generation
 
-ZCL cluster and DTL device-type definitions are generated from
-Panweave-maintained metadata (`panweave-zcl/metadata/*.toml`,
-`panweave-device-library/metadata/*.toml`) by `cargo xtask codegen`. Generated
-files carry a header and are checked in so that consumers do not need the
-generator. `cargo xtask codegen --check` verifies reproducibility in CI.
+DTL device-type definitions are generated from Panweave-maintained metadata
+(`panweave-device-library/metadata/devices.toml`, produced once by
+`scripts/dtl_metadata.py` from the specification text and maintained by
+hand) by `cargo xtask codegen`. Generated files carry a header and are
+checked in so that consumers do not need the generator; `cargo xtask codegen
+--check` runs in the gate. ZCL clusters are hand-written in
+`panweave-zcl/src/clusters/`; a metadata-driven generator for the full
+library is planned.
 
 ## Conformance tracking
 

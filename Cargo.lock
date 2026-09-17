@@ -291,7 +291,21 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "panweave"
 version = "0.1.0"
 dependencies = [
+ "heapless",
+ "panweave-aps",
+ "panweave-bdb",
+ "panweave-codec",
+ "panweave-device-library",
+ "panweave-mac",
+ "panweave-nwk",
+ "panweave-runtime",
+ "panweave-security",
+ "panweave-sim",
+ "panweave-storage",
+ "panweave-testkit",
  "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
 ]
 
 [[package]]
@@ -316,6 +330,7 @@ dependencies = [
  "defmt",
  "heapless",
  "panweave-aps",
+ "panweave-device-library",
  "panweave-types",
  "serde",
 ]

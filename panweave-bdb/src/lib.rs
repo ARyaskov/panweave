@@ -29,6 +29,7 @@ extern crate alloc;
 
 use heapless::Vec;
 use panweave_aps::tables::{BindingDestination, BindingEntry};
+use panweave_device_library::{ClusterClass, FbRole, classify, finding_binding_role};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ChannelMask, ClusterId, Endpoint, ExtendedAddress, GroupAddress, LogicalDeviceType,
@@ -140,23 +141,6 @@ pub enum NodeError {
 /// Maximum clusters considered per endpoint during finding & binding.
 pub const MAX_CLUSTERS: usize = 16;
 
-/// Clusters classified as *utility* by ZCL8 chapter 3 (Basic, Power
-/// Configuration, Device Temperature Configuration, Identify, Groups,
-/// RSSI Location, Power Profile, Poll Control, Keep-Alive, Diagnostics).
-/// Finding & binding only binds application clusters (§11: "application
-/// target cluster"), so these are never bound.
-pub const UTILITY_CLUSTERS: [ClusterId; 10] = [
-    ClusterId(0x0000),
-    ClusterId(0x0001),
-    ClusterId(0x0002),
-    ClusterId(0x0003),
-    ClusterId(0x0004),
-    ClusterId(0x000B),
-    ClusterId(0x001A),
-    ClusterId(0x0020),
-    ClusterId(0x0025),
-    ClusterId(0x0B05),
-];
 /// Maximum respondents remembered during finding & binding (§6.4
 /// requires handling at least one).
 pub const MAX_RESPONDENTS: usize = 8;
@@ -658,7 +642,8 @@ impl Bdb {
     /// Initiator endpoint finding & binding (§11.2). `group` requests
     /// group bindings (plus Add Group on the respondents); `clusters`
     /// restricts the clusters considered (empty: every application
-    /// cluster of the endpoint, see [`UTILITY_CLUSTERS`]).
+    /// cluster for which the endpoint is the initiator, per the Device
+    /// Type Library classification).
     pub fn find_and_bind_initiator(
         &mut self,
         node: &mut impl Node,
@@ -741,8 +726,15 @@ impl Bdb {
             } else {
                 outputs.contains(&c.id)
             };
+            // Step 6: only application clusters for which this endpoint
+            // is the transaction initiator (type 1 client, type 2 server)
+            // are bound; utility clusters never are.
             let selected = if fb.filter.is_empty() {
-                !UTILITY_CLUSTERS.contains(&c.id)
+                match finding_binding_role(c.id, !c.client) {
+                    Some(FbRole::Initiator) => true,
+                    Some(FbRole::Target) => false,
+                    None => classify(c.id) != ClusterClass::Utility,
+                }
             } else {
                 fb.filter.contains(&c.id)
             };

@@ -8,24 +8,25 @@ id = "PW-DTL-GEN-001"
 section = "§1.9–§1.13"
 summary = "Device definition conventions: attribute lists, permitted transmission modes, device class, groups/scenes clarifications, cluster usage restrictions, transmission handling"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-device-library::model"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-device-library"
+tests = ["classification_and_finding_binding_roles"]
+notes = "Device classes (Simple / Dynamic / Node) and the cluster classification used for finding & binding are modelled; attribute lists, permitted transmission modes and the groups / scenes clarifications are documentation only."
 [[requirement]]
 id = "PW-DTL-DEV-001"
 section = "§4–§40"
 summary = "Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others)"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-device-library::generated"
-tests = []
-
+tests = ["table_is_sorted_and_lookup_works", "light_and_switch_endpoints"]
+notes = "All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. Endpoint builders exist for the On/Off Light, On/Off Light Switch and On/Off Switch, minus the unimplemented Scenes server."
 [[requirement]]
 id = "PW-DTL-VAL-001"
 section = "§1.4, per-device cluster requirements"
 summary = "Validation of endpoint composition against device type requirements (required clusters, attributes, commands)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-device-library::validate"
-tests = []
+status = "partially-implemented"
+module = "panweave-device-library"
+tests = ["missing_clusters_are_reported"]
+notes = "DeviceType::missing / conforms validate the mandatory cluster lists of a simple descriptor; required attributes and commands are not checked."

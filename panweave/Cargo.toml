@@ -11,13 +11,31 @@ categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
+std = ["alloc", "panweave-types/std", "panweave-runtime/std", "panweave-bdb/std", "panweave-testkit/std", "panweave-security/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["panweave-types/serde"]
-defmt = ["panweave-types/defmt"]
+defmt = ["panweave-types/defmt", "panweave-runtime/defmt", "panweave-bdb/defmt"]
+crypto-software = ["panweave-security/crypto-software"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+panweave-security = { workspace = true }
+panweave-mac = { workspace = true }
+panweave-nwk = { workspace = true }
+panweave-aps = { workspace = true }
+panweave-zdo = { workspace = true }
+panweave-zcl = { workspace = true }
+panweave-bdb = { workspace = true }
+panweave-device-library = { workspace = true }
+panweave-runtime = { workspace = true }
+panweave-storage = { workspace = true }
+panweave-testkit = { workspace = true }
+heapless = { workspace = true }
+
+[dev-dependencies]
+panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-sim = { workspace = true }
 
 [lints]
 workspace = true

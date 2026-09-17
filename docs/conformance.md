@@ -9,13 +9,13 @@ Panweave is an independent implementation; this table records the maintainers' o
 | Document | Total | Implemented | Partial | Not implemented | N/A | HW validation | Clarification |
 |---|---|---|---|---|---|---|---|
 | BDB3.1 | 27 | 12 | 5 | 9 | 1 | 0 | 0 |
-| DTL2 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
+| DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 0 | 0 | 9 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 0 | 18 | 0 | 0 | 0 |
 | ZCL8 | 36 | 12 | 5 | 19 | 0 | 0 | 0 |
 | R23.2 | 132 | 91 | 19 | 21 | 1 | 0 | 0 |
-| **All** | 236 | 115 | 29 | 90 | 2 | 0 | 0 |
+| **All** | 236 | 115 | 32 | 87 | 2 | 0 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -53,9 +53,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Id | Section | Level | Status | Module | Summary | Tests | Notes |
 |---|---|---|---|---|---|---|---|
-| PW-DTL-GEN-001 | §1.9–§1.13 | mandatory | not-implemented | `panweave-device-library::model` | Device definition conventions: attribute lists, permitted transmission modes, device class, groups/scenes clarifications, cluster usage restrictions, transmission handling | — |  |
-| PW-DTL-DEV-001 | §4–§40 | mandatory | not-implemented | `panweave-device-library::generated` | Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others) | — |  |
-| PW-DTL-VAL-001 | §1.4, per-device cluster requirements | mandatory | not-implemented | `panweave-device-library::validate` | Validation of endpoint composition against device type requirements (required clusters, attributes, commands) | — |  |
+| PW-DTL-GEN-001 | §1.9–§1.13 | mandatory | partially-implemented | `panweave-device-library` | Device definition conventions: attribute lists, permitted transmission modes, device class, groups/scenes clarifications, cluster usage restrictions, transmission handling | `classification_and_finding_binding_roles` | Device classes (Simple / Dynamic / Node) and the cluster classification used for finding & binding are modelled; attribute lists, permitted transmission modes and the groups / scenes clarifications are documentation only. |
+| PW-DTL-DEV-001 | §4–§40 | mandatory | partially-implemented | `panweave-device-library::generated` | Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others) | `table_is_sorted_and_lookup_works`, `light_and_switch_endpoints` | All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. Endpoint builders exist for the On/Off Light, On/Off Light Switch and On/Off Switch, minus the unimplemented Scenes server. |
+| PW-DTL-VAL-001 | §1.4, per-device cluster requirements | mandatory | partially-implemented | `panweave-device-library` | Validation of endpoint composition against device type requirements (required clusters, attributes, commands) | `missing_clusters_are_reported` | DeviceType::missing / conforms validate the mandatory cluster lists of a simple descriptor; required attributes and commands are not checked. |
 
 ## ZD1.1 — Zigbee Direct Specification, Revision 1.1
 

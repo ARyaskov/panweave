@@ -1,0 +1,382 @@
+# Device types of the Zigbee Device Type Library (document 23-02016-002):
+# Table 3 identifiers with each device's mandatory server/client clusters
+# taken from its PICS table (identifiers only). Produced by
+# scripts/dtl_metadata.py and maintained by hand afterwards;
+# `cargo xtask codegen` renders panweave-device-library/src/generated.rs.
+
+[[device]]
+id = 0x0000
+name = "On/Off Switch"
+class = "Simple"
+section = "§4"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006]
+
+[[device]]
+id = 0x0001
+name = "Level Control Switch"
+class = "Simple"
+section = "§5"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006, 0x0008]
+
+[[device]]
+id = 0x0002
+name = "On/Off Output"
+class = "Simple"
+section = "§6"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006]
+clients = []
+
+[[device]]
+id = 0x0003
+name = "Level Controllable Output"
+class = "Simple"
+section = "§7"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008]
+clients = []
+
+[[device]]
+id = 0x0004
+name = "Scene Selector"
+class = "Simple"
+section = "§8"
+servers = [0x0000, 0x0003]
+clients = [0x0004, 0x0005]
+
+[[device]]
+id = 0x0005
+name = "Configuration Tool"
+class = "Dynamic"
+section = "§9"
+servers = [0x0000, 0x0003]
+clients = []
+
+[[device]]
+id = 0x0006
+name = "Remote Control"
+class = "Simple"
+section = "§10"
+servers = [0x0000, 0x0003]
+clients = []
+
+[[device]]
+id = 0x0007
+name = "Combined Interface"
+class = "Dynamic"
+section = "§11"
+servers = [0x0000, 0x0003]
+clients = []
+
+[[device]]
+id = 0x0008
+name = "Range Extender"
+class = "Node"
+section = "§12"
+servers = [0x0000, 0x0003]
+clients = []
+
+[[device]]
+id = 0x0009
+name = "Mains Power Outlet"
+class = "Simple"
+section = "§13"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006]
+clients = []
+
+[[device]]
+id = 0x000A
+name = "Door Lock"
+class = "Simple"
+section = "§14"
+servers = [0x0000, 0x0003, 0x0101]
+clients = []
+
+[[device]]
+id = 0x000B
+name = "Door Lock Controller"
+class = "Simple"
+section = "§15"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0101]
+
+[[device]]
+id = 0x000D
+name = "Consumption Awareness"
+class = "Simple"
+section = "§16"
+servers = [0x0000, 0x0003, 0x0702]
+clients = [0x0003]
+
+[[device]]
+id = 0x0050
+name = "Home Gateway"
+class = "Dynamic"
+section = "§17"
+servers = [0x0000, 0x0003, 0x000A]
+clients = [0x001A, 0x0702, 0x0B01, 0x0B03]
+
+[[device]]
+id = 0x0051
+name = "Smart Plug"
+class = "Simple"
+section = "§18"
+servers = [0x0000, 0x0003, 0x0006, 0x0702]
+clients = [0x0003]
+
+[[device]]
+id = 0x0052
+name = "White Goods"
+class = "Simple"
+section = "§19"
+servers = [0x0000, 0x0003, 0x001A, 0x001B, 0x0B00, 0x0B02]
+clients = [0x0003]
+
+[[device]]
+id = 0x0053
+name = "Meter Interface"
+class = "Simple"
+section = "§20"
+servers = [0x0000, 0x0003, 0x0702, 0x0B01]
+clients = [0x0003]
+
+[[device]]
+id = 0x0100
+name = "On/Off Light"
+class = "Simple"
+section = "§21"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006]
+clients = []
+
+[[device]]
+id = 0x0101
+name = "Dimmable Light"
+class = "Simple"
+section = "§22"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008]
+clients = []
+
+[[device]]
+id = 0x0102
+name = "Color Dimmable Light"
+class = "Simple"
+section = "§23"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300]
+clients = []
+
+[[device]]
+id = 0x0103
+name = "On/Off Light Switch"
+class = "Simple"
+section = "§24"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006]
+
+[[device]]
+id = 0x0104
+name = "Dimmer Switch"
+class = "Simple"
+section = "§25"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006, 0x0008]
+
+[[device]]
+id = 0x0105
+name = "Color Dimmer Switch"
+class = "Simple"
+section = "§26"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006, 0x0008, 0x0300]
+
+[[device]]
+id = 0x0106
+name = "Light Sensor"
+class = "Simple"
+section = "§27"
+servers = [0x0000, 0x0003, 0x0400]
+clients = [0x0003]
+
+[[device]]
+id = 0x0107
+name = "Occupancy Sensor"
+class = "Simple"
+section = "§28"
+servers = [0x0000, 0x0003, 0x0406]
+clients = [0x0003]
+
+[[device]]
+id = 0x0108
+name = "On/Off Ballast"
+class = "Simple"
+section = "§29"
+servers = [0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0301]
+clients = []
+
+[[device]]
+id = 0x0109
+name = "Dimmable Ballast"
+class = "Simple"
+section = "§30"
+servers = [0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0301]
+clients = []
+
+[[device]]
+id = 0x010A
+name = "On/Off Plug-in Unit"
+class = "Simple"
+section = "§31"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006]
+clients = []
+
+[[device]]
+id = 0x010B
+name = "Dimmable Plug-In Unit"
+class = "Simple"
+section = "§32"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008]
+clients = []
+
+[[device]]
+id = 0x010C
+name = "Color Temperature Light"
+class = "Simple"
+section = "§33"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300]
+clients = []
+
+[[device]]
+id = 0x010D
+name = "Extended Color Light"
+class = "Simple"
+section = "§34"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300]
+clients = []
+
+[[device]]
+id = 0x0202
+name = "Window Covering"
+class = "Simple"
+section = "§37"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0102]
+clients = []
+
+[[device]]
+id = 0x0203
+name = "Window Covering Controller"
+class = "Simple"
+section = "§38"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0004, 0x0005, 0x0102]
+
+[[device]]
+id = 0x0300
+name = "Heating/Cooling Unit"
+class = "Simple"
+section = "§39"
+servers = [0x0000, 0x0003, 0x0004, 0x0006]
+clients = [0x0201]
+
+[[device]]
+id = 0x0301
+name = "Thermostat"
+class = "Simple"
+section = "§40"
+servers = [0x0000, 0x0003, 0x0201]
+clients = [0x0003]
+
+[[device]]
+id = 0x0302
+name = "Temperature Sensor"
+class = "Simple"
+section = "§41"
+servers = [0x0000, 0x0003, 0x0402]
+clients = [0x0003]
+
+[[device]]
+id = 0x0308
+name = "Air Purifier"
+class = "Simple"
+section = "§42"
+servers = [0x0000, 0x0003, 0x0004, 0x0202]
+clients = []
+
+[[device]]
+id = 0x0400
+name = "IAS Control and Indication Equipment"
+class = "Simple"
+section = "§43"
+servers = [0x0000, 0x0003, 0x0501]
+clients = [0x0003, 0x0500, 0x0502]
+
+[[device]]
+id = 0x0401
+name = "IAS Ancillary Control Equipment"
+class = "Simple"
+section = "§44"
+servers = [0x0000, 0x0003, 0x0500]
+clients = [0x0003, 0x0501]
+
+[[device]]
+id = 0x0402
+name = "IAS Zone"
+class = "Simple"
+section = "§45"
+servers = [0x0000, 0x0003, 0x0500]
+clients = []
+
+[[device]]
+id = 0x0403
+name = "IAS Warning Device"
+class = "Simple"
+section = "§46"
+servers = [0x0000, 0x0003, 0x0500, 0x0502]
+clients = []
+
+[[device]]
+id = 0x0800
+name = "Color Controller"
+class = "Simple"
+section = "§47"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006, 0x0008, 0x0300]
+
+[[device]]
+id = 0x0810
+name = "Color Scene Controller"
+class = "Simple"
+section = "§48"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0005, 0x0006, 0x0008, 0x0300]
+
+[[device]]
+id = 0x0820
+name = "Non-Color Controller"
+class = "Simple"
+section = "§49"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0006, 0x0008]
+
+[[device]]
+id = 0x0830
+name = "Non-Color Scene Controller"
+class = "Simple"
+section = "§50"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0005, 0x0006, 0x0008]
+
+[[device]]
+id = 0x0840
+name = "Control Bridge"
+class = "Dynamic"
+section = "§51"
+servers = [0x0000, 0x0003]
+clients = [0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300]
+
+[[device]]
+id = 0x0850
+name = "On/Off Sensor"
+class = "Simple"
+section = "§52"
+servers = [0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0200, 0x0401, 0x0403]
+clients = [0x0003, 0x0006, 0x0200, 0x0404]
+
