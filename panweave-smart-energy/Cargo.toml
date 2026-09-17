@@ -29,6 +29,13 @@ defmt = { workspace = true, optional = true }
 
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-sim = { workspace = true }
+panweave-runtime = { workspace = true, features = ["std"] }
+panweave-aps = { workspace = true }
+panweave-mac = { workspace = true }
+panweave-zdo = { workspace = true }
+panweave-storage = { workspace = true }
+panweave-testkit = { workspace = true }
 
 [lints]
 workspace = true

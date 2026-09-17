@@ -128,8 +128,10 @@ Keep a Changelog; versions follow SemVer.
   (Table 5-12, ADR-0012), the profile parameters of §5.3, and the Key
   Establishment cluster (Annex C): command and certificate codecs for
   both suites, the KDF and MACU / MACV transforms (Annex C.5 / C.6
-  vectors) and the CBKE initiator / responder machines over a
-  host-supplied `Ecmqv` primitive.
+  vectors), server / client cluster instances and the CBKE initiator /
+  responder machines over a host-supplied `Ecmqv` primitive; the
+  simulator test runs the exchange over the cluster and proves the
+  installed link key with an APS-secured read.
 * `panweave-smart-energy::clusters`: Demand Response and Load Control
   (codecs, client attributes and a client-side event scheduler with
   randomization, supersede and cancellation rules), Messaging (codecs

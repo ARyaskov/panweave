@@ -11,14 +11,57 @@
 use heapless::Vec;
 use panweave_security::cipher::BlockCipher;
 use panweave_security::mmo;
-use panweave_types::{AttributeId, ClusterId, ExtendedAddress, Key128};
+use panweave_types::{AttributeId, ClusterId, CommandId, ExtendedAddress, Key128};
+use panweave_zcl::attribute::{Access, AttributeDef};
+use panweave_zcl::cluster::{ClusterDef, ClusterInstance, Role};
+use panweave_zcl::frame::ZclStatus;
+use panweave_zcl::types::{DataType, Value};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x0800);
-/// `KeyEstablishmentSuite` attribute (Table C-3).
+/// `KeyEstablishmentSuite` attribute (Table C-3 / C-8; a 16-bit
+/// enumeration treated as a bitmap).
 pub const ATTR_KEY_ESTABLISHMENT_SUITE: AttributeId = AttributeId(0x0000);
+/// `KeyEstablishmentSuite` attribute definition.
+pub const KEY_ESTABLISHMENT_SUITE: AttributeDef =
+    AttributeDef::new(0x0000, DataType::Enum16, Access::RO);
+
+/// Server cluster definition (Table C-5).
+pub const SERVER_DEF: ClusterDef = ClusterDef {
+    id: ID,
+    revision: 1,
+    received: &[
+        CommandId(command::INITIATE_KEY_ESTABLISHMENT),
+        CommandId(command::EPHEMERAL_DATA),
+        CommandId(command::CONFIRM_KEY),
+        CommandId(command::TERMINATE_KEY_ESTABLISHMENT),
+    ],
+    generated: &[
+        CommandId(command::INITIATE_KEY_ESTABLISHMENT),
+        CommandId(command::EPHEMERAL_DATA),
+        CommandId(command::CONFIRM_KEY),
+        CommandId(command::TERMINATE_KEY_ESTABLISHMENT),
+    ],
+};
+
+/// Client cluster definition (Table C-10).
+pub const CLIENT_DEF: ClusterDef = SERVER_DEF;
+
+/// A server instance advertising `suites` (Table C-4 bitmap).
+pub fn server<const A: usize>(suites: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+    let mut c = ClusterInstance::new(SERVER_DEF, Role::Server);
+    c.add_attribute(KEY_ESTABLISHMENT_SUITE, &Value::Enum16(suites))?;
+    Ok(c)
+}
+
+/// A client instance advertising `suites`.
+pub fn client<const A: usize>(suites: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+    let mut c = ClusterInstance::new(CLIENT_DEF, Role::Client);
+    c.add_attribute(KEY_ESTABLISHMENT_SUITE, &Value::Enum16(suites))?;
+    Ok(c)
+}
 
 /// Command identifiers (Table C-5 / C-10; the same values in both
 /// directions).

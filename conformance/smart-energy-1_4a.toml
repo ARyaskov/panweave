@@ -46,8 +46,8 @@ summary = "Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suit
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::key_establishment"
-tests = ["annex_c5_suite1_transform", "annex_c6_suite2_transform", "annex_c5_exchange_between_machines"]
-notes = "Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite bitmap and suite negotiation), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012); binding the machines to a ZCL endpoint and the Trust Center link-key update after a successful exchange are not done (TODO(PW-SE-CBKE-ENDPOINT))."
+tests = ["annex_c5_suite1_transform", "annex_c6_suite2_transform", "annex_c5_exchange_between_machines", "cbke_over_the_key_establishment_cluster_installs_a_working_link_key"]
+notes = "Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite attribute and suite negotiation, server and client cluster instances), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented; the simulator test runs the exchange over the cluster between a router and the Trust Center and proves the installed link key with an APS-secured read. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012); the CBKE driver is application code (the test's apps), not part of the runtime, and the §5.4.7 policies (leave on UNKNOWN_ISSUER, removal of devices that never establish a key) are not enforced (TODO(PW-SE-CBKE-POLICY))."
 
 [[requirement]]
 id = "PW-SE-SEC-005"
