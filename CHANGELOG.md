@@ -108,6 +108,16 @@ Keep a Changelog; versions follow SemVer.
   address, counters and freshness rules), Basic / Admin authorization key
   derivation, the BLE advertisement extension and the GATT identifiers of
   the three services — each checked against the Annex B vectors.
+* `panweave-direct::commissioning`: the Commissioning Service (ZD 1.1
+  §7.7.2) — Table 27 / Table 44 TLV codecs, Form / Join (with the
+  per-method TLV rules of Tables 39–41) / Permit Joining / Leave /
+  Commissioning Status / Manage Joiners / Identify / Finding & Binding
+  payloads with ZVD-side encoders, and the ZDD handler (`Commissioning`
+  over the `Zdd` trait) applying the Table 26 authorization matrix and
+  queueing Status Code notifications.
+* `panweave-direct::tunnel`: the Tunnel Service NPDU Message TLV
+  (§7.7.3) with the trusted-link pre-/post-processing of §7.7.4 and the
+  provisioning-session drop rule.
 * Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
   targets for the ZDP security services and the ZCL dispatcher, a
   dispatcher property test, `docs/performance.md`.

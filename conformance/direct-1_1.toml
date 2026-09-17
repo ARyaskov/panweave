@@ -62,28 +62,28 @@ id = "PW-ZD-ZDD-002"
 section = "§7.7.2"
 summary = "Commissioning service characteristics: form network, permit joining, join network (MAC association / rejoin / out-of-band), leave, commissioning status, manage joiners, identify, finding and binding; TLV items"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::zdd::commissioning"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-direct::commissioning"
+tests = ["join_network_tlv_usage_rules", "status_round_trip", "zdd_side_authorization_and_flow"]
+notes = "Table 27 / Table 44 TLV codecs, the Form/Join/Permit/Leave/Commissioning Status/Manage Joiners/Identify/Finding & Binding payloads with the joining-method TLV usage rules of Tables 39-41, the authorization matrix of Table 26 and Status Code notifications are in panweave-direct::commissioning behind the Zdd trait; the ZDD is not yet bound to the runtime Stack (formation, joining, leave, permit-join broadcast and F&B on behalf of the service) and the Manage Joiners provisional keys are not yet consumed by the Trust Center (TODO(PW-ZD-RUNTIME))."
 [[requirement]]
 id = "PW-ZD-ZDD-003"
 section = "§7.7.3, §7.7.4"
 summary = "Tunnel service NPDU characteristic, NPDU message TLV, trusted-link pre/post processing in the NWK layer, joining centralized/distributed networks on behalf of the ZVD, ZVD as trust center, ZVD rejoin/forming"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::zdd::tunnel"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-direct::tunnel"
+tests = ["npdu_message_round_trip_and_session_rule"]
+notes = "NPDU Message TLV codec and the trusted-link pre-/post-processing of §7.7.4.1-7.7.4.2 including the ZVD-provisioning-session drop rule of §7.7.3.6.2 are implemented; the NWK-layer trusted-link interface (NLME-TRUSTEDLINK-*), joining on behalf of the ZVD, ZVD as Trust Center and ZVD rejoin/forming through the ZDD are not (TODO(PW-ZD-TRUSTEDLINK))."
 [[requirement]]
 id = "PW-ZD-ZVD-001"
 section = "§8"
 summary = "ZVD behaviour: discovery of ZDDs, security, reconnection, commissioning and tunnel clients, EUI-64 allocation"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::zvd"
+status = "partially-implemented"
+module = "panweave-direct::commissioning"
 tests = []
-
+notes = "ZVD-side encoders for the commissioning writes and the Commissioning Status decoder exist (commissioning::{FormNetwork,JoinNetwork,ManageJoiners,LeaveNetwork,FindingBinding}::encode, decode_status), the advertisement parser and the session initiator; ZDD discovery, reconnection and the EUI-64 allocation rules of §8 are not implemented."
 [[requirement]]
 id = "PW-ZD-KEY-001"
 section = "§9"
