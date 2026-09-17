@@ -178,8 +178,8 @@ library is planned.
 
 The endpoint dispatcher (`panweave-zcl::layer`) executes the general
 clusters whose semantics are fully specified — Identify, Groups, Scenes,
-On/Off, Level Control, Color Control, Thermostat, Window Covering, Poll
-Control, Alarms, Time, IAS Zone and the Basic Reset to Factory Defaults — and hands everything else to the application as
+On/Off, Level Control, Color Control, Thermostat, Window Covering, Door
+Lock, Poll Control, Alarms, Time, IAS Zone and the Basic Reset to Factory Defaults — and hands everything else to the application as
 `ZclIndication::Command`. Attribute-only clusters (the measurement and
 sensing clusters, Power Configuration) come with builders and application
 setters (`temperature::set_measured`, `power_configuration::set_battery`)

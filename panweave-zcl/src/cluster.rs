@@ -79,6 +79,8 @@ pub enum ClusterState {
     IasZone(crate::clusters::ias_zone::State),
     /// Color Control transition engine (§5.2).
     Color(crate::clusters::color_control::Engine),
+    /// Door Lock server state: PIN users and timers (§7.3).
+    DoorLock(crate::clusters::door_lock::State),
 }
 
 /// A cluster instance.
@@ -148,7 +150,7 @@ impl<const A: usize> ClusterInstance<A> {
     pub fn reset_to_defaults(&mut self, now: Instant) {
         self.attributes.reset_to_defaults(now);
         self.tick = None;
-        self.state = match self.state {
+        self.state = match core::mem::take(&mut self.state) {
             ClusterState::Level(_) => {
                 ClusterState::Level(crate::clusters::level::Transition::default())
             }
@@ -173,6 +175,17 @@ impl<const A: usize> ClusterInstance<A> {
             }),
             ClusterState::Color(_) => {
                 ClusterState::Color(crate::clusters::color_control::Engine::default())
+            }
+            ClusterState::DoorLock(d) => {
+                // The PIN users are wiped, the slot count is kept.
+                let mut users = heapless::Vec::new();
+                for _ in 0..d.users.len() {
+                    let _ = users.push(crate::clusters::door_lock::User::default());
+                }
+                ClusterState::DoorLock(crate::clusters::door_lock::State {
+                    users,
+                    ..crate::clusters::door_lock::State::default()
+                })
             }
             ClusterState::None => ClusterState::None,
         };

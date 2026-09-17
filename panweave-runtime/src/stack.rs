@@ -353,6 +353,17 @@ pub enum StackEvent {
         /// Test duration.
         seconds: Option<u8>,
     },
+    /// A Door Lock server accepted an RF operation, recalled a scene or
+    /// its automatic relock fired (ZCL8 §7.3.2.15): the application
+    /// moves the bolt and reports back with `Stack::zcl.set_lock_state`.
+    DoorLock {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Lock or unlock.
+        action: panweave_zcl::clusters::door_lock::Action,
+        /// PIN user, or `door_lock::NO_USER`.
+        user: u16,
+    },
     /// A Window Covering server accepted a motion command or recalled a
     /// scene (ZCL8 §7.4.2.2, §7.4.2.4): the application drives the motor
     /// and reports positions back through the cluster helpers.

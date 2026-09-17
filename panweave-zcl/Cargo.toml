@@ -21,6 +21,7 @@ panweave-types = { workspace = true }
 panweave-codec = { workspace = true }
 panweave-aps = { workspace = true }
 heapless = { workspace = true }
+subtle = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 

@@ -13,10 +13,10 @@ use panweave_device_library::DeviceType;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
 use panweave_zcl::clusters::hvac::{fan_control, thermostat};
 use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature};
-use panweave_zcl::clusters::window_covering;
 use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
 };
+use panweave_zcl::clusters::{door_lock, window_covering};
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -47,6 +47,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     thermostat::ID,
     fan_control::ID,
     window_covering::ID,
+    door_lock::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -69,6 +70,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     thermostat::ID,
     fan_control::ID,
     window_covering::ID,
+    door_lock::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -146,6 +148,7 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<24>> {
             window_covering::Control::Unsupported,
         )
         .ok(),
+        door_lock::ID => door_lock::server(door_lock::lock_type::DEAD_BOLT, 4, true).ok(),
         _ => None,
     }
 }
@@ -174,6 +177,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<24>> {
         thermostat::ID => Some(thermostat::client()),
         fan_control::ID => Some(fan_control::client()),
         window_covering::ID => Some(window_covering::client()),
+        door_lock::ID => Some(door_lock::client()),
         _ => None,
     }
 }
@@ -301,6 +305,12 @@ pub fn color_dimmable_light(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0102), &[], &[], false)
 }
 
+/// Door Lock (device 0x000a): Identify, Groups, Scenes and a dead-bolt
+/// Door Lock server with four PIN users.
+pub fn door_lock_device(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x000a), &[], &[], false)
+}
+
 /// Window Covering (device 0x0202): Identify, Groups, Scenes and a
 /// closed-loop rollershade server.
 pub fn window_covering_device(endpoint: Endpoint) -> Option<Built> {
@@ -360,12 +370,13 @@ mod tests {
         assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
         assert!(ep.cluster(color_control::ID, Role::Server).is_some());
         type Builder = fn(Endpoint) -> Option<Built>;
-        let sensors: [(Builder, u16, ClusterId); 5] = [
+        let sensors: [(Builder, u16, ClusterId); 6] = [
             (light_sensor, 0x0106, illuminance::ID),
             (occupancy_sensor, 0x0107, occupancy::ID),
             (temperature_sensor, 0x0302, temperature::ID),
             (thermostat_device, 0x0301, thermostat::ID),
             (window_covering_device, 0x0202, window_covering::ID),
+            (door_lock_device, 0x000a, door_lock::ID),
         ];
         for (build, id, cluster) in sensors {
             let (d, ep) = build(Endpoint(5)).unwrap();

@@ -908,6 +908,7 @@ dependencies = [
  "panweave-types",
  "proptest",
  "serde",
+ "subtle",
 ]
 
 [[package]]

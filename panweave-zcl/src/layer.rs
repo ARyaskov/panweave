@@ -17,8 +17,8 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
-    alarms, basic, color_control, hvac, ias_zone, identify, level, on_off, poll_control, scenes,
-    time, window_covering,
+    alarms, basic, color_control, door_lock, hvac, ias_zone, identify, level, on_off, poll_control,
+    scenes, time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -246,6 +246,19 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// What to do.
         command: window_covering::Command,
+    },
+    /// The Door Lock server on `endpoint` accepted an RF operation, a
+    /// scene recall or an automatic relock fired (§7.3.2.15): the
+    /// application moves the bolt and reports back with
+    /// [`Zcl::set_lock_state`]; `user` is the PIN user or
+    /// [`door_lock::NO_USER`].
+    DoorLock {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Lock or unlock.
+        action: door_lock::Action,
+        /// User identifier.
+        user: u16,
     },
     /// A Setpoint Raise/Lower adjusted the thermostat on `endpoint`
     /// (§6.3.2.3.1): the new occupied setpoints in 0.01 °C.
@@ -813,6 +826,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_ias_zone(i, &origin, cmd, payload);
                                 continue;
                             }
+                            door_lock::ID => {
+                                self.handle_door_lock(i, &origin, cmd, payload);
+                                continue;
+                            }
                             color_control::ID => {
                                 self.handle_color(i, &origin, cmd, payload);
                                 continue;
@@ -1042,6 +1059,148 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 let _ = self.default_response(origin, ZclStatus::MalformedCommand);
             }
         }
+    }
+
+    /// Local time for the Door Lock event notifications from a Time
+    /// server on the same endpoint (§7.3.2.3).
+    fn local_time(&self, ep_index: usize) -> u32 {
+        let now = self.now;
+        self.endpoints
+            .get(ep_index)
+            .and_then(|ep| ep.cluster(time::ID, Role::Server))
+            .and_then(|t| time::now(t, now).and_then(|utc| time::local_times(t, utc)))
+            .map_or(door_lock::NO_TIME, |(_, local)| local)
+    }
+
+    /// Door Lock server commands (§7.3.2.15): the response goes back to
+    /// the requester, the bolt operation to the application, the event
+    /// notification to the bound clients and a tamper alarm through the
+    /// Alarms cluster.
+    fn handle_door_lock(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let now = self.now;
+        let local_time = self.local_time(ep_index);
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(door_lock::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        let outcome = door_lock::handle(c, cmd, payload, now, local_time);
+        if let Some((action, user)) = outcome.action {
+            self.push_event(ZclEvent::DoorLock {
+                endpoint,
+                action,
+                user,
+            });
+        }
+        if let Some(frame) = outcome.notify {
+            self.send_door_lock_frame(ep_index, frame);
+        }
+        if let Some(code) = outcome.alarm {
+            let _ = self.raise_alarm(endpoint, door_lock::ID, code);
+        }
+        match outcome.response {
+            Some(frame) => self.reply_cluster_specific(origin, frame.command, &frame.payload),
+            None => {
+                let _ = self.default_response(origin, outcome.status);
+            }
+        }
+    }
+
+    /// Sends a Door Lock event notification to the bound clients.
+    fn send_door_lock_frame(&mut self, ep_index: usize, frame: door_lock::Frame) {
+        let Some(ep) = self.endpoints.get(ep_index) else {
+            return;
+        };
+        let (endpoint, profile) = (ep.endpoint, ep.profile);
+        let seq = self.next_seq();
+        let header = Header::cluster_specific(seq, frame.command, Direction::ToClient)
+            .disable_default_response(true);
+        if let Ok(fr) = Self::build(&header, &frame.payload) {
+            self.push_action(ZclAction::Send {
+                destination: Destination::Bound,
+                profile,
+                cluster: door_lock::ID,
+                src_endpoint: endpoint,
+                frame: fr,
+                options: TxOptions::ACKED,
+            });
+        }
+    }
+
+    /// Reports the bolt position of the Door Lock server on `endpoint`
+    /// (`LockState`, Table 7-9).
+    pub fn set_lock_state(&mut self, endpoint: Endpoint, state: u8) -> Result<bool, ZclError> {
+        let c = self
+            .cluster_mut(endpoint, door_lock::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        Ok(door_lock::set_lock_state(c, state))
+    }
+
+    /// Sends a Door Lock Operation Event Notification for an event the
+    /// application observed (keypad, manual or RFID sources), when its
+    /// mask bit is set; returns whether it was sent.
+    pub fn door_lock_operation_event(
+        &mut self,
+        endpoint: Endpoint,
+        source: u8,
+        code: u8,
+        user: u16,
+        pin: &[u8],
+    ) -> Result<bool, ZclError> {
+        let i = self
+            .endpoints
+            .iter()
+            .position(|e| e.endpoint == endpoint)
+            .ok_or(ZclError::NotFound)?;
+        let local_time = self.local_time(i);
+        let c = self
+            .cluster_mut(endpoint, door_lock::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let Some(frame) = door_lock::operation_event(c, source, code, user, pin, local_time) else {
+            return Ok(false);
+        };
+        self.send_door_lock_frame(i, frame);
+        Ok(true)
+    }
+
+    /// Sends a Door Lock Programming Event Notification for a change the
+    /// application made locally (keypad or RFID sources), when its mask
+    /// bit is set; returns whether it was sent.
+    pub fn door_lock_programming_event(
+        &mut self,
+        endpoint: Endpoint,
+        source: u8,
+        code: u8,
+        user_id: u16,
+    ) -> Result<bool, ZclError> {
+        let i = self
+            .endpoints
+            .iter()
+            .position(|e| e.endpoint == endpoint)
+            .ok_or(ZclError::NotFound)?;
+        let local_time = self.local_time(i);
+        let c = self
+            .cluster_mut(endpoint, door_lock::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let user = door_lock::users(c)
+            .get(usize::from(user_id))
+            .cloned()
+            .unwrap_or_default();
+        let Some(frame) = door_lock::programming_event(c, source, code, &user, user_id, local_time)
+        else {
+            return Ok(false);
+        };
+        self.send_door_lock_frame(i, frame);
+        Ok(true)
     }
 
     /// Sets the zone status of the IAS Zone server on `endpoint`
@@ -1479,6 +1638,9 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     &window_covering::scene_fields(c),
                 );
             }
+            if let Some(c) = ep.cluster(door_lock::ID, Role::Server) {
+                scenes::write_field_set(&mut w, door_lock::ID, &door_lock::scene_fields(c));
+            }
         }
         let n = w.position();
         Vec::from_slice(buf.get(..n).unwrap_or(&[])).unwrap_or_default()
@@ -1534,6 +1696,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             {
                 let endpoint = ep.endpoint;
                 self.push_event(ZclEvent::WindowCovering { endpoint, command });
+            } else if cluster == door_lock::ID
+                && let Some(c) = ep.cluster_mut(door_lock::ID, Role::Server)
+            {
+                door_lock::apply_scene_fields(c, f, tenths, now);
             }
         }
         // The recalled scene is what the device shows now.
@@ -1730,6 +1896,23 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                     && written
                 {
                     self.push_event(ZclEvent::TimeSet { endpoint, utc });
+                }
+            }
+            let local_time = self.local_time(i);
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(door_lock::ID, Role::Server)
+                && c.tick.is_some_and(|t| now.has_reached(t))
+                && let Some((action, frame)) = door_lock::tick(c, now, local_time)
+            {
+                self.push_event(ZclEvent::DoorLock {
+                    endpoint,
+                    action,
+                    user: door_lock::NO_USER,
+                });
+                if let Some(frame) = frame {
+                    self.send_door_lock_frame(i, frame);
                 }
             }
             let Some(ep) = self.endpoints.get_mut(i) else {

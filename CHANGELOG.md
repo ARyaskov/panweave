@@ -177,6 +177,18 @@ Keep a Changelog; versions follow SemVer.
   by default, the scene extension recalled as a timed go-to, and
   `ZclEvent::WindowCovering` handing the accepted command to the
   application; facade `window_covering_device` endpoint.
+* `panweave-zcl::clusters::door_lock`: the Door Lock core — the
+  information, operational, security and event-mask attributes; Lock /
+  Unlock / Toggle / Unlock with Timeout with the operating-mode,
+  actuator, PIN, wrong-code lockout (tamper alarm) and auto-relock
+  rules; a bounded PIN user table with Set / Get / Clear PIN Code,
+  Clear All and user status / type commands; Operation and Programming
+  Event Notifications gated by their masks with PINs masked unless
+  `SendPINOverTheAir`; the scene extension as a delayed operation;
+  `ZclEvent::DoorLock`, `Zcl::{set_lock_state,
+  door_lock_operation_event, door_lock_programming_event}` and the
+  facade `door_lock_device` endpoint. PIN codes are redacted from
+  `Debug` and compared in constant time.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

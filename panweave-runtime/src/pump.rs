@@ -1561,6 +1561,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZclEvent::WindowCovering { endpoint, command } => {
                     StackEvent::WindowCovering { endpoint, command }
                 }
+                ZclEvent::DoorLock {
+                    endpoint,
+                    action,
+                    user,
+                } => StackEvent::DoorLock {
+                    endpoint,
+                    action,
+                    user,
+                },
                 ZclEvent::Setpoints {
                     endpoint,
                     heat,
