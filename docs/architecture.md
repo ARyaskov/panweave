@@ -178,8 +178,14 @@ library is planned.
 
 The endpoint dispatcher (`panweave-zcl::layer`) executes the general
 clusters whose semantics are fully specified — Identify, Groups, Scenes,
-On/Off, Level Control, Poll Control and the Basic Reset to Factory Defaults
-— and hands everything else to the application as `ZclIndication::Command`.
+On/Off, Level Control, Poll Control, Alarms, Time and the Basic Reset to
+Factory Defaults — and hands everything else to the application as
+`ZclIndication::Command`. Attribute-only clusters (the measurement and
+sensing clusters, Power Configuration) come with builders and application
+setters (`temperature::set_measured`, `power_configuration::set_battery`)
+that keep the range / alarm-state rules; alarm conditions are raised with
+`Zcl::raise_alarm`, which logs them in the endpoint's Alarms server and
+notifies the bound clients.
 Executed clusters keep their state in the cluster instance (`ClusterState`,
 the 100 ms `tick`) or the endpoint (the scene table), and inform the
 application through `ZclEvent`s (`OnOff`, `Level`, `SceneRecalled`,

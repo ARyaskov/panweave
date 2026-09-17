@@ -5,13 +5,16 @@
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
 
+pub mod alarms;
 pub mod groups;
 pub mod keep_alive;
 pub mod level;
 pub mod measurement;
 pub mod on_off;
 pub mod poll_control;
+pub mod power_configuration;
 pub mod scenes;
+pub mod time;
 
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};

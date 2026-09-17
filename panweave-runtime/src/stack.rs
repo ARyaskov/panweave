@@ -321,6 +321,23 @@ pub enum StackEvent {
     /// Reset to Factory Defaults received: all cluster attributes were
     /// restored (ZCL8 §3.2.2.3.1).
     FactoryReset,
+    /// An Alarms server received Reset Alarm (`Some`) or Reset All
+    /// Alarms (`None`): clear the condition, raise again if it persists
+    /// (ZCL8 §3.11.2.4.1).
+    AlarmReset {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Alarm code and cluster, or `None` for all.
+        alarm: Option<(u8, ClusterId)>,
+    },
+    /// A Time server was set over the network: synchronize the
+    /// application clock (ZCL8 §3.12.2.2.1).
+    TimeSet {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// UTC seconds since 2000-01-01.
+        utc: u32,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

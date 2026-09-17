@@ -145,10 +145,10 @@ id = "PW-ZCL-GEN-002"
 section = "§3.3"
 summary = "Power Configuration cluster"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zcl::clusters::power_configuration"
-tests = []
-
+tests = ["battery_thresholds_drive_alarm_state_and_codes", "battery_alarm_reaches_the_bound_client_with_a_time_stamp"]
+notes = "Mains and battery source 1 attributes (information, settings, thresholds, BatteryAlarmState with reporting), the alarm masks and codes, threshold evaluation into BatteryAlarmState bits and Alarms codes, mains voltage threshold checks and mains-lost handling. Battery sources 2 and 3 (0x0040-0x007e) are not instantiated and the MainsVoltageDwellTripPoint timer is left to the application."
 [[requirement]]
 id = "PW-ZCL-GEN-003"
 section = "§3.5"
@@ -199,19 +199,19 @@ id = "PW-ZCL-GEN-008"
 section = "§3.11"
 summary = "Alarms cluster"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::alarms"
-tests = []
-
+tests = ["table_and_commands", "battery_alarm_reaches_the_bound_client_with_a_time_stamp"]
+notes = "Alarm table (oldest replaced when full), AlarmCount, Reset Alarm / Reset All Alarms (handed to the application as ZclEvent::AlarmReset), Get Alarm / Get Alarm Response and Reset Alarm Log executed by the dispatcher; Zcl::raise_alarm logs and sends the Alarm command to bound clients, time-stamped from a Time server on the same endpoint."
 [[requirement]]
 id = "PW-ZCL-GEN-009"
 section = "§3.12"
 summary = "Time cluster"
 level = "optional"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::time"
-tests = []
-
+tests = ["clock_runs_and_guards_writes", "battery_alarm_reaches_the_bound_client_with_a_time_stamp"]
+notes = "Time, TimeStatus (fixed Master / MasterZoneDst bits, Synchronized cleared on a master), TimeZone, DstStart / DstEnd / DstShift, StandardTime, LocalTime, LastSetTime and ValidUntilTime; the clock runs on the dispatcher's monotonic time, a network write of Time is refused on a master clock (READ_ONLY) and otherwise applied as the new base with ZclEvent::TimeSet; the zone attributes are read-only under MasterZoneDst. The client-side server selection rules of §3.12.2.2.2 are documented, not automated."
 [[requirement]]
 id = "PW-ZCL-GEN-010"
 section = "§3.15"

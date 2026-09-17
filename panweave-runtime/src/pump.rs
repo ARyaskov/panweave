@@ -1547,6 +1547,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     src_endpoint,
                 },
                 ZclEvent::FactoryReset => StackEvent::FactoryReset,
+                ZclEvent::AlarmReset { endpoint, alarm } => {
+                    StackEvent::AlarmReset { endpoint, alarm }
+                }
+                ZclEvent::TimeSet { endpoint, utc } => StackEvent::TimeSet { endpoint, utc },
                 ZclEvent::FastPoll { fast, interval, .. } => {
                     // Poll Control server: switch the MAC poll rate.
                     self.fast_poll_mode = fast.then_some(interval);

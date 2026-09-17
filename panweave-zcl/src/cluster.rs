@@ -68,6 +68,10 @@ pub enum ClusterState {
     Level(crate::clusters::level::Transition),
     /// Poll Control server / client state (§3.16).
     PollControl(crate::clusters::poll_control::State),
+    /// Time server clock (§3.12).
+    Time(crate::clusters::time::Clock),
+    /// Alarms server table (§3.11).
+    Alarms(crate::clusters::alarms::Table),
 }
 
 /// A cluster instance.
@@ -143,6 +147,14 @@ impl<const A: usize> ClusterInstance<A> {
             }
             ClusterState::PollControl(_) => {
                 ClusterState::PollControl(crate::clusters::poll_control::State::default())
+            }
+            ClusterState::Time(k) => ClusterState::Time(crate::clusters::time::Clock {
+                base: None,
+                published: crate::clusters::time::INVALID,
+                ..k
+            }),
+            ClusterState::Alarms(_) => {
+                ClusterState::Alarms(crate::clusters::alarms::Table::default())
             }
             ClusterState::None => ClusterState::None,
         };

@@ -144,6 +144,14 @@ Keep a Changelog; versions follow SemVer.
   Sensing servers with default reporting and application setters;
   `ClusterInstance::{i16, set_i16}`; facade endpoints `light_sensor`,
   `occupancy_sensor`, `temperature_sensor`.
+* `panweave-zcl::clusters::{time, alarms, power_configuration}`: the
+  Time server (monotonic-driven clock, TimeStatus rules, zone / DST and
+  derived times, network writes applied with `ZclEvent::TimeSet`), the
+  Alarms server (alarm table, Get Alarm / Reset commands executed by the
+  dispatcher, `Zcl::raise_alarm` to bound clients with time stamps,
+  `ZclEvent::AlarmReset`) and Power Configuration (mains and battery
+  attributes, threshold evaluation into `BatteryAlarmState` and alarm
+  codes).
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

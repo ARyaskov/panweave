@@ -16,7 +16,7 @@ use panweave_types::{
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::groups::{self, GroupStore};
-use crate::clusters::{basic, identify, level, on_off, poll_control, scenes};
+use crate::clusters::{alarms, basic, identify, level, on_off, poll_control, scenes, time};
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
 
@@ -202,6 +202,23 @@ pub enum ZclEvent {
     /// Reset to Factory Defaults received (§3.2.2.3.1): every attribute
     /// of every cluster was restored.
     FactoryReset,
+    /// An Alarms server on `endpoint` received Reset Alarm (`Some`) or
+    /// Reset All Alarms (`None`): the application clears the condition
+    /// and raises the alarm again if it persists (§3.11.2.4.1).
+    AlarmReset {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The alarm code and cluster, or `None` for all alarms.
+        alarm: Option<(u8, ClusterId)>,
+    },
+    /// The Time server on `endpoint` was set over the network
+    /// (§3.12.2.2.1): the application synchronizes its clock to `utc`.
+    TimeSet {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// UTC seconds since 2000-01-01.
+        utc: u32,
+    },
 }
 
 /// Where a received command came from (for replies).
@@ -704,6 +721,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 let _ = self.default_response(&origin, ZclStatus::Success);
                                 continue;
                             }
+                            alarms::ID => {
+                                self.handle_alarms(i, &origin, cmd, payload);
+                                continue;
+                            }
                             _ => {}
                         }
                     } else if ind.cluster == poll_control::ID {
@@ -718,6 +739,116 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             }
         }
         result
+    }
+
+    /// Alarms server commands (§3.11.2.4): the table is kept by the
+    /// layer, resets are handed to the application.
+    fn handle_alarms(&mut self, ep_index: usize, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(alarms::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        let mut out = [0u8; 8];
+        match alarms::handle(c, cmd, payload, &mut out) {
+            alarms::Outcome::Reset(alarm) => {
+                self.push_event(ZclEvent::AlarmReset { endpoint, alarm });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            alarms::Outcome::Response(n) => {
+                let header = origin
+                    .header
+                    .response(alarms::CMD_GET_ALARM_RESPONSE, FrameType::ClusterSpecific);
+                if let Some(payload) = out.get(..n)
+                    && let Ok(fr) = Self::build(&header, payload)
+                {
+                    self.push_action(ZclAction::Send {
+                        destination: Destination::Short {
+                            address: origin.src,
+                            endpoint: origin.src_endpoint,
+                        },
+                        profile: origin.profile,
+                        cluster: alarms::ID,
+                        src_endpoint: endpoint,
+                        frame: fr,
+                        options: origin.reply_options(),
+                    });
+                }
+            }
+            alarms::Outcome::LogCleared => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            alarms::Outcome::Unsupported => {
+                let _ = self.default_response(origin, ZclStatus::UnsupportedClusterCommand);
+            }
+            alarms::Outcome::Malformed => {
+                let _ = self.default_response(origin, ZclStatus::MalformedCommand);
+            }
+        }
+    }
+
+    /// Raises an alarm of `cluster` with `code` on `endpoint`
+    /// (§3.11.2.5.1): logs it in the endpoint's Alarms server
+    /// (time-stamped from a Time server on the same endpoint when
+    /// present) and sends an Alarm command to the bound clients.
+    pub fn raise_alarm(
+        &mut self,
+        endpoint: Endpoint,
+        cluster: ClusterId,
+        code: u8,
+    ) -> Result<(), ZclError> {
+        let now = self.now;
+        let ep = self.endpoint(endpoint).ok_or(ZclError::NotFound)?;
+        let profile = ep.profile;
+        let stamp = ep
+            .cluster(time::ID, Role::Server)
+            .and_then(|t| time::now(t, now))
+            .unwrap_or(alarms::NO_TIME);
+        let c = self
+            .cluster_mut(endpoint, alarms::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let payload = alarms::log(
+            c,
+            alarms::Entry {
+                code,
+                cluster,
+                time: stamp,
+            },
+        );
+        let seq = self.next_seq();
+        let header = Header::cluster_specific(seq, alarms::CMD_ALARM, Direction::ToClient)
+            .disable_default_response(true);
+        let frame = Self::build(&header, &payload)?;
+        self.push_action(ZclAction::Send {
+            destination: Destination::Bound,
+            profile,
+            cluster: alarms::ID,
+            src_endpoint: endpoint,
+            frame,
+            options: TxOptions::ACKED,
+        });
+        Ok(())
+    }
+
+    /// Sets the clock of the Time server on `endpoint` (the
+    /// application's real-time clock, §3.12.2.2.1).
+    pub fn set_time(&mut self, endpoint: Endpoint, utc: u32) -> Result<(), ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, time::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        time::set(c, utc, now);
+        Ok(())
+    }
+
+    /// The Time server's current UTC time on `endpoint`, `None` when
+    /// unset or absent.
+    pub fn time(&self, endpoint: Endpoint) -> Option<u32> {
+        let c = self.cluster(endpoint, time::ID, Role::Server)?;
+        time::now(c, self.now)
     }
 
     /// Identify server commands are executed by the layer (§3.5.2.3):
@@ -1269,6 +1400,24 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 && let Some(seconds) = identify::tick(c, now)
             {
                 self.push_event(ZclEvent::Identify { endpoint, seconds });
+            }
+            let Some(ep) = self.endpoints.get_mut(i) else {
+                break;
+            };
+            if let Some(c) = ep.cluster_mut(time::ID, Role::Server) {
+                let before = match &c.state {
+                    crate::cluster::ClusterState::Time(k) => k.published,
+                    _ => time::INVALID,
+                };
+                // A write over the air shows as a Time value the server
+                // did not publish itself; it is applied at once.
+                let written = c.u64(time::TIME.id).is_some_and(|v| v != u64::from(before));
+                if (written || c.tick.is_some_and(|t| now.has_reached(t)))
+                    && let Some(utc) = time::tick(c, now)
+                    && written
+                {
+                    self.push_event(ZclEvent::TimeSet { endpoint, utc });
+                }
             }
             let Some(ep) = self.endpoints.get_mut(i) else {
                 break;
