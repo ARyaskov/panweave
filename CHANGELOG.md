@@ -250,6 +250,11 @@ Keep a Changelog; versions follow SemVer.
   requests) and a bounded client `Store` keeping one calendar per type
   with the newer-replaces / cancellation rules and day-profile lookup by
   date through special days, seasons and week profiles.
+* `panweave-smart-energy::clusters::events`: the Events cluster codecs
+  (PublishEvent, GetEventLog, PublishEventLog, ClearEventLog request and
+  response) and a bounded server `Log` with most-recent-first filtering
+  by log, event id and time window, offset paging split across commands
+  and per-log clear permissions.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

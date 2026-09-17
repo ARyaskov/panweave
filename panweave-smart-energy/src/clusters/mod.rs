@@ -2,6 +2,7 @@
 
 pub mod calendar;
 pub mod drlc;
+pub mod events;
 pub mod messaging;
 pub mod metering;
 pub mod prepayment;

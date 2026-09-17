@@ -137,8 +137,8 @@ summary = "Calendar, Device Management, Events, Energy Management, MDU Pairing, 
 level = "optional"
 status = "partially-implemented"
 module = "panweave-smart-energy::clusters::calendar"
-tests = ["codecs_round_trip", "store_resolves_the_day_profile_in_force", "special_day_tables_replace_and_cancel"]
-notes = "Calendar (D.9) codecs and client store implemented; Device Management, Events, Energy Management, MDU Pairing and Sub-GHz clusters not yet implemented."
+tests = ["codecs_round_trip", "store_resolves_the_day_profile_in_force", "special_day_tables_replace_and_cancel", "log_pages_most_recent_first_and_clears_where_allowed"]
+notes = "Calendar (D.9) codecs and client store and Events (D.11) codecs and server log implemented; Device Management, Energy Management, MDU Pairing and Sub-GHz clusters not yet implemented."
 [[requirement]]
 id = "PW-SE-CL-008"
 section = "Annex A.3, §6.1.6"
