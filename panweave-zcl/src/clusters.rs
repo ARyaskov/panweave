@@ -1,0 +1,214 @@
+//! Hand-written definitions of the general clusters needed by the core
+//! device types (ZCL8 chapter 3). Generated cluster definitions for the
+//! full library live in `panweave-device-library`.
+
+use panweave_types::{ClusterId, CommandId};
+
+use crate::attribute::{Access, AttributeDef};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
+use crate::frame::ZclStatus;
+use crate::types::{DataType, Value};
+
+/// Basic cluster (ZCL8 §3.2), revision 3.
+pub mod basic {
+    use super::*;
+
+    /// Cluster identifier.
+    pub const ID: ClusterId = ClusterId(0x0000);
+    /// `ZCLVersion`.
+    pub const ZCL_VERSION: AttributeDef = AttributeDef::new(0x0000, DataType::Uint(1), Access::RO);
+    /// `ApplicationVersion`.
+    pub const APPLICATION_VERSION: AttributeDef =
+        AttributeDef::new(0x0001, DataType::Uint(1), Access::RO);
+    /// `StackVersion`.
+    pub const STACK_VERSION: AttributeDef =
+        AttributeDef::new(0x0002, DataType::Uint(1), Access::RO);
+    /// `HWVersion`.
+    pub const HW_VERSION: AttributeDef = AttributeDef::new(0x0003, DataType::Uint(1), Access::RO);
+    /// `ManufacturerName`.
+    pub const MANUFACTURER_NAME: AttributeDef =
+        AttributeDef::new(0x0004, DataType::CharString, Access::RO);
+    /// `ModelIdentifier`.
+    pub const MODEL_IDENTIFIER: AttributeDef =
+        AttributeDef::new(0x0005, DataType::CharString, Access::RO);
+    /// `DateCode`.
+    pub const DATE_CODE: AttributeDef = AttributeDef::new(0x0006, DataType::CharString, Access::RO);
+    /// `PowerSource`.
+    pub const POWER_SOURCE: AttributeDef = AttributeDef::new(0x0007, DataType::Enum8, Access::RO);
+    /// `LocationDescription`.
+    pub const LOCATION_DESCRIPTION: AttributeDef =
+        AttributeDef::new(0x0010, DataType::CharString, Access::RW);
+    /// `PhysicalEnvironment`.
+    pub const PHYSICAL_ENVIRONMENT: AttributeDef =
+        AttributeDef::new(0x0011, DataType::Enum8, Access::RW);
+    /// `DeviceEnabled`.
+    pub const DEVICE_ENABLED: AttributeDef = AttributeDef::new(0x0012, DataType::Bool, Access::RW);
+    /// `SWBuildID`.
+    pub const SW_BUILD_ID: AttributeDef =
+        AttributeDef::new(0x4000, DataType::CharString, Access::RO);
+
+    /// Reset to Factory Defaults command (received).
+    pub const CMD_RESET_TO_FACTORY_DEFAULTS: CommandId = CommandId(0x00);
+
+    /// `ZCLVersion` value for ZCL8.
+    pub const ZCL_VERSION_VALUE: u8 = 8;
+
+    /// Power source enumeration values (Table 3-8).
+    pub mod power_source {
+        /// Unknown.
+        pub const UNKNOWN: u8 = 0x00;
+        /// Mains (single phase).
+        pub const MAINS_SINGLE_PHASE: u8 = 0x01;
+        /// Mains (3 phase).
+        pub const MAINS_THREE_PHASE: u8 = 0x02;
+        /// Battery.
+        pub const BATTERY: u8 = 0x03;
+        /// DC source.
+        pub const DC_SOURCE: u8 = 0x04;
+        /// Emergency mains constantly powered.
+        pub const EMERGENCY_MAINS_CONSTANT: u8 = 0x05;
+        /// Emergency mains and transfer switch.
+        pub const EMERGENCY_MAINS_TRANSFER: u8 = 0x06;
+    }
+
+    /// Cluster definition.
+    pub const DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 3,
+        received: &[CMD_RESET_TO_FACTORY_DEFAULTS],
+        generated: &[],
+    };
+
+    /// Builds a server instance with the mandatory attributes
+    /// (`ZCLVersion`, `PowerSource`) and the given manufacturer / model
+    /// strings.
+    pub fn server<const A: usize>(
+        power_source: u8,
+        manufacturer: &[u8],
+        model: &[u8],
+    ) -> Result<ClusterInstance<A>, ZclStatus> {
+        let mut c = ClusterInstance::new(DEF, Role::Server);
+        c.add_attribute(
+            ZCL_VERSION,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(ZCL_VERSION_VALUE),
+            },
+        )?;
+        c.add_attribute(POWER_SOURCE, &Value::Enum8(power_source))?;
+        c.add_attribute(
+            MANUFACTURER_NAME,
+            &Value::String {
+                ty: DataType::CharString,
+                bytes: Some(manufacturer),
+            },
+        )?;
+        c.add_attribute(
+            MODEL_IDENTIFIER,
+            &Value::String {
+                ty: DataType::CharString,
+                bytes: Some(model),
+            },
+        )?;
+        Ok(c)
+    }
+}
+
+/// Identify cluster (ZCL8 §3.5), revision 2.
+pub mod identify {
+    use super::*;
+
+    /// Cluster identifier.
+    pub const ID: ClusterId = ClusterId(0x0003);
+    /// `IdentifyTime` (seconds remaining).
+    pub const IDENTIFY_TIME: AttributeDef =
+        AttributeDef::new(0x0000, DataType::Uint(2), Access::RW);
+
+    /// Identify command (received).
+    pub const CMD_IDENTIFY: CommandId = CommandId(0x00);
+    /// Identify Query command (received).
+    pub const CMD_IDENTIFY_QUERY: CommandId = CommandId(0x01);
+    /// Trigger Effect command (received).
+    pub const CMD_TRIGGER_EFFECT: CommandId = CommandId(0x40);
+    /// Identify Query Response command (generated).
+    pub const CMD_IDENTIFY_QUERY_RESPONSE: CommandId = CommandId(0x00);
+
+    /// Cluster definition.
+    pub const DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 2,
+        received: &[CMD_IDENTIFY, CMD_IDENTIFY_QUERY, CMD_TRIGGER_EFFECT],
+        generated: &[CMD_IDENTIFY_QUERY_RESPONSE],
+    };
+
+    /// Builds a server instance.
+    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+        let mut c = ClusterInstance::new(DEF, Role::Server);
+        c.add_attribute(IDENTIFY_TIME, &Value::Uint { width: 2, value: 0 })?;
+        Ok(c)
+    }
+}
+
+/// On/Off cluster (ZCL8 §3.8), revision 2.
+pub mod on_off {
+    use super::*;
+
+    /// Cluster identifier.
+    pub const ID: ClusterId = ClusterId(0x0006);
+    /// `OnOff` (reportable, scene).
+    pub const ON_OFF: AttributeDef = AttributeDef::new(0x0000, DataType::Bool, Access::RO_REPORT);
+    /// `GlobalSceneControl`.
+    pub const GLOBAL_SCENE_CONTROL: AttributeDef =
+        AttributeDef::new(0x4000, DataType::Bool, Access::RO);
+    /// `OnTime`.
+    pub const ON_TIME: AttributeDef = AttributeDef::new(0x4001, DataType::Uint(2), Access::RW);
+    /// `OffWaitTime`.
+    pub const OFF_WAIT_TIME: AttributeDef =
+        AttributeDef::new(0x4002, DataType::Uint(2), Access::RW);
+    /// `StartUpOnOff`.
+    pub const START_UP_ON_OFF: AttributeDef =
+        AttributeDef::new(0x4003, DataType::Enum8, Access::RW);
+
+    /// Off command.
+    pub const CMD_OFF: CommandId = CommandId(0x00);
+    /// On command.
+    pub const CMD_ON: CommandId = CommandId(0x01);
+    /// Toggle command.
+    pub const CMD_TOGGLE: CommandId = CommandId(0x02);
+    /// Off With Effect command.
+    pub const CMD_OFF_WITH_EFFECT: CommandId = CommandId(0x40);
+    /// On With Recall Global Scene command.
+    pub const CMD_ON_WITH_RECALL_GLOBAL_SCENE: CommandId = CommandId(0x41);
+    /// On With Timed Off command.
+    pub const CMD_ON_WITH_TIMED_OFF: CommandId = CommandId(0x42);
+
+    /// Cluster definition (mandatory commands only).
+    pub const DEF: ClusterDef = ClusterDef {
+        id: ID,
+        revision: 2,
+        received: &[CMD_OFF, CMD_ON, CMD_TOGGLE],
+        generated: &[],
+    };
+
+    /// Builds a server instance with `OnOff` = false.
+    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+        let mut c = ClusterInstance::new(DEF, Role::Server);
+        c.add_attribute(ON_OFF, &Value::Bool(Some(false)))?;
+        Ok(c)
+    }
+
+    /// Applies an Off / On / Toggle command to the server's `OnOff`
+    /// attribute (§3.8.2.3.1–§3.8.2.3.3). Returns the new state or
+    /// `None` for an unsupported command.
+    pub fn apply<const A: usize>(c: &mut ClusterInstance<A>, command: CommandId) -> Option<bool> {
+        let current = matches!(c.attributes.value(ON_OFF.id), Some(Value::Bool(Some(true))));
+        let next = match command {
+            CMD_OFF => false,
+            CMD_ON => true,
+            CMD_TOGGLE => !current,
+            _ => return None,
+        };
+        let _ = c.attributes.set(ON_OFF.id, &Value::Bool(Some(next)));
+        Some(next)
+    }
+}

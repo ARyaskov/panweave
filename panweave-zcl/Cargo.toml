@@ -5,21 +5,28 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: zcl"
+description = "Panweave Zigbee stack: Zigbee Cluster Library foundation (frames, data types, global commands, attribute store, reporting)"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
-alloc = ["panweave-types/alloc"]
-serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+std = ["alloc", "panweave-types/std", "panweave-codec/std", "panweave-aps/std"]
+alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
+serde = ["dep:serde", "heapless/serde", "panweave-types/serde"]
+defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt", "panweave-codec/defmt", "panweave-aps/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+panweave-aps = { workspace = true }
+heapless = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+panweave-security = { workspace = true, features = ["crypto-software"] }
 
 [lints]
 workspace = true
