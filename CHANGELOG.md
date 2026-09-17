@@ -467,6 +467,9 @@ Keep a Changelog; versions follow SemVer.
   `Stack::reject_joiner` removes the device.
 * Trust Center connectivity (BDB 3.1 §7.3.3): a router whose Trust
   Center has no Keep-Alive server polls it with Node_Desc_req instead.
+* `Stack::set_fast_polling` keeps a sleepy end device at its fast poll
+  rate on request (BDB 3.1 §6.6); the facade polls fast while a
+  commissioning procedure runs.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

@@ -8,14 +8,14 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Document | Total | Implemented | Partial | Not implemented | N/A | HW validation | Clarification |
 |---|---|---|---|---|---|---|---|
-| BDB3.1 | 27 | 24 | 2 | 0 | 1 | 0 | 0 |
+| BDB3.1 | 27 | 25 | 1 | 0 | 1 | 0 | 0 |
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 5 | 1 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
 | ZCL8 | 36 | 26 | 9 | 1 | 0 | 0 | 0 |
 | R23.2 | 133 | 124 | 5 | 2 | 2 | 0 | 0 |
-| **All** | 237 | 187 | 41 | 5 | 3 | 1 | 0 |
+| **All** | 237 | 188 | 40 | 5 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -26,7 +26,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-BDB-POL-002 | §6.3 | mandatory | not-applicable | `panweave-bdb` | Commissioning mode bitmask (touchlink, steering, formation, finding & binding) processed in the specified order; commissioning status reporting | — | BDB 3.1 no longer defines the bdbCommissioningMode bitmask / bdbCommissioningStatus attribute of BDB 3.0; procedures are invoked individually and report an Outcome. |
 | PW-BDB-POL-003 | §6.4 | mandatory | implemented | `panweave-runtime` | Minimum requirements: mandatory ZDO services, identify cluster, groups where required, APS ack usage, node descriptor fields, stack compliance revision | `bdb_formation_steering_finding_binding_and_rejoin`, `router_keep_alive_detects_a_vanished_trust_center` | Profile 0x0104, Identify client for initiators, Groups server with the group table, simple descriptors per endpoint, stack compliance revision 23; the Trust Center's Keep-Alive server and Poll Control client are provided by panweave::endpoints::trust_center_utility and routers run the keep-alive client of ZCL8 §3.18.4 (Match_Desc discovery, APS-encrypted reads, TrustCenterLost after three failures). |
 | PW-BDB-POL-004 | §6.5 | mandatory | implemented | `panweave-zcl::attribute` | Default reporting configuration for reportable attributes | `reporting_configuration_and_reports`, `reset_to_factory_defaults_restores_attributes_and_reporting` | DefaultReporting installed at instance creation (OnOff: change-based plus 300 s; CurrentLevel: 1 s minimum, 300 s, change 1) and restored by Reset to Factory Defaults; reports go to bound destinations without further configuration and a Configure Reporting overrides it. |
-| PW-BDB-POL-005 | §6.6 | mandatory | partially-implemented | `panweave-runtime::stack` | MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions | `router_and_sleepy_end_device_with_router_failure` | Sleepy end devices poll at a configurable base rate (default 3 s) and burst fast polls after each transmission and while waiting for the network key; the exact BDB rate constants and Poll Control cluster integration are not implemented. |
+| PW-BDB-POL-005 | §6.6 | mandatory | implemented | `panweave-runtime::stack` | MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions | `application_selects_the_fast_poll_rate`, `poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode` | Two rates (StackConfig::poll_interval, default 3 s, and fast_poll_interval): fast polls burst after every transmission and while the network key is awaited, Poll Control fast poll mode selects its own short interval, and Stack::set_fast_polling keeps the fast rate while the application waits on the network; the facade Node polls fast while any BDB procedure (steering, finding and binding, rejoin) runs. The rates themselves are product choices (section 6.6 gives recommendations only). |
 | PW-BDB-POL-006 | §6.7 | mandatory | implemented | `panweave-runtime::persist` | Persistent data set retained across power cycles | `end_device_and_coordinator_survive_reboots` |  |
 | PW-BDB-POL-007 | §6.10 | mandatory | implemented | `panweave-aps::layer` | APS acknowledgement and APS security usage rules for ZCL and ZDO traffic | `trust_center_join_and_link_key_update`, `bdb_formation_steering_finding_binding_and_rejoin` | Acknowledged and APS-secured requests are answered with matching ack request and security (ADR-0005); ZCL responses inherit the acknowledgement request of the command. |
 | PW-BDB-POL-008 | §6.11 | mandatory | implemented | `panweave-types::key::InstallCode, panweave-security::key_hierarchy` | Install codes: 18-octet code with CRC-16 check, hashed with AES-MMO to derive TCLK; formats of 8/10/14/18 octets | `install_code_crc_known_answer`, `install_code_known_answer_from_bdb` |  |

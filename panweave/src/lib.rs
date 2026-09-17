@@ -427,6 +427,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Advances time: runs every layer's timers and the commissioning
     /// timeouts.
     pub fn poll(&mut self, now: Instant) {
+        // BDB 3.1 §6.6: a sleepy end device polls fast while a
+        // commissioning procedure runs.
+        self.stack.set_fast_polling(self.bdb.is_busy());
         self.stack.poll(now);
         if let Some(o) = self.bdb.poll(&mut self.stack, now) {
             #[cfg(feature = "direct")]

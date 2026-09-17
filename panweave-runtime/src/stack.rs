@@ -662,6 +662,9 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) last_scan: (ChannelMask, u8),
     /// Poll Control fast poll mode: the short poll interval while active.
     pub(crate) fast_poll_mode: Option<Duration>,
+    /// The application asked for the fast poll rate (BDB 3.1 §6.6: while
+    /// waiting for responses, joining, finding & binding).
+    pub(crate) fast_polling: bool,
     /// Trust Center keep-alive client.
     pub(crate) keep_alive: crate::keep_alive::KeepAlive,
     /// Green Power Basic Proxy, when enabled.
@@ -772,6 +775,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             next_scan: None,
             last_scan: (ChannelMask::EMPTY, 0),
             fast_poll_mode: None,
+            fast_polling: false,
             keep_alive: crate::keep_alive::KeepAlive::default(),
             #[cfg(feature = "green-power")]
             green_power: None,
@@ -1190,6 +1194,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 } else if let Some(short) = self.fast_poll_mode {
                     // Poll Control fast poll mode (ZCL8 §3.16.4.1.4).
                     self.next_poll = Some(now.saturating_add(short));
+                } else if self.fast_polling {
+                    // The application (or a commissioning procedure) is
+                    // waiting on the network (BDB 3.1 §6.6).
+                    self.next_poll = Some(now.saturating_add(self.config.fast_poll_interval));
                 } else {
                     self.next_poll = Some(now.saturating_add(self.config.poll_interval));
                 }
@@ -1197,6 +1205,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Some(_) => {}
             None => self.next_poll = Some(now.saturating_add(self.config.poll_interval)),
         }
+    }
+
+    /// Keeps a sleepy end device at its fast poll rate while `on` (BDB
+    /// 3.1 §6.6: while waiting for responses, during commissioning);
+    /// the slow rate returns when switched off. Poll Control fast poll
+    /// mode takes precedence while active.
+    pub fn set_fast_polling(&mut self, on: bool) {
+        if on && !self.fast_polling {
+            self.schedule_fast_polls();
+        }
+        self.fast_polling = on;
     }
 
     /// Schedules a burst of fast polls (after a transmission).

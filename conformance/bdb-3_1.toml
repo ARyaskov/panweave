@@ -53,10 +53,10 @@ id = "PW-BDB-POL-005"
 section = "§6.6"
 summary = "MAC data polling: end devices poll parent at least at the specified rate; fast polling after transmissions"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-runtime::stack"
-tests = ["router_and_sleepy_end_device_with_router_failure"]
-notes = "Sleepy end devices poll at a configurable base rate (default 3 s) and burst fast polls after each transmission and while waiting for the network key; the exact BDB rate constants and Poll Control cluster integration are not implemented."
+tests = ["application_selects_the_fast_poll_rate", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
+notes = "Two rates (StackConfig::poll_interval, default 3 s, and fast_poll_interval): fast polls burst after every transmission and while the network key is awaited, Poll Control fast poll mode selects its own short interval, and Stack::set_fast_polling keeps the fast rate while the application waits on the network; the facade Node polls fast while any BDB procedure (steering, finding and binding, rejoin) runs. The rates themselves are product choices (section 6.6 gives recommendations only)."
 [[requirement]]
 id = "PW-BDB-POL-006"
 section = "§6.7"

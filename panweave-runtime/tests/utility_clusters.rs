@@ -292,3 +292,72 @@ fn router_falls_back_to_node_descriptor_polling() {
             .any(|e| matches!(e, StackEvent::TrustCenterLost))
     }));
 }
+
+/// A node without utility clusters (no Poll Control, no Keep-Alive).
+fn bare(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
+    let mut cfg = StackConfig::new(role, ieee);
+    cfg.sleepy = role == LogicalDeviceType::EndDevice;
+    cfg.trust_center_policy.allow_joins = true;
+    cfg.poll_interval = Duration::from_millis(3000);
+    cfg.fast_polls = 2;
+    let mut n = SimStack::new(
+        cfg,
+        MacServiceConfig::default(),
+        TestRng::seed(seed),
+        MemoryStorage::new(),
+    );
+    let desc = SimpleDescriptor::new(
+        Endpoint(1),
+        ProfileId::HOME_AUTOMATION,
+        DeviceId(0x0005),
+        1,
+        &[ClusterId(0)],
+        &[],
+    )
+    .unwrap();
+    n.add_endpoint(
+        desc,
+        EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION),
+    )
+    .unwrap();
+    n
+}
+
+/// BDB 3.1 §6.6: the application switches a sleepy end device between
+/// its slow and fast poll rates.
+#[test]
+fn application_selects_the_fast_poll_rate() {
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "coord",
+        bare(LogicalDeviceType::Coordinator, COORD_IEEE, 61),
+        Box::new(OnOffApp::default()),
+    );
+    let s = sim.add_stack(
+        "sed",
+        bare(LogicalDeviceType::EndDevice, SED_IEEE, 62),
+        Box::new(OnOffApp::default()),
+    );
+    form(&mut sim, c);
+    sim.stack(s).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x.events(s)).is_some()));
+    sim.run_for(Duration::from_secs(20));
+    sim.trace_enabled = true;
+    // Slow rate: 3 s polls.
+    let t0 = sim.clock.now();
+    sim.run_for(Duration::from_secs(9));
+    let slow = polls_between(&sim, s, t0, sim.clock.now());
+    assert!((2..=4).contains(&slow), "slow: {slow}");
+    // Fast rate on request (fast_poll_interval default 0.5 s).
+    sim.stack(s).set_fast_polling(true);
+    let t1 = sim.clock.now();
+    sim.run_for(Duration::from_secs(9));
+    let fast = polls_between(&sim, s, t1, sim.clock.now());
+    assert!(fast >= 12, "fast: {fast}");
+    sim.stack(s).set_fast_polling(false);
+    sim.run_for(Duration::from_secs(3));
+    let t2 = sim.clock.now();
+    sim.run_for(Duration::from_secs(9));
+    let slow_again = polls_between(&sim, s, t2, sim.clock.now());
+    assert!((2..=4).contains(&slow_again), "slow again: {slow_again}");
+}
