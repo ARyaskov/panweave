@@ -73,6 +73,8 @@ pub struct DataIndication<'a> {
     pub relayed: Option<RelayInfo>,
     /// APS counter of the frame.
     pub counter: u8,
+    /// The NWK destination was a broadcast address.
+    pub nwk_broadcast: bool,
 }
 
 /// Per-frame reception context.
@@ -338,6 +340,7 @@ impl<
             lqi: ctx.lqi,
             relayed: ctx.relayed,
             counter: header.counter,
+            nwk_broadcast: ctx.dst.is_broadcast(),
         })
     }
 
@@ -463,6 +466,7 @@ impl<
             lqi: r.lqi,
             relayed: None,
             counter: r.header.counter,
+            nwk_broadcast: false,
         })
     }
 

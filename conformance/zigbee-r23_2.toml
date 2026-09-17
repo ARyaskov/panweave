@@ -611,27 +611,27 @@ id = "PW-R23-AF-001"
 section = "§2.3.2.3"
 summary = "Node descriptor: logical type, complex/user descriptor availability (deprecated), APS flags, frequency band, MAC capability, manufacturer code, max buffer size, max incoming/outgoing transfer size, server mask (incl. stack compliance revision), descriptor capability"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::descriptors::NodeDescriptor"
-tests = []
+status = "implemented"
+module = "panweave-zdo::descriptor"
+tests = ["node_descriptor_round_trip"]
 
 [[requirement]]
 id = "PW-R23-AF-002"
 section = "§2.3.2.4"
 summary = "Power descriptor: current mode, available sources, current source, current level"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::descriptors::PowerDescriptor"
-tests = []
+status = "implemented"
+module = "panweave-zdo::descriptor"
+tests = ["power_descriptor_round_trip"]
 
 [[requirement]]
 id = "PW-R23-AF-003"
 section = "§2.3.2.5"
 summary = "Simple descriptor: endpoint, profile id, device id, device version, input and output cluster lists"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::descriptors::SimpleDescriptor"
-tests = []
+status = "implemented"
+module = "panweave-zdo::descriptor"
+tests = ["simple_descriptor_round_trip"]
 
 [[requirement]]
 id = "PW-R23-AF-004"
@@ -649,127 +649,127 @@ id = "PW-R23-ZDP-001"
 section = "§2.4.2, §2.4.5"
 summary = "ZDP frame: transaction sequence number followed by payload; cluster id = request, response = request | 0x8000; status enumeration"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::frame"
-tests = []
+status = "implemented"
+module = "panweave-zdo::zdp"
+tests = ["cluster_helpers_and_status", "management_requests"]
 
 [[requirement]]
 id = "PW-R23-ZDP-002"
 section = "§2.4.3.1.1, §2.4.3.1.2, §2.4.4.1.1, §2.4.4.1.2"
 summary = "NWK_addr_req / IEEE_addr_req with single/extended request types and their responses including associated device list"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::discovery::address"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["address_requests_and_responses", "address_discovery_with_children"]
 
 [[requirement]]
 id = "PW-R23-ZDP-003"
 section = "§2.4.3.1.3–§2.4.3.1.6, §2.4.4.1.3–§2.4.4.1.6"
 summary = "Node_Desc, Power_Desc, Simple_Desc, Active_EP requests and responses"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::discovery::descriptors"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["descriptor_requests_and_responses", "descriptor_discovery"]
 
 [[requirement]]
 id = "PW-R23-ZDP-004"
 section = "§2.4.3.1.7, §2.4.4.1.7"
 summary = "Match_Desc_req/rsp with profile and cluster list matching; broadcast handling"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::discovery::match"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["descriptor_discovery"]
 
 [[requirement]]
 id = "PW-R23-ZDP-005"
 section = "§2.4.3.1.11"
 summary = "Device_annce broadcast on join/rejoin with short address, IEEE address, capability; receivers update address map and detect conflicts"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::announce"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zdo::layer"
+tests = ["announce_and_binding_frames", "device_announce_and_timeouts"]
+notes = "Codec, broadcast on join and the ZdoContext hook are implemented; the address-map update and conflict detection of §2.4.3.1.11.2 are executed by the runtime's ZdoContext over the NWK tables."
 [[requirement]]
 id = "PW-R23-ZDP-006"
 section = "§2.4.3.1.12, §2.4.4.1.9"
 summary = "Parent_annce / Parent_annce_rsp for child address reconciliation after router restart"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::parent_announce"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zdo::layer"
+tests = ["announce_and_binding_frames"]
+notes = "Parent_annce transmission and Parent_annce_rsp generation are implemented; the apsParentAnnounceTimer with jitter after reboot and the removal of children claimed elsewhere are runtime responsibilities (ZdoContext::child_claimed_elsewhere)."
 [[requirement]]
 id = "PW-R23-ZDP-007"
 section = "§2.4.3.1.14, §2.4.4.1.10"
 summary = "System_Server_Discovery_req/rsp with server mask"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zdo::discovery::server"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["descriptor_requests_and_responses"]
 
 [[requirement]]
 id = "PW-R23-ZDP-008"
 section = "§2.4.3.2.2, §2.4.3.2.3, §2.4.3.2.12, §2.4.4.2"
 summary = "Bind_req, Unbind_req, Clear_All_Bindings_req and responses with unicast/group destination address modes"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::binding"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["announce_and_binding_frames", "binding_and_restricted_mode"]
 
 [[requirement]]
 id = "PW-R23-ZDP-009"
 section = "§2.4.3.3.2, §2.4.4.3.2"
 summary = "Mgmt_Lqi_req/rsp neighbor table listing with start index and entry format"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::management::lqi"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["management_frames", "management_requests"]
 
 [[requirement]]
 id = "PW-R23-ZDP-010"
 section = "§2.4.3.3.3, §2.4.4.3.3"
 summary = "Mgmt_Rtg_req/rsp routing table listing"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zdo::management::routing"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["management_frames"]
 
 [[requirement]]
 id = "PW-R23-ZDP-011"
 section = "§2.4.3.3.4, §2.4.4.3.4"
 summary = "Mgmt_Bind_req/rsp binding table listing"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zdo::management::binding"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["announce_and_binding_frames", "management_requests"]
 
 [[requirement]]
 id = "PW-R23-ZDP-012"
 section = "§2.4.3.3.5, §2.4.4.3.5"
 summary = "Mgmt_Leave_req/rsp with remove-children and rejoin flags; only accepted per policy (from TC or for self)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::management::leave"
-tests = []
-
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["management_frames", "management_requests"]
+notes = "Acceptance follows apsZdoRestrictedMode (§2.4.3); the NWK leave policy (nwkLeaveRequestAllowed) is applied by the NWK layer."
 [[requirement]]
 id = "PW-R23-ZDP-013"
 section = "§2.4.3.3.7, §2.4.4.3.7"
 summary = "Mgmt_Permit_Joining_req/rsp with duration and TC significance; broadcast to routers"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::management::permit_join"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zdo::layer"
+tests = ["management_frames", "management_requests"]
+notes = "Request/response, 0xff -> 0xfe and the Trust Center beacon appendix TLV hand-off are implemented; the Trust Center policy check of §4.7.3.4 is applied by the runtime in ZdoContext::permit_joining."
 [[requirement]]
 id = "PW-R23-ZDP-014"
 section = "§2.4.3.3.9, §2.4.4.3.9"
 summary = "Mgmt_NWK_Update_req/notify: energy scan request, channel change, network manager change, update id; energy scan results and counters"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::management::nwk_update"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zdo::layer"
+tests = ["management_frames", "management_requests"]
+notes = "Frame codecs and the server-side event are implemented; energy scan execution, channel change (nwkUpdateId) and attribute updates are performed by the runtime, which replies with Zdo::nwk_update_notify."
 [[requirement]]
 id = "PW-R23-ZDP-015"
 section = "§2.4.3.3.10, §2.4.3.3.11, §2.4.3.3.12"
@@ -820,18 +820,18 @@ id = "PW-R23-ZDP-020"
 section = "§2.4.3.1.8–§2.4.3.1.10, §2.4.3.1.13–§2.4.3.1.23, §2.4.3.2.1, §2.4.3.2.4–§2.4.3.2.11, §2.4.3.3.1, §2.4.3.3.6, §2.4.3.3.8"
 summary = "Deprecated ZDP commands (complex/user descriptors, discovery cache, bind backups, end device bind, direct join, cache) are not generated; requests receive NOT_SUPPORTED where a response is defined"
 level = "deprecated"
-status = "not-implemented"
-module = "panweave-zdo::server"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["management_requests"]
 
 [[requirement]]
 id = "PW-R23-ZDP-021"
 section = "§2.4.4"
 summary = "ZDP server: respond to unicast requests, respond to broadcast only when matching, apply NOT_SUPPORTED / INV_REQUESTTYPE / DEVICE_NOT_FOUND / INVALID_EP semantics"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::server"
-tests = []
+status = "implemented"
+module = "panweave-zdo::layer"
+tests = ["descriptor_discovery", "address_discovery_with_children", "management_requests", "device_announce_and_timeouts"]
 
 # ---------------------------------------------------------------- ZDO
 

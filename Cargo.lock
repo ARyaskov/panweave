@@ -482,7 +482,13 @@ name = "panweave-zdo"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-aps",
+ "panweave-codec",
+ "panweave-nwk",
+ "panweave-security",
  "panweave-types",
+ "proptest",
  "serde",
 ]
 
