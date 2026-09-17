@@ -17,19 +17,19 @@ id = "PW-SE-SEC-001"
 section = "§5.4.1–§5.4.3"
 summary = "Joining with preinstalled TCLKs (install codes), rejoin policy, leaving"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::security"
-tests = []
-
+tests = ["registry_applies_key_usage_policies", "permit_join_broadcasts_are_bounded_and_repeated", "scan_backoff_grows_to_an_hour_and_resets_on_user_action"]
+notes = "Install-code provisioning (CRC check, MMO-derived preconfigured key with the §5.4.8.1.2 vectors), the Trust Center registry of §5.4.1.1 with join authorization for Trust Center rejoins (§5.4.2.2), the permit-join broadcast rule of §5.4.1.2 (never 255, at most 254 s, repeated every 240 s or on a device announce), the §5.4.1 step 5 scan back-off and the §5.4.3 rule that a leave keeps the link key are implemented as policy objects. Joining itself (Annex F key-transport under the preconfigured key, Secure / Trust Center rejoin) is the R23 runtime's; wiring the registry into the runtime Trust Center and the automatic CBKE start after joining are not done (TODO(PW-SE-TC-RUNTIME))."
 [[requirement]]
 id = "PW-SE-SEC-002"
 section = "§5.4.4, §5.4.5"
 summary = "Network key and link key update policies; key retirement"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::security"
-tests = []
-
+tests = ["registry_applies_key_usage_policies"]
+notes = "Network key update with the nwkNetworkBroadcastDeliveryTime wait before the switch is the R23 runtime's (§5.4.4). The link key retirement rule of §5.4.5 is in Registry: a stale key drops data frames without an APS ACK and triggers renegotiation, commands still pass, and the stale mark clears on a new CBKE key. Periodic link-key refresh scheduling is left to the application (TODO(PW-SE-TC-RUNTIME))."
 [[requirement]]
 id = "PW-SE-SEC-003"
 section = "§5.4.6"
@@ -46,18 +46,18 @@ summary = "Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suit
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-smart-energy::key_establishment"
-tests = ["annex_c5_suite1_transform", "annex_c6_suite2_transform", "annex_c5_exchange_between_machines", "cbke_over_the_key_establishment_cluster_installs_a_working_link_key"]
-notes = "Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite attribute and suite negotiation, server and client cluster instances), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented; the simulator test runs the exchange over the cluster between a router and the Trust Center and proves the installed link key with an APS-secured read. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012); the CBKE driver is application code (the test's apps), not part of the runtime, and the §5.4.7 policies (leave on UNKNOWN_ISSUER, removal of devices that never establish a key) are not enforced (TODO(PW-SE-CBKE-POLICY))."
+tests = ["annex_c5_suite1_transform", "annex_c6_suite2_transform", "annex_c5_exchange_between_machines", "cbke_over_the_key_establishment_cluster_installs_a_working_link_key", "registry_applies_key_usage_policies"]
+notes = "Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite attribute and suite negotiation, server and client cluster instances), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented; the simulator test runs the exchange over the cluster between a router and the Trust Center and proves the installed link key with an APS-secured read. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012). The §5.4.7 policies are in panweave-smart-energy::security: leave on UNKNOWN_ISSUER, the 20-minute CBKE deadline listing, the Trust Center's refusal of data under the preconfigured key, partner-key brokering only between CBKE-authenticated devices and NO_RESOURCES for a peer Initiate without a partner key. The CBKE driver is application code, not part of the runtime (TODO(PW-SE-CBKE-POLICY))."
 
 [[requirement]]
 id = "PW-SE-SEC-005"
 section = "§5.4.8, §5.13"
 summary = "Trust Center swap-out, keep-alive, coexistence rules"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::security"
-tests = []
-
+tests = ["swap_out_procedure_walks_the_candidates", "link_key_hash_matches_table_5_11", "router_keep_alive_detects_a_vanished_trust_center"]
+notes = "Keep-alive with three-failure detection is in the runtime; the Table 5-11 link key hash, the Table 5-10 backup records from the registry (and their restore as unauthorized preconfigured keys) and the device-side swap-out procedure of §5.4.2.2.3.5 (state backup, scan for the extended PAN preferring changed instances, rejoin per candidate, adopt the hashed key ignoring the frame counter and record the new TC, CBKE with one retry, leave and fall back to the previous network) are implemented as a state machine emitting actions. Driving it from the runtime (scan, rejoin, key install, CBKE) is not done (TODO(PW-SE-SWAPOUT-RUNTIME))."
 [[requirement]]
 id = "PW-SE-COMM-001"
 section = "§5.5"

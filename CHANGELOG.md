@@ -298,6 +298,15 @@ Keep a Changelog; versions follow SemVer.
   policy — every cluster secured except Key Establishment, the
   reception filter dropping non-conforming frames, and the B.6 channel
   survey list picking the strongest receiver (ADR-0013).
+* `panweave-smart-energy::security`: the §5.4 profile security policies
+  as pure objects — the permit-join broadcast schedule, the autonomous
+  scan back-off, a Trust Center `Registry` (install-code provisioning,
+  registration status, preconfigured / CBKE / stale key states with the
+  §5.4.6–§5.4.7 verdicts for incoming and outgoing frames, the
+  20-minute CBKE deadline, leave keeps the key, Table 5-10 backup and
+  restore), the Table 5-11 link key hash, the joiner's reaction to a
+  Key Establishment result, partner-key brokering rules and the
+  device-side Trust Center swap-out state machine.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

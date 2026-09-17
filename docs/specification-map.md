@@ -211,7 +211,7 @@ annexes (R23.2 Annex D.12–D.14).
 | Area | Content | Owning module |
 |---|---|---|
 | 5.2–5.3 | Stack profile requirements, startup attribute set | `panweave-smart-energy::profile` |
-| 5.4 | Security: preinstalled TCLKs, rejoin, leave, key updates, key usage per cluster (`link_key_required`, ADR-0012), CBKE policies, TC swap-out | `panweave-smart-energy` (`security`: planned) |
+| 5.4 | Security: preinstalled TCLKs, rejoin, leave, key updates, key usage per cluster (`link_key_required`, ADR-0012), CBKE policies, TC swap-out | `panweave-smart-energy::security` (registry, permit-join schedule, scan back-off, key states and verdicts, link key hash, swap-out machine), runtime join / rejoin / key update |
 | 5.5–5.14 | Commissioning, federated TC, multiple ESI, best practices, coexistence, multi-MAC | `panweave-smart-energy::commissioning` |
 | 6 | Device specifications (ESI, meter, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote comms) | `panweave-smart-energy::devices` (descriptions and checker; Table 6-2 features: planned) |
 | Annex A | Keep-Alive cluster, status enumerations | `panweave-zcl::clusters::keep_alive` |

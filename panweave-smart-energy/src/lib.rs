@@ -28,6 +28,7 @@ pub mod devices;
 pub mod interpan;
 pub mod key_establishment;
 pub mod profile;
+pub mod security;
 
 use panweave_types::{ClusterId, ProfileId};
 
