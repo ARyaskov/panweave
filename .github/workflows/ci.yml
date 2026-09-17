@@ -27,6 +27,7 @@ jobs:
       - run: cargo test --workspace
       - run: cargo test --doc --workspace
       - run: cargo run --quiet -p xtask -- conformance --check
+      - run: cargo run --quiet -p xtask -- codegen --check
       - name: no_std builds
         run: |
           for crate in panweave-types panweave-codec panweave-mac panweave-security panweave-nwk panweave-aps panweave-zdo panweave-zcl panweave-storage panweave-runtime panweave-bdb panweave-device-library panweave-green-power panweave-direct panweave-smart-energy panweave; do
