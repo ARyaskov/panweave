@@ -298,10 +298,10 @@ id = "PW-ZCL-MEAS-002"
 section = "§4.9"
 summary = "Electrical Measurement cluster"
 level = "optional"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zcl::clusters::electrical_measurement"
-tests = ["dc_server_tracks_extremes_and_alarms", "ac_server_readings_and_alarms", "profile_codecs_round_trip"]
-notes = "MeasurementType, the DC set (readings, minima / maxima, formatting, overload mask and thresholds) and the single-phase / phase A AC set (frequency, RMS voltage with extremes, RMS current, active / reactive / apparent power, power factor, formatting, ACAlarmsMask with the voltage / current / active power overload thresholds); readings fed by the application with the alarm codes (the mask bit numbers) to raise through the Alarms cluster; Get Profile Info / Get Measurement Profile request and response codecs, the profile itself left to the application. Not instantiated: the AC current / active power extremes, the RMS voltage period / counter attributes and thresholds beyond the overloads, harmonics, phases B and C."
+tests = ["dc_server_tracks_extremes_and_alarms", "ac_server_readings_and_alarms", "profile_codecs_round_trip", "polyphase_totals_harmonics_and_voltage_quality"]
+notes = "MeasurementType, the DC set (readings, minima / maxima, formatting, overload mask and thresholds) and the single-phase / phase A AC set (frequency, RMS voltage with extremes, RMS current and active power with extremes once enabled, reactive / apparent power, power factor, formatting, ACAlarmsMask with the voltage / current / active / reactive power overload thresholds and the average / extreme over and under voltage, sag and swell thresholds with the over / under voltage counters and period attributes), the AC non-phase-specific set (frequency extremes, neutral current, polyphase totals, harmonic and phase harmonic currents with their multipliers) and the phase B / C sets over the phase A layout (Tables 4-39 / 4-40); readings fed by the application with the alarm codes (the mask bit numbers) to raise through the Alarms cluster; Get Profile Info / Get Measurement Profile request and response codecs, the profile itself left to the application. The runtime's 36-attribute instances hold one phase with the overloads; polyphase servers need a larger attribute capacity. Averaging over AverageRMSVoltageMeasurementPeriod and the period attributes are the application's to maintain."
 [[requirement]]
 id = "PW-ZCL-MEAS-003"
 section = "§4.10–§4.13"

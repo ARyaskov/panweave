@@ -197,6 +197,166 @@ pub mod ac {
     pub const ALARM_CURRENT_OVERLOAD: u8 = 1;
     /// Alarm mask bit / alarm code: active power overload.
     pub const ALARM_ACTIVE_POWER_OVERLOAD: u8 = 2;
+    /// Alarm mask bit / alarm code: reactive power overload.
+    pub const ALARM_REACTIVE_POWER_OVERLOAD: u8 = 3;
+    /// Alarm mask bit / alarm code: average RMS over voltage.
+    pub const ALARM_AVERAGE_RMS_OVER_VOLTAGE: u8 = 4;
+    /// Alarm mask bit / alarm code: average RMS under voltage.
+    pub const ALARM_AVERAGE_RMS_UNDER_VOLTAGE: u8 = 5;
+    /// Alarm mask bit / alarm code: RMS extreme over voltage.
+    pub const ALARM_RMS_EXTREME_OVER_VOLTAGE: u8 = 6;
+    /// Alarm mask bit / alarm code: RMS extreme under voltage.
+    pub const ALARM_RMS_EXTREME_UNDER_VOLTAGE: u8 = 7;
+    /// Alarm mask bit / alarm code: RMS voltage sag.
+    pub const ALARM_RMS_VOLTAGE_SAG: u8 = 8;
+    /// Alarm mask bit / alarm code: RMS voltage swell.
+    pub const ALARM_RMS_VOLTAGE_SWELL: u8 = 9;
+
+    /// `ACReactivePowerOverload`.
+    pub const REACTIVE_POWER_OVERLOAD: AttributeDef =
+        AttributeDef::new(0x0804, DataType::Int(2), Access::RO);
+    /// `AverageRMSOverVoltage` threshold.
+    pub const AVERAGE_RMS_OVER_VOLTAGE: AttributeDef =
+        AttributeDef::new(0x0805, DataType::Int(2), Access::RO);
+    /// `AverageRMSUnderVoltage` threshold.
+    pub const AVERAGE_RMS_UNDER_VOLTAGE: AttributeDef =
+        AttributeDef::new(0x0806, DataType::Int(2), Access::RO);
+    /// `RMSExtremeOverVoltage` threshold (writable).
+    pub const RMS_EXTREME_OVER_VOLTAGE: AttributeDef =
+        AttributeDef::new(0x0807, DataType::Int(2), Access::RW);
+    /// `RMSExtremeUnderVoltage` threshold (writable).
+    pub const RMS_EXTREME_UNDER_VOLTAGE: AttributeDef =
+        AttributeDef::new(0x0808, DataType::Int(2), Access::RW);
+    /// `RMSVoltageSag` threshold (writable).
+    pub const RMS_VOLTAGE_SAG: AttributeDef =
+        AttributeDef::new(0x0809, DataType::Int(2), Access::RW);
+    /// `RMSVoltageSwell` threshold (writable).
+    pub const RMS_VOLTAGE_SWELL: AttributeDef =
+        AttributeDef::new(0x080a, DataType::Int(2), Access::RW);
+    /// `AverageRMSVoltageMeasurementPeriod` (uint16 s, writable).
+    pub const AVERAGE_RMS_VOLTAGE_MEASUREMENT_PERIOD: AttributeDef =
+        AttributeDef::new(0x0511, DataType::Uint(2), Access::RW);
+    /// `AverageRMSOverVoltageCounter` (writable to reset).
+    pub const AVERAGE_RMS_OVER_VOLTAGE_COUNTER: AttributeDef =
+        AttributeDef::new(0x0512, DataType::Uint(2), Access::RW);
+    /// `AverageRMSUnderVoltageCounter`.
+    pub const AVERAGE_RMS_UNDER_VOLTAGE_COUNTER: AttributeDef =
+        AttributeDef::new(0x0513, DataType::Uint(2), Access::RW);
+    /// `RMSExtremeOverVoltagePeriod`.
+    pub const RMS_EXTREME_OVER_VOLTAGE_PERIOD: AttributeDef =
+        AttributeDef::new(0x0514, DataType::Uint(2), Access::RW);
+    /// `RMSExtremeUnderVoltagePeriod`.
+    pub const RMS_EXTREME_UNDER_VOLTAGE_PERIOD: AttributeDef =
+        AttributeDef::new(0x0515, DataType::Uint(2), Access::RW);
+    /// `RMSVoltageSagPeriod`.
+    pub const RMS_VOLTAGE_SAG_PERIOD: AttributeDef =
+        AttributeDef::new(0x0516, DataType::Uint(2), Access::RW);
+    /// `RMSVoltageSwellPeriod`.
+    pub const RMS_VOLTAGE_SWELL_PERIOD: AttributeDef =
+        AttributeDef::new(0x0517, DataType::Uint(2), Access::RW);
+}
+
+/// The AC non-phase-specific set (§4.9.2.2.4, Table 4-32): frequency
+/// extremes, neutral current, the three-phase totals and the current
+/// harmonics, with their formatting (Table 4-33).
+pub mod ac_total {
+    use super::*;
+
+    /// `ACFrequency`, `ACFrequencyMultiplier` and `ACFrequencyDivisor`
+    /// belong to this set and are instantiated by the single-phase
+    /// server already.
+    pub use super::ac::{FREQUENCY, FREQUENCY_DIVISOR, FREQUENCY_MULTIPLIER};
+    /// `ACFrequencyMin`.
+    pub const FREQUENCY_MIN: AttributeDef =
+        AttributeDef::new(0x0301, DataType::Uint(2), Access::RO);
+    /// `ACFrequencyMax`.
+    pub const FREQUENCY_MAX: AttributeDef =
+        AttributeDef::new(0x0302, DataType::Uint(2), Access::RO);
+    /// `NeutralCurrent` (uint16, reportable).
+    pub const NEUTRAL_CURRENT: AttributeDef =
+        AttributeDef::new(0x0303, DataType::Uint(2), Access::RO_REPORT);
+    /// `TotalActivePower` (int32, reportable).
+    pub const TOTAL_ACTIVE_POWER: AttributeDef =
+        AttributeDef::new(0x0304, DataType::Int(4), Access::RO_REPORT);
+    /// `TotalReactivePower` (int32, reportable).
+    pub const TOTAL_REACTIVE_POWER: AttributeDef =
+        AttributeDef::new(0x0305, DataType::Int(4), Access::RO_REPORT);
+    /// `TotalApparentPower` (uint32, reportable).
+    pub const TOTAL_APPARENT_POWER: AttributeDef =
+        AttributeDef::new(0x0306, DataType::Uint(4), Access::RO_REPORT);
+    /// `Measured1stHarmonicCurrent` … `Measured11thHarmonicCurrent`
+    /// (int16, reportable), harmonics 1, 3, 5, 7, 9, 11.
+    pub const HARMONIC_CURRENT: [AttributeDef; 6] = [
+        AttributeDef::new(0x0307, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x0308, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x0309, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x030a, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x030b, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x030c, DataType::Int(2), Access::RO_REPORT),
+    ];
+    /// `MeasuredPhase1stHarmonicCurrent` … (int16, reportable).
+    pub const PHASE_HARMONIC_CURRENT: [AttributeDef; 6] = [
+        AttributeDef::new(0x030d, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x030e, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x030f, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x0310, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x0311, DataType::Int(2), Access::RO_REPORT),
+        AttributeDef::new(0x0312, DataType::Int(2), Access::RO_REPORT),
+    ];
+    /// `PowerMultiplier` (uint32).
+    pub const POWER_MULTIPLIER: AttributeDef =
+        AttributeDef::new(0x0402, DataType::Uint(4), Access::RO_REPORT);
+    /// `PowerDivisor` (uint32).
+    pub const POWER_DIVISOR: AttributeDef =
+        AttributeDef::new(0x0403, DataType::Uint(4), Access::RO_REPORT);
+    /// `HarmonicCurrentMultiplier` (int8 power of ten).
+    pub const HARMONIC_CURRENT_MULTIPLIER: AttributeDef =
+        AttributeDef::new(0x0404, DataType::Int(1), Access::RO_REPORT);
+    /// `PhaseHarmonicCurrentMultiplier` (int8 power of ten).
+    pub const PHASE_HARMONIC_CURRENT_MULTIPLIER: AttributeDef =
+        AttributeDef::new(0x0405, DataType::Int(1), Access::RO_REPORT);
+    /// Unknown int32 total.
+    pub const UNKNOWN_I32: i32 = i32::MIN;
+    /// Unknown uint32 total.
+    pub const UNKNOWN_U32: u32 = u32::MAX;
+}
+
+/// A phase of a polyphase AC measurement (§4.9.2.2.10–11): the phase
+/// B and C sets repeat the phase A layout at 0x0900 and 0x0a00.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Phase {
+    /// Phase A (the single-phase set, 0x05xx).
+    A,
+    /// Phase B (0x09xx).
+    B,
+    /// Phase C (0x0axx).
+    C,
+}
+
+impl Phase {
+    const fn offset(self) -> u16 {
+        match self {
+            Phase::A => 0,
+            Phase::B => 0x0400,
+            Phase::C => 0x0500,
+        }
+    }
+
+    /// The `MeasurementType` bit of the phase.
+    pub const fn measurement_bit(self) -> u32 {
+        match self {
+            Phase::A => measurement_type::PHASE_A,
+            Phase::B => measurement_type::PHASE_B,
+            Phase::C => measurement_type::PHASE_C,
+        }
+    }
+}
+
+/// The attribute of `phase` corresponding to the phase A attribute
+/// `base` (Tables 4-39 / 4-40: the same layout at 0x0900 and 0x0a00).
+pub const fn phase_attr(phase: Phase, base: AttributeDef) -> AttributeDef {
+    AttributeDef::new(base.id.0 + phase.offset(), base.ty, base.access)
 }
 
 /// Get Profile Info (client → server).
@@ -420,6 +580,287 @@ pub fn client<const A: usize>() -> ClusterInstance<A> {
     ClusterInstance::new(DEF, Role::Client)
 }
 
+/// Adds the RMS current and active power extremes of the single-phase
+/// set (Table 4-34); `set_ac` tracks them from then on.
+pub fn enable_ac_extremes<const A: usize>(c: &mut ClusterInstance<A>) -> Result<(), ZclStatus> {
+    c.add_attribute(ac::RMS_CURRENT_MIN, &u16v(ac::UNKNOWN_U16))?;
+    c.add_attribute(ac::RMS_CURRENT_MAX, &u16v(ac::UNKNOWN_U16))?;
+    c.add_attribute(ac::ACTIVE_POWER_MIN, &i16v(ac::UNKNOWN_I16))?;
+    c.add_attribute(ac::ACTIVE_POWER_MAX, &i16v(ac::UNKNOWN_I16))
+}
+
+/// Adds the voltage quality attributes of Table 4-34 (measurement
+/// period, over / under voltage counters and periods, sag / swell
+/// periods) and the Table 4-38 thresholds beyond the overloads; the
+/// alarms are evaluated by `set_ac` against the readings.
+pub fn enable_voltage_quality<const A: usize>(c: &mut ClusterInstance<A>) -> Result<(), ZclStatus> {
+    for a in [
+        ac::AVERAGE_RMS_VOLTAGE_MEASUREMENT_PERIOD,
+        ac::AVERAGE_RMS_OVER_VOLTAGE_COUNTER,
+        ac::AVERAGE_RMS_UNDER_VOLTAGE_COUNTER,
+        ac::RMS_EXTREME_OVER_VOLTAGE_PERIOD,
+        ac::RMS_EXTREME_UNDER_VOLTAGE_PERIOD,
+        ac::RMS_VOLTAGE_SAG_PERIOD,
+        ac::RMS_VOLTAGE_SWELL_PERIOD,
+    ] {
+        c.add_attribute(a, &u16v(0))?;
+    }
+    for a in [
+        ac::REACTIVE_POWER_OVERLOAD,
+        ac::AVERAGE_RMS_OVER_VOLTAGE,
+        ac::AVERAGE_RMS_UNDER_VOLTAGE,
+        ac::RMS_EXTREME_OVER_VOLTAGE,
+        ac::RMS_EXTREME_UNDER_VOLTAGE,
+        ac::RMS_VOLTAGE_SAG,
+        ac::RMS_VOLTAGE_SWELL,
+    ] {
+        c.add_attribute(a, &i16v(-1))?;
+    }
+    Ok(())
+}
+
+/// Adds the rest of the AC non-phase-specific set (Table 4-32) to a
+/// single-phase server: the frequency extremes, the neutral current
+/// and totals of a polyphase meter, `harmonics` orders of current
+/// harmonics (0…6, with their phase counterparts) and the Table 4-33
+/// formatting: the `power` scale and the harmonic multipliers as
+/// powers of ten.
+pub fn enable_ac_totals<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    power: Scale,
+    harmonics: usize,
+    harmonic_multiplier: i8,
+) -> Result<(), ZclStatus> {
+    if harmonics > ac_total::HARMONIC_CURRENT.len() || power.divisor == 0 || power.multiplier == 0 {
+        return Err(ZclStatus::InvalidValue);
+    }
+    c.add_attribute(ac_total::FREQUENCY_MIN, &u16v(ac::UNKNOWN_U16))?;
+    c.add_attribute(ac_total::FREQUENCY_MAX, &u16v(ac::UNKNOWN_U16))?;
+    c.add_reported_attribute(
+        ac_total::NEUTRAL_CURRENT,
+        &u16v(ac::UNKNOWN_U16),
+        READING_REPORTING,
+    )?;
+    let i32v = |v: i32| Value::Int {
+        width: 4,
+        value: i64::from(v),
+    };
+    c.add_reported_attribute(
+        ac_total::TOTAL_ACTIVE_POWER,
+        &i32v(ac_total::UNKNOWN_I32),
+        READING_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        ac_total::TOTAL_REACTIVE_POWER,
+        &i32v(ac_total::UNKNOWN_I32),
+        READING_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        ac_total::TOTAL_APPARENT_POWER,
+        &Value::Uint {
+            width: 4,
+            value: u64::from(ac_total::UNKNOWN_U32),
+        },
+        READING_REPORTING,
+    )?;
+    for i in 0..harmonics {
+        if let (Some(h), Some(p)) = (
+            ac_total::HARMONIC_CURRENT.get(i),
+            ac_total::PHASE_HARMONIC_CURRENT.get(i),
+        ) {
+            c.add_reported_attribute(*h, &i16v(ac::UNKNOWN_I16), READING_REPORTING)?;
+            c.add_reported_attribute(*p, &i16v(ac::UNKNOWN_I16), READING_REPORTING)?;
+        }
+    }
+    let u32v = |v: u16| Value::Uint {
+        width: 4,
+        value: u64::from(v),
+    };
+    c.add_reported_attribute(
+        ac_total::POWER_MULTIPLIER,
+        &u32v(power.multiplier),
+        FORMAT_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        ac_total::POWER_DIVISOR,
+        &u32v(power.divisor),
+        FORMAT_REPORTING,
+    )?;
+    if harmonics > 0 {
+        let m = Value::Int {
+            width: 1,
+            value: i64::from(harmonic_multiplier),
+        };
+        c.add_reported_attribute(ac_total::HARMONIC_CURRENT_MULTIPLIER, &m, FORMAT_REPORTING)?;
+        c.add_reported_attribute(
+            ac_total::PHASE_HARMONIC_CURRENT_MULTIPLIER,
+            &m,
+            FORMAT_REPORTING,
+        )?;
+    }
+    Ok(())
+}
+
+/// Adds the measurement set of `phase` B or C (Tables 4-39 / 4-40):
+/// RMS voltage with extremes, RMS current, active / reactive / apparent
+/// power and power factor, and marks the phase in `MeasurementType`.
+pub fn enable_phase<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    phase: Phase,
+) -> Result<(), ZclStatus> {
+    if phase == Phase::A {
+        return Err(ZclStatus::InvalidValue);
+    }
+    let p = |base: AttributeDef| phase_attr(phase, base);
+    c.add_reported_attribute(
+        p(ac::RMS_VOLTAGE),
+        &u16v(ac::UNKNOWN_U16),
+        READING_REPORTING,
+    )?;
+    c.add_attribute(p(ac::RMS_VOLTAGE_MIN), &u16v(ac::UNKNOWN_U16))?;
+    c.add_attribute(p(ac::RMS_VOLTAGE_MAX), &u16v(ac::UNKNOWN_U16))?;
+    c.add_reported_attribute(
+        p(ac::RMS_CURRENT),
+        &u16v(ac::UNKNOWN_U16),
+        READING_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        p(ac::ACTIVE_POWER),
+        &i16v(ac::UNKNOWN_I16),
+        READING_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        p(ac::REACTIVE_POWER),
+        &i16v(ac::UNKNOWN_I16),
+        READING_REPORTING,
+    )?;
+    c.add_reported_attribute(
+        p(ac::APPARENT_POWER),
+        &u16v(ac::UNKNOWN_U16),
+        READING_REPORTING,
+    )?;
+    c.add_attribute(p(ac::POWER_FACTOR), &Value::Int { width: 1, value: 0 })?;
+    let kind = c.u64(MEASUREMENT_TYPE.id).unwrap_or(0) | u64::from(phase.measurement_bit());
+    c.set(
+        MEASUREMENT_TYPE.id,
+        &Value::Bits {
+            width: 4,
+            bits: kind,
+        },
+    );
+    Ok(())
+}
+
+/// Records the readings of phase B or C (voltage extremes tracked; no
+/// alarms, which the phase A thresholds cover).
+pub fn set_ac_phase<const A: usize>(c: &mut ClusterInstance<A>, phase: Phase, r: AcReading) {
+    if phase == Phase::A {
+        set_ac(c, r);
+        return;
+    }
+    let p = |base: AttributeDef| phase_attr(phase, base);
+    track_u16(
+        c,
+        p(ac::RMS_VOLTAGE),
+        p(ac::RMS_VOLTAGE_MIN),
+        p(ac::RMS_VOLTAGE_MAX),
+        r.rms_voltage,
+    );
+    c.set_u16(
+        p(ac::RMS_CURRENT).id,
+        r.rms_current.unwrap_or(ac::UNKNOWN_U16),
+    );
+    c.set_i16(
+        p(ac::ACTIVE_POWER).id,
+        r.active_power.unwrap_or(ac::UNKNOWN_I16),
+    );
+    c.set_i16(
+        p(ac::REACTIVE_POWER).id,
+        r.reactive_power.unwrap_or(ac::UNKNOWN_I16),
+    );
+    c.set_u16(
+        p(ac::APPARENT_POWER).id,
+        r.apparent_power.unwrap_or(ac::UNKNOWN_U16),
+    );
+    c.set(
+        p(ac::POWER_FACTOR).id,
+        &Value::Int {
+            width: 1,
+            value: i64::from(r.power_factor.clamp(-100, 100)),
+        },
+    );
+}
+
+/// Polyphase totals and the non-phase-specific readings (`None` =
+/// unknown); the frequency extremes are tracked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct AcTotals {
+    /// `ACFrequency`.
+    pub frequency: Option<u16>,
+    /// `NeutralCurrent`.
+    pub neutral_current: Option<u16>,
+    /// `TotalActivePower`.
+    pub active_power: Option<i32>,
+    /// `TotalReactivePower`.
+    pub reactive_power: Option<i32>,
+    /// `TotalApparentPower`.
+    pub apparent_power: Option<u32>,
+}
+
+/// Records the totals of Table 4-32.
+pub fn set_ac_totals<const A: usize>(c: &mut ClusterInstance<A>, t: AcTotals) {
+    track_u16(
+        c,
+        ac::FREQUENCY,
+        ac_total::FREQUENCY_MIN,
+        ac_total::FREQUENCY_MAX,
+        t.frequency,
+    );
+    c.set_u16(
+        ac_total::NEUTRAL_CURRENT.id,
+        t.neutral_current.unwrap_or(ac::UNKNOWN_U16),
+    );
+    let i32v = |v: i32| Value::Int {
+        width: 4,
+        value: i64::from(v),
+    };
+    c.set(
+        ac_total::TOTAL_ACTIVE_POWER.id,
+        &i32v(t.active_power.unwrap_or(ac_total::UNKNOWN_I32)),
+    );
+    c.set(
+        ac_total::TOTAL_REACTIVE_POWER.id,
+        &i32v(t.reactive_power.unwrap_or(ac_total::UNKNOWN_I32)),
+    );
+    c.set(
+        ac_total::TOTAL_APPARENT_POWER.id,
+        &Value::Uint {
+            width: 4,
+            value: u64::from(t.apparent_power.unwrap_or(ac_total::UNKNOWN_U32)),
+        },
+    );
+}
+
+/// Records the measured current harmonics (order index 0…5 for the 1st,
+/// 3rd, 5th, 7th, 9th and 11th) and their phase counterparts.
+pub fn set_harmonics<const A: usize>(
+    c: &mut ClusterInstance<A>,
+    magnitudes: &[i16],
+    phases: &[i16],
+) {
+    for (i, m) in magnitudes.iter().enumerate() {
+        if let Some(a) = ac_total::HARMONIC_CURRENT.get(i) {
+            c.set_i16(a.id, *m);
+        }
+    }
+    for (i, p) in phases.iter().enumerate() {
+        if let Some(a) = ac_total::PHASE_HARMONIC_CURRENT.get(i) {
+            c.set_i16(a.id, *p);
+        }
+    }
+}
+
 /// Sets a manufacturer overload threshold (the `*Overload` attributes;
 /// unknown thresholds never alarm).
 pub fn set_threshold<const A: usize>(
@@ -478,7 +919,7 @@ fn track_u16<const A: usize>(
 }
 
 /// Alarms raised by a reading: at most three codes.
-pub type Alarms = heapless::Vec<u8, 3>;
+pub type Alarms = heapless::Vec<u8, 10>;
 
 fn overload(mask: u64, bit: u8, threshold: Option<i16>, value: i64) -> bool {
     mask & (1 << bit) != 0 && threshold.is_some_and(|t| t != -1 && value > i64::from(t))
@@ -566,7 +1007,17 @@ pub struct AcReading {
 /// overload alarm codes enabled by `ACAlarmsMask` whose threshold the
 /// reading exceeds.
 pub fn set_ac<const A: usize>(c: &mut ClusterInstance<A>, r: AcReading) -> Alarms {
-    c.set_u16(ac::FREQUENCY.id, r.frequency.unwrap_or(ac::UNKNOWN_U16));
+    if c.attributes.get(ac_total::FREQUENCY_MIN.id, None).is_some() {
+        track_u16(
+            c,
+            ac::FREQUENCY,
+            ac_total::FREQUENCY_MIN,
+            ac_total::FREQUENCY_MAX,
+            r.frequency,
+        );
+    } else {
+        c.set_u16(ac::FREQUENCY.id, r.frequency.unwrap_or(ac::UNKNOWN_U16));
+    }
     track_u16(
         c,
         ac::RMS_VOLTAGE,
@@ -574,11 +1025,32 @@ pub fn set_ac<const A: usize>(c: &mut ClusterInstance<A>, r: AcReading) -> Alarm
         ac::RMS_VOLTAGE_MAX,
         r.rms_voltage,
     );
-    c.set_u16(ac::RMS_CURRENT.id, r.rms_current.unwrap_or(ac::UNKNOWN_U16));
-    c.set_i16(
-        ac::ACTIVE_POWER.id,
-        r.active_power.unwrap_or(ac::UNKNOWN_I16),
-    );
+    if c.attributes.get(ac::RMS_CURRENT_MIN.id, None).is_some() {
+        track_u16(
+            c,
+            ac::RMS_CURRENT,
+            ac::RMS_CURRENT_MIN,
+            ac::RMS_CURRENT_MAX,
+            r.rms_current,
+        );
+    } else {
+        c.set_u16(ac::RMS_CURRENT.id, r.rms_current.unwrap_or(ac::UNKNOWN_U16));
+    }
+    if c.attributes.get(ac::ACTIVE_POWER_MIN.id, None).is_some() {
+        track_i16(
+            c,
+            ac::ACTIVE_POWER,
+            ac::ACTIVE_POWER_MIN,
+            ac::ACTIVE_POWER_MAX,
+            r.active_power,
+            ac::UNKNOWN_I16,
+        );
+    } else {
+        c.set_i16(
+            ac::ACTIVE_POWER.id,
+            r.active_power.unwrap_or(ac::UNKNOWN_I16),
+        );
+    }
     c.set_i16(
         ac::REACTIVE_POWER.id,
         r.reactive_power.unwrap_or(ac::UNKNOWN_I16),
@@ -625,6 +1097,76 @@ pub fn set_ac<const A: usize>(c: &mut ClusterInstance<A>, r: AcReading) -> Alarm
         )
     {
         let _ = alarms.push(ac::ALARM_ACTIVE_POWER_OVERLOAD);
+    }
+    if let Some(q) = r.reactive_power
+        && overload(
+            mask,
+            ac::ALARM_REACTIVE_POWER_OVERLOAD,
+            c.i16(ac::REACTIVE_POWER_OVERLOAD.id),
+            i64::from(q),
+        )
+    {
+        let _ = alarms.push(ac::ALARM_REACTIVE_POWER_OVERLOAD);
+    }
+    // Voltage quality (Table 4-38): above the over / swell thresholds,
+    // below the under / sag thresholds; the counters count the
+    // average-RMS excursions.
+    if let Some(v) = r.rms_voltage {
+        let v = i64::from(v);
+        let above = |c: &ClusterInstance<A>, id: AttributeId| {
+            c.i16(id)
+                .filter(|t| *t >= 0)
+                .is_some_and(|t| v > i64::from(t))
+        };
+        let below = |c: &ClusterInstance<A>, id: AttributeId| {
+            c.i16(id)
+                .filter(|t| *t >= 0)
+                .is_some_and(|t| v < i64::from(t))
+        };
+        let checks = [
+            (
+                ac::ALARM_AVERAGE_RMS_OVER_VOLTAGE,
+                above(c, ac::AVERAGE_RMS_OVER_VOLTAGE.id),
+                Some(ac::AVERAGE_RMS_OVER_VOLTAGE_COUNTER),
+            ),
+            (
+                ac::ALARM_AVERAGE_RMS_UNDER_VOLTAGE,
+                below(c, ac::AVERAGE_RMS_UNDER_VOLTAGE.id),
+                Some(ac::AVERAGE_RMS_UNDER_VOLTAGE_COUNTER),
+            ),
+            (
+                ac::ALARM_RMS_EXTREME_OVER_VOLTAGE,
+                above(c, ac::RMS_EXTREME_OVER_VOLTAGE.id),
+                None,
+            ),
+            (
+                ac::ALARM_RMS_EXTREME_UNDER_VOLTAGE,
+                below(c, ac::RMS_EXTREME_UNDER_VOLTAGE.id),
+                None,
+            ),
+            (
+                ac::ALARM_RMS_VOLTAGE_SAG,
+                below(c, ac::RMS_VOLTAGE_SAG.id),
+                None,
+            ),
+            (
+                ac::ALARM_RMS_VOLTAGE_SWELL,
+                above(c, ac::RMS_VOLTAGE_SWELL.id),
+                None,
+            ),
+        ];
+        for (code, hit, counter) in checks {
+            if !hit {
+                continue;
+            }
+            if let Some(counter) = counter {
+                let n = c.u16(counter.id).unwrap_or(0);
+                c.set_u16(counter.id, n.saturating_add(1));
+            }
+            if mask & (1 << code) != 0 {
+                let _ = alarms.push(code);
+            }
+        }
     }
     alarms
 }
@@ -868,5 +1410,109 @@ mod tests {
         };
         let n = rsp.encode(&mut buf).unwrap();
         assert_eq!(MeasurementProfile::parse(&buf[..n]).unwrap(), rsp);
+    }
+
+    #[test]
+    fn polyphase_totals_harmonics_and_voltage_quality() {
+        let mut c: ClusterInstance<96> = server(Capability::AC).unwrap();
+        enable_ac_extremes(&mut c).unwrap();
+        enable_voltage_quality(&mut c).unwrap();
+        enable_ac_totals(&mut c, Scale::UNITY, 3, -3).unwrap();
+        enable_phase(&mut c, Phase::B).unwrap();
+        enable_phase(&mut c, Phase::C).unwrap();
+        assert!(enable_phase(&mut c, Phase::A).is_err());
+        assert_eq!(
+            c.u64(MEASUREMENT_TYPE.id).unwrap() & u64::from(measurement_type::PHASE_C),
+            u64::from(measurement_type::PHASE_C)
+        );
+        assert_eq!(phase_attr(Phase::B, ac::RMS_VOLTAGE).id.0, 0x0905);
+        assert_eq!(phase_attr(Phase::C, ac::POWER_FACTOR).id.0, 0x0a10);
+        // Phase A extremes are tracked once enabled.
+        let read = |v: u16, i: u16, p: i16| AcReading {
+            frequency: Some(50),
+            rms_voltage: Some(v),
+            rms_current: Some(i),
+            active_power: Some(p),
+            reactive_power: Some(0),
+            apparent_power: Some(0),
+            power_factor: 100,
+        };
+        assert!(set_ac(&mut c, read(230, 10, 2300)).is_empty());
+        set_ac(&mut c, read(231, 12, 2500));
+        set_ac(&mut c, read(229, 8, 1800));
+        assert_eq!(c.u16(ac::RMS_CURRENT_MIN.id), Some(8));
+        assert_eq!(c.u16(ac::RMS_CURRENT_MAX.id), Some(12));
+        assert_eq!(c.i16(ac::ACTIVE_POWER_MIN.id), Some(1800));
+        assert_eq!(c.i16(ac::ACTIVE_POWER_MAX.id), Some(2500));
+        // Voltage quality: a swell above 250 V and an average over
+        // voltage above 245 V are counted and, when masked in, alarmed.
+        c.set_i16(ac::RMS_VOLTAGE_SWELL.id, 250);
+        c.set_i16(ac::AVERAGE_RMS_OVER_VOLTAGE.id, 245);
+        c.set_i16(ac::RMS_VOLTAGE_SAG.id, 200);
+        c.set(
+            ac::ALARMS_MASK.id,
+            &Value::Bits {
+                width: 2,
+                bits: (1 << ac::ALARM_RMS_VOLTAGE_SWELL) | (1 << ac::ALARM_RMS_VOLTAGE_SAG),
+            },
+        );
+        let a = set_ac(&mut c, read(255, 10, 2300));
+        assert_eq!(a.as_slice(), &[ac::ALARM_RMS_VOLTAGE_SWELL]);
+        assert_eq!(c.u16(ac::AVERAGE_RMS_OVER_VOLTAGE_COUNTER.id), Some(1));
+        let a = set_ac(&mut c, read(190, 10, 2300));
+        assert_eq!(a.as_slice(), &[ac::ALARM_RMS_VOLTAGE_SAG]);
+        assert_eq!(c.u16(ac::AVERAGE_RMS_OVER_VOLTAGE_COUNTER.id), Some(1));
+        // Phases B / C and the totals.
+        set_ac_phase(&mut c, Phase::B, read(228, 9, 2000));
+        set_ac_phase(&mut c, Phase::C, read(232, 11, 2600));
+        assert_eq!(c.u16(phase_attr(Phase::B, ac::RMS_VOLTAGE).id), Some(228));
+        assert_eq!(c.i16(phase_attr(Phase::C, ac::ACTIVE_POWER).id), Some(2600));
+        assert_eq!(
+            c.u16(phase_attr(Phase::C, ac::RMS_VOLTAGE_MAX).id),
+            Some(232)
+        );
+        set_ac_totals(
+            &mut c,
+            AcTotals {
+                frequency: Some(50),
+                neutral_current: Some(1),
+                active_power: Some(6_900),
+                reactive_power: Some(-100),
+                apparent_power: Some(7_000),
+            },
+        );
+        set_ac_totals(
+            &mut c,
+            AcTotals {
+                frequency: Some(49),
+                ..AcTotals::default()
+            },
+        );
+        assert_eq!(c.u16(ac_total::FREQUENCY_MIN.id), Some(49));
+        assert_eq!(c.u16(ac_total::FREQUENCY_MAX.id), Some(50));
+        assert_eq!(
+            c.attributes
+                .value(ac_total::TOTAL_ACTIVE_POWER.id)
+                .and_then(|v| v.as_i64()),
+            Some(i64::from(ac_total::UNKNOWN_I32))
+        );
+        set_harmonics(&mut c, &[1000, 50, 20], &[0, 10, 20]);
+        assert_eq!(c.i16(ac_total::HARMONIC_CURRENT[1].id), Some(50));
+        assert_eq!(c.i16(ac_total::PHASE_HARMONIC_CURRENT[2].id), Some(20));
+        assert!(
+            c.attributes
+                .get(ac_total::HARMONIC_CURRENT[3].id, None)
+                .is_none()
+        );
+        assert_eq!(
+            c.attributes
+                .value(ac_total::HARMONIC_CURRENT_MULTIPLIER.id)
+                .and_then(|v| v.as_i64()),
+            Some(-3)
+        );
+        assert!(
+            enable_ac_totals::<96>(&mut server(Capability::AC).unwrap(), Scale::UNITY, 7, 0)
+                .is_err()
+        );
     }
 }

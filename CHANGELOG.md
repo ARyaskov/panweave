@@ -176,6 +176,14 @@ Keep a Changelog; versions follow SemVer.
   dead band and control-sequence rules on writes, Setpoint Raise/Lower
   with `ZclEvent::Setpoints`, running mode, scene fields) and Fan
   Control; facade `thermostat_device` endpoint.
+* Electrical Measurement completion (ZCL8 §4.9.2.2.4–11): the RMS
+  current / active power extremes, the voltage quality attributes and
+  the full ACAlarmsMask (reactive power overload, average / extreme
+  over and under voltage, sag and swell with the counters), the AC
+  non-phase-specific set (frequency extremes, neutral current,
+  polyphase totals, current harmonics with their formatting) and the
+  phase B / C sets through `Phase` / `phase_attr` (`enable_phase`,
+  `set_ac_phase`, `enable_ac_totals`, `set_ac_totals`, `set_harmonics`).
 * Thermostat completion (ZCL8 §6.3.2.2.3–5, §6.3.2.3.5): the setpoint
   change tracking set (source / amount / UTC stamp from the endpoint's
   Time server, occupied / unoccupied setbacks clamped into their
