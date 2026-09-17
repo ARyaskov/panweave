@@ -365,6 +365,12 @@ Keep a Changelog; versions follow SemVer.
   `panweave-nwk::joining_list` holds `mibJoiningPolicy` /
   `mibJoiningIeeeList` and gates association and initial commissioning
   joins; the runtime runs beacon surveys (`StackEvent::JoiningListUpdated`).
+* Application link keys (R23.2 §4.7.3.9, BDB 3.1 §7.4):
+  `Stack::request_application_link_key`, Trust Center brokering under
+  `allowApplicationKeyRequests` and the `applicationKeyRequestList`,
+  `StackEvent::ApplicationLinkKey` on both devices; data frames under an
+  application link key carry the extended nonce and the NWK records the
+  originator of a single-hop secured frame in the address map.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

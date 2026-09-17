@@ -5,7 +5,7 @@
 //! keys still enter through the NWK/APS key stores and the Trust
 //! Center policy stays in force.
 
-use panweave_aps::layer::DeviceState;
+use panweave_aps::layer::{DeviceState, NwkView};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_storage::Storage;
@@ -178,6 +178,28 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn leave_with(&mut self, rejoin: bool, remove_children: bool) -> Result<(), NwkStatus> {
         self.nwk
             .leave(None, rejoin, remove_children)
+            .map_err(|_| NwkStatus::InvalidRequest)
+    }
+
+    /// Asks the Trust Center for an application link key shared with
+    /// `partner` (APSME-REQUEST-KEY.request, §4.4.6.1, BDB 3.1 §7.4).
+    /// The key arrives as [`StackEvent::ApplicationLinkKey`] on both
+    /// devices once the Trust Center's policy allows it.
+    pub fn request_application_link_key(
+        &mut self,
+        partner: ExtendedAddress,
+    ) -> Result<(), NwkStatus> {
+        let tc = self.aps.aib.trust_center_address;
+        let tc_short = crate::context::AddrView(&self.nwk)
+            .short_of(tc)
+            .unwrap_or(ShortAddress::COORDINATOR);
+        self.aps
+            .request_key(
+                tc_short,
+                panweave_aps::command::RequestKeyType::ApplicationLinkKey,
+                Some(partner),
+            )
+            .map(|_| ())
             .map_err(|_| NwkStatus::InvalidRequest)
     }
 

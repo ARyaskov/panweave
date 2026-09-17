@@ -139,6 +139,12 @@ impl<
         // --- Address bookkeeping (§3.6.1.10.2) ------------------------------
         if let Some(e) = src_ieee {
             self.note_address(e, src, secured);
+        } else if let Some(sb) = secured_by
+            && src == mac_src
+        {
+            // A single-hop secured frame names its originator in the
+            // auxiliary header.
+            self.note_address(sb, src, true);
         }
         if let Some(sb) = secured_by {
             // Refresh LQA and last-seen data for the previous hop.

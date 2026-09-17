@@ -445,6 +445,15 @@ pub enum StackEvent {
     /// A Mgmt_NWK_IEEE_Joining_List_rsp updated the joining policy or
     /// IEEE joining list (§2.4.4.3.11.2).
     JoiningListUpdated,
+    /// The Trust Center delivered an application link key shared with
+    /// `partner` (§4.7.3.9); `initiator` says whether this device asked
+    /// for it.
+    ApplicationLinkKey {
+        /// The other device the key is shared with.
+        partner: ExtendedAddress,
+        /// This device sent the Request Key.
+        initiator: bool,
+    },
     /// The Green Power proxy entered (`Some(window end)`) or left
     /// (`None`) commissioning mode (GP Basic §A.3.5.2.3).
     GreenPowerCommissioningMode {
@@ -545,6 +554,10 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) energy_scan: Option<EnergyScanRequest>,
     /// A beacon survey in progress.
     pub(crate) beacon_survey: Option<BeaconSurveyRequest>,
+    /// `applicationKeyRequestList` (Table 4-42): device pairs an
+    /// application link key may be issued to under the ListedOnly
+    /// policy.
+    pub application_key_request_list: Vec<(ExtendedAddress, ExtendedAddress), 8>,
     /// Discovery retries left for the join in progress
     /// (`:Config_NWK_Scan_Attempts`) and when the next scan may start.
     pub(crate) scan_attempts_left: u8,
@@ -646,6 +659,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             challenge: None,
             energy_scan: None,
             beacon_survey: None,
+            application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
             next_scan: None,
             last_scan: (ChannelMask::EMPTY, 0),

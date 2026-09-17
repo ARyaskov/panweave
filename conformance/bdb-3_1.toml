@@ -125,10 +125,10 @@ id = "PW-BDB-INIT-004"
 section = "§7.4"
 summary = "Application link keys with non-TC devices via Request Key"
 level = "optional"
-status = "not-implemented"
-module = "panweave-bdb::app_keys"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime"
+tests = ["trust_center_brokers_an_application_link_key", "listed_only_policy_refuses_unlisted_pairs"]
+notes = "Stack::request_application_link_key sends APSME-REQUEST-KEY for an application link key; the Trust Center applies allowApplicationKeyRequests (Any / ListedOnly against applicationKeyRequestList / Never) and the requirement that both devices hold verified Trust Center link keys, then transports one fresh key to both (initiator flag on the requester) under their Trust Center link keys. Both sides install it as a verified unique entry and report StackEvent::ApplicationLinkKey; data frames secured with an application link key carry the extended nonce so a partner that only knows the short address can locate the key, and a single-hop secured frame's auxiliary-header source is recorded in the address map."
 [[requirement]]
 id = "PW-BDB-FORM-001"
 section = "§8.1"

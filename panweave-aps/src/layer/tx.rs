@@ -356,6 +356,12 @@ impl<
             None
         };
         header = header.secured(partner.is_some());
+        // An application link key's partner may not know this device's
+        // IEEE address (the pair only met through the Trust Center):
+        // carry it in the auxiliary header so the receiver can locate
+        // the key (§4.4.1.1 step 3).
+        let extended_nonce = req.options.extended_nonce
+            || partner.is_some_and(|p| p != self.aib.trust_center_address);
         self.queue_tx(
             TxParams {
                 request: id,
@@ -363,7 +369,7 @@ impl<
                 dst,
                 partner,
                 key_id: KeyIdentifier::Data,
-                extended_nonce: req.options.extended_nonce,
+                extended_nonce,
                 header,
                 nwk_secure: true,
                 radius: req.radius,

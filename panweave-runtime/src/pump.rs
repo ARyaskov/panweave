@@ -1496,7 +1496,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             .aps
                             .verify_key(source, tc_short, KeyType::TrustCenterLinkKey);
                     }
-                    TransportedKey::ApplicationLink { .. } => {}
+                    TransportedKey::ApplicationLink { partner, initiator } => {
+                        self.push_event(StackEvent::ApplicationLinkKey { partner, initiator });
+                    }
                 },
                 ApsEvent::SwitchKey { sequence, .. } => {
                     if self.nwk.switch_network_key(sequence) {
@@ -1526,9 +1528,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     src,
                     src_short,
                     key_type,
-                    ..
+                    partner,
                 } => {
-                    if key_type == RequestKeyType::TrustCenterLinkKey
+                    if key_type == RequestKeyType::ApplicationLinkKey {
+                        if let Some(partner) = partner {
+                            self.on_application_key_request(src, src_short, partner);
+                        }
+                    } else if key_type == RequestKeyType::TrustCenterLinkKey
                         && self.config.trust_center_policy.tclk_requests != TclkRequestPolicy::Never
                     {
                         let mut k = [0u8; 16];
@@ -1570,6 +1576,61 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// A Request Key for an application link key at the Trust Center
+    /// (§4.7.3.9, BDB 3.1 §7.4): when the policy allows it and both
+    /// devices are known, a fresh key is transported to the initiator
+    /// and the partner under their Trust Center link keys (initiator
+    /// flag set for the requester).
+    fn on_application_key_request(
+        &mut self,
+        initiator: ExtendedAddress,
+        initiator_short: ShortAddress,
+        partner: ExtendedAddress,
+    ) {
+        if !self.aps.config.is_trust_center {
+            return;
+        }
+        let listed = self
+            .application_key_request_list
+            .iter()
+            .any(|(a, b)| (*a == initiator && *b == partner) || (*a == partner && *b == initiator));
+        let allowed = self.config.trust_center_policy.allow_app_key_request(
+            initiator,
+            partner,
+            self.aps.security.entry(initiator),
+            listed,
+        );
+        if !allowed {
+            return;
+        }
+        // The partner must itself hold a verified Trust Center link key
+        // and be reachable by network address.
+        if self
+            .aps
+            .security
+            .entry(partner)
+            .is_none_or(|e| e.attributes != panweave_types::KeyAttributes::VerifiedKey)
+        {
+            return;
+        }
+        let Some(partner_short) = AddrView(&self.nwk).short_of(partner) else {
+            return;
+        };
+        let mut k = [0u8; 16];
+        self.nwk.rng().fill_bytes(&mut k);
+        let key = Key128::from_bytes(k);
+        let _ = self.aps.transport_application_link_key(
+            initiator,
+            initiator_short,
+            partner,
+            &key,
+            true,
+        );
+        let _ =
+            self.aps
+                .transport_application_link_key(partner, partner_short, initiator, &key, false);
     }
 
     // ---------------------------------------------------------------
