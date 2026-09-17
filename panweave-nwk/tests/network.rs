@@ -771,3 +771,63 @@ fn secured_rejoin_after_reboot_keeps_address() {
     );
     assert_eq!(net.nodes[ci].nwk.stats.replays, 0);
 }
+
+/// PAN ID conflicts are counted, never reported unsolicited (R23.2
+/// §3.6.1.13.1); a legacy Network Report reaches the application as a
+/// NETWORK-STATUS 0x14; the manager changes the PAN ID only on request
+/// (§3.6.1.13.3) and routers follow the Network Update.
+#[test]
+fn pan_id_conflicts_are_counted_and_changes_are_explicit() {
+    use panweave_codec::Encode;
+    use panweave_nwk::beacon::BeaconPayload;
+    use panweave_types::{ChannelPage, PanId};
+    let mut net = Net::new();
+    let ci = form_coordinator(&mut net);
+    let ri = net.add(Node::new(LogicalDeviceType::Router, 0xB1, 2));
+    let _ = join_via_association(&mut net, ri, true, false);
+    net.settle();
+    let pan = net.nodes[ci].pan;
+    let log_before = net.log.len();
+
+    // A foreign network on our PAN ID with another extended PAN ID.
+    let foreign = BeaconPayload::new(ExtendedAddress(0xDEAD_BEEF_0000_0001), true, true, 0, &[]);
+    let mut buf = [0u8; 32];
+    let n = foreign.encode_to_slice(&mut buf).unwrap();
+    let beacon = Beacon::non_beacon(true, true, &buf[..n]);
+    for _ in 0..3 {
+        net.nodes[ci].nwk.on_mac_beacon(
+            pan,
+            MacAddress::Short(ShortAddress(0x7777)),
+            &beacon,
+            Channel::DEFAULT_2_4GHZ,
+            ChannelPage(0),
+            100,
+        );
+    }
+    net.settle();
+    assert_eq!(net.nodes[ci].nwk.nib.pan_id_conflict_count, 3);
+    assert_eq!(net.log.len(), log_before, "no unsolicited report");
+    assert_eq!(net.nodes[ci].pan, pan, "no automatic PAN ID change");
+
+    // The application decides: stage the next PAN ID and change.
+    let staged = PanId(0x1234);
+    net.nodes[ci].nwk.nib.next_pan_id = staged;
+    net.nodes[ci].nwk.change_pan_id().unwrap();
+    net.settle();
+    net.advance(Duration::from_secs(10));
+    net.settle();
+    assert_eq!(net.nodes[ci].nwk.nib.pan_id, staged);
+    assert_eq!(
+        net.nodes[ri].nwk.nib.pan_id, staged,
+        "router followed the Network Update"
+    );
+    assert_eq!(
+        net.nodes[ri].nwk.nib.update_id,
+        net.nodes[ci].nwk.nib.update_id
+    );
+    let evs = net.take_events(ri);
+    assert!(
+        evs.iter()
+            .any(|e| matches!(e, NwkEvent::PanIdChanged { pan_id } if *pan_id == staged))
+    );
+}

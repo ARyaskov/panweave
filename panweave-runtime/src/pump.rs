@@ -510,6 +510,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                                     ));
                                 }
                             }
+                        } else if self.scan_attempts_left > 0 {
+                            // Another :Config_NWK_Scan_Attempts round after
+                            // :Config_NWK_Time_btwn_Scans (§2.5.4.5.1).
+                            self.scan_attempts_left -= 1;
+                            let at = self
+                                .now
+                                .saturating_add(self.config.zdo.time_between_scans());
+                            self.next_scan = Some((at, self.last_scan.0, self.last_scan.1));
                         } else {
                             self.phase = Phase::Idle;
                             self.push_event(StackEvent::JoinFailed(status));
@@ -593,7 +601,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     _ => {}
                 },
-                NwkEvent::NetworkStatus { code, .. } => {
+                NwkEvent::NetworkStatus { code, address } => {
                     if code == panweave_nwk::command::NetworkStatusCode::ParentLinkFailure
                         && self.config.role == LogicalDeviceType::EndDevice
                         && self.phase == Phase::Operating
@@ -603,6 +611,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.next_poll = None;
                         let _ = self.join(crate::JoinMode::SecuredRejoin);
                     }
+                    if code == panweave_nwk::command::NetworkStatusCode::PanIdConflictReport {
+                        // §2.3.4.2: a legacy device reported a conflict;
+                        // the application decides (Stack::change_pan_id).
+                        self.push_event(StackEvent::PanIdConflictReport { from: address });
+                    }
+                }
+                NwkEvent::PanIdChanged { pan_id } => {
+                    self.push_event(StackEvent::PanIdChanged { pan_id });
                 }
                 NwkEvent::EnergyScanConfirm { channels, energy } => {
                     self.on_energy_scan_confirm(channels, &energy);
@@ -612,7 +628,6 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 | NwkEvent::PermitJoining(_)
                 | NwkEvent::ChildRemoved { .. }
                 | NwkEvent::LostChild { .. }
-                | NwkEvent::PanIdChanged { .. }
                 | NwkEvent::ParentInformationUpdated
                 | NwkEvent::KeySwitched => {}
             }

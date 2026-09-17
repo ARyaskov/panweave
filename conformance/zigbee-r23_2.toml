@@ -306,12 +306,12 @@ id = "PW-R23-NWK-033"
 section = "§3.6.1.13"
 summary = "PAN ID conflict: detection from beacons with same PAN ID and different extended PAN ID, Network Report to network manager, network manager selects new PAN ID and broadcasts Network Update, all devices switch after nwkNetworkBroadcastDeliveryTime"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-nwk::layer::join"
-tests = ["report_update_and_timeouts"]
+tests = ["report_update_and_timeouts", "pan_id_conflicts_are_counted_and_changes_are_explicit", "network_manager_changes_the_pan_id_explicitly"]
 
 # ---------------------------------------------------------------- NWK transmission / reception
-notes = "Report/update commands and manager processing implemented; conflict scenario not yet simulated."
+notes = "R23 semantics (ADR-0010): detection only counts nwkPanIdConflictCount, legacy Network Reports become NLME-NETWORK-STATUS 0x14, the PAN ID changes only through Nwk::change_pan_id (staged nwkNextPanId or random), receivers gate the Network Update by their staged nwkNextPanId and switch after nwkNetworkBroadcastDeliveryTime."
 [[requirement]]
 id = "PW-R23-NWK-040"
 section = "§3.6.2.1"
@@ -678,12 +678,12 @@ id = "PW-R23-AF-004"
 section = "§2.3.4"
 summary = "Application behaviour on PAN ID conflict"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-runtime"
-tests = []
+status = "implemented"
+module = "panweave-runtime::stack"
+tests = ["network_manager_changes_the_pan_id_explicitly"]
 
 # ---------------------------------------------------------------- ZDP
-
+notes = "The application sees StackEvent::PanIdConflictReport for legacy reports and Stack::pan_id_conflicts() for the local count; it alone decides to call Stack::change_pan_id() (ADR-0010). Periodic querying of routers is left to the application."
 [[requirement]]
 id = "PW-R23-ZDP-001"
 section = "§2.4.2, §2.4.5"
@@ -880,21 +880,21 @@ id = "PW-R23-ZDO-001"
 section = "§2.5.2"
 summary = "Device and service discovery, network manager, binding manager, node manager, security manager objects with configuration attributes"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::objects"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime"
+tests = ["descriptor_discovery", "binding_and_restricted_mode", "management_requests", "security_services", "network_manager_energy_scan_and_channel_change", "network_manager_changes_the_pan_id_explicitly"]
+notes = "The ZDO objects are realised as runtime modules rather than a separate objects module: device and service discovery in panweave-zdo::layer, the network manager in panweave-runtime::pump (Mgmt_NWK_Update, PAN ID change, energy scans), the binding manager in panweave-aps::tables with ZDP Bind/Unbind, the node manager in the Mgmt_* handlers and the security manager in panweave-runtime::dlk / panweave-security::trust_center."
 [[requirement]]
 id = "PW-R23-ZDO-002"
 section = "§2.5.5"
 summary = "ZDO configuration attributes (permit join duration, network manager address, scan attempts, timeouts, etc.)"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-zdo::config"
-tests = []
+tests = ["defaults_follow_table_2_135", "discovery_repeats_config_nwk_scan_attempts_times"]
 
 # ---------------------------------------------------------------- Security
-
+notes = "ConfigAttributes carries Table 2-135 defaults; :Config_NWK_Scan_Attempts and :Config_NWK_Time_btwn_Scans drive discovery retries in the runtime; :Config_Permit_Join_Duration, :Config_Max_Bind, :Config_Parent_Link_Retry_Threshold and the rejoin intervals are stored but the parent-loss rejoin back-off is driven by BDB and the NWK layer with their own timers (TODO(PW-ZDO-CFG): wire them)."
 [[requirement]]
 id = "PW-R23-SEC-001"
 section = "§4.5.1"

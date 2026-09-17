@@ -2157,38 +2157,21 @@ impl<
     // ------------------------------------------------------------------
 
     /// Reports a PAN ID conflict to the network manager (§3.6.1.13.1).
-    pub(crate) fn report_pan_id_conflict(&mut self, conflicting: PanId) {
+    /// A PAN ID conflict was detected (§3.6.1.13.1): Revision 23 devices
+    /// only count conflicts in `nwkPanIdConflictCount` (reported through
+    /// Security_Get_Configuration, §2.3.4.2) and never send an unsolicited
+    /// Network Report.
+    pub(crate) fn report_pan_id_conflict(&mut self, _conflicting: PanId) {
         if !self.nib.joined || !self.nib.is_router_or_coordinator() {
             return;
         }
         self.nib.pan_id_conflict_count = self.nib.pan_id_conflict_count.saturating_add(1);
-        let manager = self.nib.manager_addr;
-        if manager == self.nib.network_address {
-            self.resolve_pan_id_conflict(conflicting);
-            return;
-        }
-        let seq = self.nib.next_sequence();
-        let header = Header::new(
-            FrameType::Command,
-            manager,
-            self.nib.network_address,
-            constants::DEFAULT_RADIUS,
-            seq,
-        )
-        .with_src_ieee(self.nib.ieee_address)
-        .secured(self.config.security_enabled);
-        let info = conflicting.0.to_le_bytes();
-        let cmd = NwkCommand::NetworkReport(NetworkReport {
-            report_id: NetworkReport::PAN_ID_CONFLICT,
-            epid: self.nib.extended_pan_id,
-            info: &info,
-        });
-        if let Some(hop) = self.next_hop_for(manager) {
-            let _ = self.send_command_unicast(&header, &cmd, hop, true, false, TxKind::Command);
-        }
     }
 
-    /// Network Report received by the network manager (§3.6.1.13.2).
+    /// Network Report received by the network manager (§3.6.1.13.2): a
+    /// legacy (pre-R23) device reported a conflict. The application is
+    /// told through NLME-NETWORK-STATUS.indication (0x14) and decides;
+    /// the PAN ID is never changed automatically.
     pub(crate) fn on_network_report(&mut self, ctx: &CommandContext, report: &NetworkReport<'_>) {
         if !ctx.secured || report.epid != self.nib.extended_pan_id {
             return;
@@ -2199,25 +2182,42 @@ impl<
         if report.report_id != NetworkReport::PAN_ID_CONFLICT {
             return;
         }
-        let first = report.pan_ids().next().unwrap_or(self.nib.pan_id);
-        self.resolve_pan_id_conflict(first);
+        self.push_event(NwkEvent::NetworkStatus {
+            address: ctx.src,
+            code: NetworkStatusCode::PanIdConflictReport,
+        });
     }
 
-    /// Selects a new PAN ID and broadcasts a Network Update
-    /// (§3.6.1.13.3).
-    fn resolve_pan_id_conflict(&mut self, conflicting: PanId) {
-        if self.pan_id_update.is_some() {
-            return;
+    /// Changes the network's PAN ID on the application's decision
+    /// (§3.6.1.13.3): `nwkNextPanId` is used when staged, otherwise a
+    /// random unused identifier; a Network Update is broadcast and the
+    /// switch happens after `nwkNetworkBroadcastDeliveryTime`. Only the
+    /// network manager may do this.
+    pub fn change_pan_id(&mut self) -> Result<(), NwkError> {
+        if !self.nib.joined || self.nib.manager_addr != self.nib.network_address {
+            return Err(NwkError::InvalidRequest);
         }
-        let mut new = None;
-        for _ in 0..16 {
-            let p = PanId(self.rng.next_u16());
-            if p.is_valid_for_formation() && p != conflicting && p != self.nib.pan_id {
-                new = Some(p);
-                break;
+        if self.pan_id_update.is_some() {
+            return Err(NwkError::Busy);
+        }
+        let staged = self.nib.next_pan_id;
+        let mut new = if staged != PanId::BROADCAST && staged != self.nib.pan_id {
+            Some(staged)
+        } else {
+            None
+        };
+        if new.is_none() {
+            for _ in 0..16 {
+                let p = PanId(self.rng.next_u16());
+                if p.is_valid_for_formation() && p != self.nib.pan_id {
+                    new = Some(p);
+                    break;
+                }
             }
         }
-        let Some(new_pan) = new else { return };
+        let Some(new_pan) = new else {
+            return Err(NwkError::Busy);
+        };
         let update_id = self.nib.update_id.wrapping_add(1);
         let seq = self.nib.next_sequence();
         let header = Header::new(
@@ -2244,6 +2244,7 @@ impl<
             update_id,
             self.now + self.nib.network_broadcast_delivery_time,
         ));
+        Ok(())
     }
 
     /// Network Update received (§3.6.1.13.4).
@@ -2252,6 +2253,11 @@ impl<
             return;
         }
         if ctx.src != self.nib.manager_addr {
+            return;
+        }
+        // A staged nwkNextPanId gates the update: only 0xFFFF (nothing
+        // staged) or the staged value is accepted.
+        if self.nib.next_pan_id != PanId::BROADCAST && self.nib.next_pan_id != upd.new_pan_id {
             return;
         }
         // Newer update id (8-bit wrap).

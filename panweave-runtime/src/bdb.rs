@@ -65,7 +65,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node for Stack<C, R, S> {
             JoinKind::SecuredRejoin => JoinMode::SecuredRejoin,
             JoinKind::TrustCenterRejoin => JoinMode::TrustCenterRejoin,
         };
-        self.join_on(mode, channels, scan_duration)
+        // BDB §8.2 runs its own primary/secondary channel retries: one
+        // discovery per request.
+        self.join_with(mode, channels, scan_duration, 1)
             .map_err(|_| NodeError::Busy)
     }
 

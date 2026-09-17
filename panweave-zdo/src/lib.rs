@@ -22,11 +22,13 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod config;
 pub mod descriptor;
 pub mod layer;
 pub mod security;
 pub mod zdp;
 
+pub use config::ConfigAttributes;
 pub use descriptor::{NodeDescriptor, PowerDescriptor, ServerMask, SimpleDescriptor};
 pub use layer::{Zdo, ZdoAction, ZdoContext, ZdoError, ZdoEvent, ZdoIndication};
 pub use zdp::{ZdpStatus, cluster};
