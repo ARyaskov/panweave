@@ -239,6 +239,11 @@ Keep a Changelog; versions follow SemVer.
   codecs and a server-side tunnel table (identifier allocation, peer
   binding, transfer-size and `CloseTunnelTimeout` enforcement, flow
   control windows, closure notifications, supported-protocol paging).
+* `panweave-smart-energy::clusters::prepayment`: the Prepayment cluster
+  attribute identifiers and bitmaps, every client and server command
+  codec of D.7, and an `Account` applying the top-up limits, emergency
+  credit selection, credit status derivation, debt changes and
+  collections with the top-up and debt logs.
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,

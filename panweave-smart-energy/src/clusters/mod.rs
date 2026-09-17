@@ -3,5 +3,6 @@
 pub mod drlc;
 pub mod messaging;
 pub mod metering;
+pub mod prepayment;
 pub mod price;
 pub mod tunneling;

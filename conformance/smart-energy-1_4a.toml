@@ -126,10 +126,10 @@ id = "PW-SE-CL-006"
 section = "Annex D.7"
 summary = "Prepayment cluster"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::clusters::prepayment"
-tests = []
-
+tests = ["command_codecs_round_trip", "response_codecs_round_trip", "account_applies_top_ups_limits_and_status", "account_tracks_debts"]
+notes = "Attribute identifiers of the information, top-up (#1–#5), debt (#1–#3) and alarm sets with the PaymentControlConfiguration, CreditStatus and PrepaymentAlarmStatus bitmaps; codecs for all twelve client commands and the five server commands (Publish Prepay Snapshot with the Debt/Credit Status payload, Change Payment Mode Response, Consumer Top Up Response, Publish Top Up Log, Publish Debt Log); an Account applying the D.7 credit rules: top-ups rejected as invalid / duplicate / too large / over the maximum credit level, emergency credit setup, selection below the threshold and its end on a top-up, Credit Adjustment (incremental / absolute), Change Debt by amount type with the unchanged markers, debt collection with the accumulated debt and logs, CreditStatus per D.7.4.1. Not done: the historical cost consumption set, friendly credit periods and calendars, the start / implementation-time scheduling of pending commands and their cancellation (executed immediately by the application), top-up token (UTRN) validation (the application decides the amount), the alarm mask groups and the Mirror NOTIFICATION_PENDING behaviour (TODO(PW-SE-PREPAY-SCHEDULING))."
 [[requirement]]
 id = "PW-SE-CL-007"
 section = "Annex D.9, D.10, D.11, D.12, D.13, D.14"
