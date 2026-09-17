@@ -9,8 +9,9 @@
 //! method on [`Bdb`], advanced by [`Bdb::on_event`] / [`Bdb::poll`], and
 //! finishes with an [`Outcome`].
 //!
-//! Touchlink (§12) and the certificate-based key exchange are not
-//! implemented; see `conformance/bdb-3_1.toml`.
+//! Touchlink (§12) lives in [`touchlink`] as its own pair of machines;
+//! the certificate-based key exchange is not implemented (see
+//! `conformance/bdb-3_1.toml`).
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -26,6 +27,8 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+pub mod touchlink;
 
 use heapless::Vec;
 use panweave_aps::tables::{BindingDestination, BindingEntry};

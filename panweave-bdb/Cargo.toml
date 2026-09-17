@@ -11,14 +11,16 @@ categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std", "panweave-aps/std", "panweave-device-library/std"]
+std = ["alloc", "panweave-types/std", "panweave-aps/std", "panweave-zcl/std", "panweave-device-library/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde", "panweave-aps/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt", "panweave-aps/defmt", "panweave-device-library/defmt", "heapless/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "panweave-aps/defmt", "panweave-zcl/defmt", "panweave-device-library/defmt", "heapless/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
 panweave-aps = { workspace = true }
+panweave-zcl = { workspace = true }
 panweave-device-library = { workspace = true }
 heapless = { workspace = true }
 serde = { workspace = true, optional = true }

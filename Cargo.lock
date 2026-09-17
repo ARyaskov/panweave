@@ -675,8 +675,10 @@ dependencies = [
  "defmt",
  "heapless",
  "panweave-aps",
+ "panweave-codec",
  "panweave-device-library",
  "panweave-types",
+ "panweave-zcl",
  "serde",
 ]
 
