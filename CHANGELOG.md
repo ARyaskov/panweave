@@ -484,6 +484,16 @@ Keep a Changelog; versions follow SemVer.
   verify hand-off, Upgrade End, activation policy) and server helpers
   over an `ImageSource`; a simulator test downloads an image over the
   air.
+* OTA upgrade server discovery (ZCL8 §11.8): `Stack::discover_ota_server`
+  resolves a preprogrammed `UpgradeServerID` with NWK_addr_req or finds
+  the first server answering a Match_Desc_req, stores its IEEE address
+  and asks the Trust Center for an application link key when the server
+  is not the Trust Center (`StackEvent::OtaServer` /
+  `OtaServerNotFound`); `ota::PageService` serves an Image Page Request
+  block by block at the response spacing (§11.13.7.4); the client
+  machine re-sends Upgrade End Request hourly while told to wait
+  indefinitely and may apply the image after three unanswered queries
+  (§11.16); Query Device Specific File codecs (§11.13.10–11).
 * `panweave-smart-energy::devices`: the Smart Energy device descriptions
   (Table 5-13, Tables 6-1 / 6-3 – 6-10) with an endpoint conformance
   checker.

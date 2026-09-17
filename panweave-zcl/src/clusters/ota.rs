@@ -608,6 +608,43 @@ impl QueryNextImageResponse {
     }
 }
 
+/// Query Device Specific File Request (§11.13.10): a device-specific
+/// file (credentials, log, configuration) named by the client's own
+/// address and an image type in the reserved range.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct QueryDeviceSpecificFileRequest {
+    /// The requesting node.
+    pub node: ExtendedAddress,
+    /// Manufacturer code, image type (0xffc0–0xfffe) and file version.
+    pub image: ImageId,
+    /// The client's current Zigbee stack version.
+    pub stack_version: u16,
+}
+
+impl QueryDeviceSpecificFileRequest {
+    /// Parses the payload.
+    pub fn parse(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(bytes);
+        Ok(QueryDeviceSpecificFileRequest {
+            node: ExtendedAddress(r.u64_le()?),
+            image: ImageId::read(&mut r)?,
+            stack_version: r.u16_le()?,
+        })
+    }
+
+    /// Encodes the payload.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        w.u64_le(self.node.0)?;
+        self.image.write(w)?;
+        w.u16_le(self.stack_version)
+    }
+}
+
+/// Query Device Specific File Response (§11.13.11): the same layout as
+/// the Query Next Image Response.
+pub type QueryDeviceSpecificFileResponse = QueryNextImageResponse;
+
 /// Image Block Request (§11.13.6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -994,7 +1031,19 @@ pub struct Client {
     pub not_before: Instant,
     /// Downloaded file version (kept after completion).
     pub downloaded_version: Option<u32>,
+    /// Told to wait indefinitely: when the server is next asked when to
+    /// upgrade (§11.16, at most once every 60 minutes).
+    pub requery_at: Option<Instant>,
+    /// Unanswered wait-forever queries.
+    pub requeries: u8,
 }
+
+/// Period of the wait-forever queries (§11.16: no more often than once
+/// every 60 minutes).
+pub const REQUERY_PERIOD: Duration = Duration::from_secs(60 * 60);
+/// Unanswered queries after which the client may apply the upgrade on
+/// its own (§11.16).
+pub const REQUERY_RETRIES: u8 = 3;
 
 impl Client {
     /// A client in the Normal state.
@@ -1005,6 +1054,17 @@ impl Client {
             minimum_block_period: 0,
             not_before: Instant::from_millis(0),
             downloaded_version: None,
+            requery_at: None,
+            requeries: 0,
+        }
+    }
+
+    /// The earliest instant [`Client::next`] has something to do.
+    pub const fn next_deadline(&self) -> Option<Instant> {
+        match self.phase {
+            Phase::Downloading { .. } => Some(self.not_before),
+            Phase::WaitingToUpgrade { at: None, .. } => self.requery_at,
+            _ => None,
         }
     }
 
@@ -1192,6 +1252,23 @@ impl Client {
                 ClientAction::Verify { image, size }
             }
             Phase::Downloading { .. } => self.block_request(now),
+            // §11.16: told to wait indefinitely, the client asks again
+            // every hour; after three unanswered queries it may upgrade.
+            Phase::WaitingToUpgrade { image, at: None }
+                if self.requery_at.is_some_and(|t| now.has_reached(t)) =>
+            {
+                if self.requeries >= REQUERY_RETRIES {
+                    self.requery_at = None;
+                    self.requeries = 0;
+                    return ClientAction::Upgrade { image, at: None };
+                }
+                self.requeries = self.requeries.saturating_add(1);
+                self.requery_at = Some(now + REQUERY_PERIOD);
+                ClientAction::UpgradeEnd(UpgradeEndRequest {
+                    status: ZclStatus::Success,
+                    image,
+                })
+            }
             _ => ClientAction::None,
         }
     }
@@ -1244,6 +1321,10 @@ impl Client {
         let at = wait_seconds(r.current_time, r.upgrade_time)
             .map(|s| now + Duration::from_secs(u64::from(s)));
         self.phase = Phase::WaitingToUpgrade { image, at };
+        self.requeries = 0;
+        self.requery_at = (at.is_none()
+            && self.config.activation_policy != activation_policy::OUT_OF_BAND)
+            .then(|| now + REQUERY_PERIOD);
         ClientAction::Upgrade { image, at }
     }
 
@@ -1413,12 +1494,7 @@ pub fn block_response<'a>(
     max_block: u8,
     buf: &'a mut [u8],
 ) -> ImageBlockResponse<'a> {
-    let Some(img) = images.iter().find(|i| {
-        let h = i.header();
-        h.manufacturer_code == req.image.manufacturer_code
-            && h.image_type == req.image.image_type
-            && h.file_version == req.image.file_version
-    }) else {
+    let Some(img) = find_image(images, req.image) else {
         return ImageBlockResponse::Abort;
     };
     let want = usize::from(req.max_data_size.min(max_block)).min(buf.len());
@@ -1428,6 +1504,127 @@ pub fn block_response<'a>(
         file_offset: req.file_offset,
         data: buf.get(..n).unwrap_or(&[]),
     }
+}
+
+/// One step of serving an Image Page Request.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PageStep<'a> {
+    /// Send this Image Block Response now, without APS acknowledgement
+    /// (§11.13.7.4), with a fresh ZCL sequence number.
+    Send(ImageBlockResponse<'a>),
+    /// Nothing before this instant (the response spacing).
+    Wait(Instant),
+    /// The page is served.
+    Done,
+}
+
+/// Serving one Image Page Request (§11.13.7.4): the blocks of the page
+/// in order, each at least the response spacing after the previous
+/// one. The host calls [`PageService::next`] whenever it is ready to
+/// send; the image is looked up on every step so it may disappear
+/// (ABORT) mid-page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PageService {
+    request: ImagePageRequest,
+    /// Bytes of the page already sent.
+    sent: u32,
+    /// Earliest next block.
+    not_before: Instant,
+    done: bool,
+}
+
+impl PageService {
+    /// Starts serving `request`; MALFORMED_COMMAND for an empty page or
+    /// block size (§11.13.7.5.1), NO_IMAGE_AVAILABLE when no image
+    /// matches (§11.13.7.5.2).
+    pub fn new(
+        request: &ImagePageRequest,
+        images: &[&dyn ImageSource],
+        now: Instant,
+    ) -> Result<Self, ZclStatus> {
+        if request.page_size == 0 || request.max_data_size == 0 {
+            return Err(ZclStatus::MalformedCommand);
+        }
+        let Some(h) = find_image(images, request.image).map(ImageSource::header) else {
+            return Err(ZclStatus::NoImageAvailable);
+        };
+        if request.file_offset >= h.total_size {
+            return Err(ZclStatus::MalformedCommand);
+        }
+        Ok(PageService {
+            request: *request,
+            sent: 0,
+            not_before: now,
+            done: false,
+        })
+    }
+
+    /// The request being served.
+    pub const fn request(&self) -> &ImagePageRequest {
+        &self.request
+    }
+
+    /// When the next block may go out (`None` once the page is served).
+    pub const fn deadline(&self) -> Option<Instant> {
+        if self.done {
+            None
+        } else {
+            Some(self.not_before)
+        }
+    }
+
+    /// The next block (at most `max_block` and the client's maximum, and
+    /// never past the page); `buf` receives the data.
+    pub fn next<'a>(
+        &mut self,
+        now: Instant,
+        images: &[&dyn ImageSource],
+        max_block: u8,
+        buf: &'a mut [u8],
+    ) -> PageStep<'a> {
+        if self.done {
+            return PageStep::Done;
+        }
+        if !now.has_reached(self.not_before) {
+            return PageStep::Wait(self.not_before);
+        }
+        let Some(img) = find_image(images, self.request.image) else {
+            self.done = true;
+            return PageStep::Send(ImageBlockResponse::Abort);
+        };
+        let offset = self.request.file_offset.saturating_add(self.sent);
+        let remaining_page = u32::from(self.request.page_size).saturating_sub(self.sent);
+        let want = u32::from(self.request.max_data_size.min(max_block))
+            .min(remaining_page)
+            .min(u32::try_from(buf.len()).unwrap_or(u32::MAX));
+        let want = usize::try_from(want).unwrap_or(0);
+        let n = img.read(offset, buf.get_mut(..want).unwrap_or(&mut []));
+        if n == 0 {
+            self.done = true;
+            return PageStep::Done;
+        }
+        let n32 = u32::try_from(n).unwrap_or(u32::MAX);
+        self.sent = self.sent.saturating_add(n32);
+        self.not_before = now + Duration::from_millis(u64::from(self.request.response_spacing));
+        let total = img.header().total_size;
+        if self.sent >= u32::from(self.request.page_size) || offset.saturating_add(n32) >= total {
+            self.done = true;
+        }
+        PageStep::Send(ImageBlockResponse::Success {
+            image: self.request.image,
+            file_offset: offset,
+            data: buf.get(..n).unwrap_or(&[]),
+        })
+    }
+}
+
+fn find_image<'a>(images: &[&'a dyn ImageSource], id: ImageId) -> Option<&'a dyn ImageSource> {
+    images.iter().copied().find(|i| {
+        let h = i.header();
+        h.manufacturer_code == id.manufacturer_code
+            && h.image_type == id.image_type
+            && h.file_version == id.file_version
+    })
 }
 
 #[cfg(test)]
@@ -1670,5 +1867,208 @@ mod tests {
             c3.upgrade_status(),
             upgrade_status::WAITING_FOR_EXTERNAL_EVENT
         );
+    }
+
+    #[test]
+    fn page_request_is_served_block_by_block() {
+        let img = image();
+        let images: [&dyn ImageSource; 1] = [&img];
+        let id = ImageId {
+            manufacturer_code: 0x1234,
+            image_type: 1,
+            file_version: 0x0200_0000,
+        };
+        let t0 = Instant::from_millis(0);
+        let req = ImagePageRequest {
+            image: id,
+            file_offset: 100,
+            max_data_size: 24,
+            page_size: 50,
+            response_spacing: 200,
+            node: None,
+        };
+        let mut page = PageService::new(&req, &images, t0).unwrap();
+        let mut buf = [0u8; 64];
+        // 24 + 24 + 2 = the page, each block after the spacing.
+        assert!(matches!(
+            page.next(t0, &images, 40, &mut buf),
+            PageStep::Send(ImageBlockResponse::Success {
+                file_offset: 100,
+                data,
+                ..
+            }) if data.len() == 24
+        ));
+        assert_eq!(
+            page.next(t0, &images, 40, &mut buf),
+            PageStep::Wait(t0 + Duration::from_millis(200))
+        );
+        assert_eq!(page.deadline(), Some(t0 + Duration::from_millis(200)));
+        let t1 = t0 + Duration::from_millis(200);
+        assert!(matches!(
+            page.next(t1, &images, 40, &mut buf),
+            PageStep::Send(ImageBlockResponse::Success {
+                file_offset: 124,
+                data,
+                ..
+            }) if data.len() == 24
+        ));
+        let t2 = t1 + Duration::from_millis(200);
+        // The server's own limit caps a block; the page ends at 50.
+        assert!(matches!(
+            page.next(t2, &images, 40, &mut buf),
+            PageStep::Send(ImageBlockResponse::Success {
+                file_offset: 148,
+                data,
+                ..
+            }) if data.len() == 2
+        ));
+        assert_eq!(page.next(t2, &images, 40, &mut buf), PageStep::Done);
+        assert_eq!(page.deadline(), None);
+        // A page reaching the end of the file stops there.
+        let tail = ImagePageRequest {
+            file_offset: 150,
+            page_size: 100,
+            ..req
+        };
+        let mut page = PageService::new(&tail, &images, t0).unwrap();
+        assert!(matches!(
+            page.next(t0, &images, 40, &mut buf),
+            PageStep::Send(ImageBlockResponse::Success { data, .. }) if data.len() == 16
+        ));
+        assert_eq!(page.next(t0, &images, 40, &mut buf), PageStep::Done);
+        // Errors: past the end, empty page, unknown image.
+        let past = ImagePageRequest {
+            file_offset: 166,
+            ..req
+        };
+        assert_eq!(
+            PageService::new(&past, &images, t0).err(),
+            Some(ZclStatus::MalformedCommand)
+        );
+        let empty = ImagePageRequest {
+            page_size: 0,
+            ..req
+        };
+        assert_eq!(
+            PageService::new(&empty, &images, t0).err(),
+            Some(ZclStatus::MalformedCommand)
+        );
+        let unknown = ImagePageRequest {
+            image: ImageId {
+                file_version: 0x0300_0000,
+                ..id
+            },
+            ..req
+        };
+        assert_eq!(
+            PageService::new(&unknown, &images, t0).err(),
+            Some(ZclStatus::NoImageAvailable)
+        );
+        // An image that disappears mid-page aborts the download.
+        let mut page = PageService::new(&req, &images, t0).unwrap();
+        assert_eq!(
+            page.next(t0, &[], 40, &mut buf),
+            PageStep::Send(ImageBlockResponse::Abort)
+        );
+    }
+
+    #[test]
+    fn wait_forever_is_requeried_hourly_then_applied() {
+        let id = ImageId {
+            manufacturer_code: 0x1234,
+            image_type: 1,
+            file_version: 0x0200_0000,
+        };
+        let mut client = Client::new(ClientConfig {
+            manufacturer_code: 0x1234,
+            image_type: 1,
+            file_version: 0x0100_0000,
+            hardware_version: None,
+            max_data_size: 48,
+            activation_policy: activation_policy::SERVER,
+        });
+        client.phase = Phase::Ending { image: id };
+        let t0 = Instant::from_millis(0);
+        let forever = UpgradeEndResponse {
+            image: id,
+            current_time: 0,
+            upgrade_time: WILDCARD_U32,
+        };
+        assert_eq!(
+            client.on_upgrade_end_response(&forever, t0),
+            ClientAction::Upgrade {
+                image: id,
+                at: None
+            }
+        );
+        assert_eq!(client.next_deadline(), Some(t0 + REQUERY_PERIOD));
+        assert_eq!(client.next(t0), ClientAction::None);
+        // Three hourly queries go unanswered, then the client may apply.
+        let mut t = t0;
+        for _ in 0..REQUERY_RETRIES {
+            t += REQUERY_PERIOD;
+            assert_eq!(
+                client.next(t),
+                ClientAction::UpgradeEnd(UpgradeEndRequest {
+                    status: ZclStatus::Success,
+                    image: id
+                })
+            );
+        }
+        t += REQUERY_PERIOD;
+        assert_eq!(
+            client.next(t),
+            ClientAction::Upgrade {
+                image: id,
+                at: None
+            }
+        );
+        assert_eq!(client.next_deadline(), None);
+        // An answer resets the count; a definite time stops the queries.
+        client.on_upgrade_end_response(&forever, t);
+        assert_eq!(client.requeries, 0);
+        let soon = UpgradeEndResponse {
+            image: id,
+            current_time: 0,
+            upgrade_time: 30,
+        };
+        assert_eq!(
+            client.on_upgrade_end_response(&soon, t),
+            ClientAction::Upgrade {
+                image: id,
+                at: Some(t + Duration::from_secs(30))
+            }
+        );
+        assert_eq!(client.next_deadline(), None);
+        assert_eq!(client.next(t + REQUERY_PERIOD), ClientAction::None);
+    }
+
+    #[test]
+    fn device_specific_file_request_round_trips() {
+        let req = QueryDeviceSpecificFileRequest {
+            node: ExtendedAddress(0x0011_2233_4455_6677),
+            image: ImageId {
+                manufacturer_code: 0x1234,
+                image_type: 0xffc1,
+                file_version: 0x0000_0001,
+            },
+            stack_version: 2,
+        };
+        let mut buf = [0u8; 32];
+        let mut w = Writer::new(&mut buf);
+        req.encode(&mut w).unwrap();
+        let n = w.position();
+        assert_eq!(
+            &buf[..n],
+            &[
+                0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, 0x34, 0x12, 0xc1, 0xff, 1, 0, 0, 0,
+                2, 0
+            ]
+        );
+        assert_eq!(
+            QueryDeviceSpecificFileRequest::parse(&buf[..n]).unwrap(),
+            req
+        );
+        assert!(QueryDeviceSpecificFileRequest::parse(&buf[..n - 1]).is_err());
     }
 }

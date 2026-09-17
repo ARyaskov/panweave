@@ -467,6 +467,29 @@ pub enum StackEvent {
         /// Endpoint.
         endpoint: Endpoint,
     },
+    /// [`Stack::discover_ota_server`] found the upgrade server of the
+    /// OTA client on `endpoint` (ZCL8 §11.8) and stored its IEEE address
+    /// in `UpgradeServerID`; `server_endpoint` is 0 when the server was
+    /// preprogrammed (only its address was resolved).
+    OtaServer {
+        /// The client endpoint.
+        endpoint: Endpoint,
+        /// The server's network address.
+        server: ShortAddress,
+        /// The server's OTA endpoint.
+        server_endpoint: Endpoint,
+        /// The server's IEEE address.
+        ieee: ExtendedAddress,
+        /// An application link key with the server was requested from
+        /// the Trust Center (the server is not the Trust Center and no
+        /// key is held); it arrives as [`StackEvent::ApplicationLinkKey`].
+        key_requested: bool,
+    },
+    /// No upgrade server answered [`Stack::discover_ota_server`] in time.
+    OtaServerNotFound {
+        /// The client endpoint.
+        endpoint: Endpoint,
+    },
     /// The Color Control engine moved (ZCL8 §5.2): `mode` is the
     /// `EnhancedColorMode`, `a` / `b` the pair it names (enhanced hue and
     /// saturation, X and Y, or mireds and 0).
@@ -636,6 +659,8 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// A factory reset waits for the leave to complete before clearing
     /// persistent data (BDB 3.1 §13.2).
     pub(crate) factory_reset_pending: bool,
+    /// OTA upgrade server discovery in progress (ZCL8 §11.8).
+    pub(crate) ota_discovery: Option<crate::ota::OtaDiscovery>,
     /// The On-Network TCLK Update procedure awaits the Trust Center's
     /// Node_Desc_rsp until this deadline (BDB 3.1 §10.2.4).
     pub(crate) tclk_update: Option<Instant>,
@@ -770,6 +795,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             key_update: None,
             factory_reset_pending: false,
             tclk_update: None,
+            ota_discovery: None,
             parent_annce: None,
             parent_link_failures: 0,
             last_rejoin_attempt: None,
@@ -1179,6 +1205,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.push_event(StackEvent::LinkKeyUpdateFailed);
         }
         self.poll_parent_annce(now);
+        self.poll_ota_discovery(now);
         self.poll_parent_loss_rejoin(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
@@ -1251,6 +1278,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.keep_alive.deadline(),
             self.key_update.map(|(_, at)| at),
             self.tclk_update,
+            self.ota_discovery.and_then(|d| d.deadline()),
             self.parent_annce.map(|(at, _)| at),
             self.rejoin_due,
             #[cfg(feature = "green-power")]

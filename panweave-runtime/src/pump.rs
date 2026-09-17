@@ -281,8 +281,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     let keep_alive_match = cluster == cluster::response_of(cluster::MATCH_DESC_REQ)
                         && self.on_keep_alive_match(seq, data);
+                    let ota = self.on_ota_discovery_response(src, seq, cluster, data);
                     if !keep_alive_match
                         && !keep_alive_desc
+                        && !ota
                         && let Ok(data) = Vec::from_slice(data)
                     {
                         self.push_event(StackEvent::Zdp(ZdpData {

@@ -34,6 +34,7 @@ mod dlk;
 #[cfg(feature = "green-power")]
 pub mod green_power;
 mod keep_alive;
+pub mod ota;
 mod persist;
 mod provision;
 mod pump;
