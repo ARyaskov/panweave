@@ -6,7 +6,7 @@ use panweave_aps::command::{RequestKeyType, UpdateDeviceStatus};
 use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{
     ApsAction, ApsEvent, DataIndication, DataRequest, Delivery, Destination, DeviceState, KeyRoute,
-    TransportedKey, TxOptions,
+    PersistItem, TransportedKey, TxOptions,
 };
 use panweave_codec::Encode;
 use panweave_mac::frame::{FrameType as MacFrameType, MacAddress};
@@ -185,8 +185,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 aps,
                 policy: &config.trust_center_policy,
                 is_trust_center: is_tc,
+                bindings_changed: false,
             };
             let out = zdo.on_data(&borrowed, &mut ctx);
+            if ctx.bindings_changed {
+                let _ = self.persist_bindings();
+            }
             match out {
                 Some(ZdoIndication::Response {
                     src,
@@ -244,7 +248,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // MAC → NWK
+    // MAC â†’ NWK
     // ---------------------------------------------------------------
 
     fn pump_mac_events(&mut self) -> bool {
@@ -293,7 +297,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // NWK → MAC / storage
+    // NWK â†’ MAC / storage
     // ---------------------------------------------------------------
 
     fn pump_nwk_actions(&mut self) -> bool {
@@ -393,8 +397,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                 }
                 NwkAction::Persist => {
-                    // TODO(PW-STO-001): serialize the NIB and network keys.
-                    // Spec: R23.2 §3.6.1.4 (persistent data), §4.3.4.
+                    // R23.2 §3.6.9 / §4.3.4: NIB items, end-device
+                    // children and network keys are committed whenever
+                    // the NWK layer flags a change.
+                    let _ = self.persist_nib();
+                    let _ = self.persist_children();
+                    let _ = self.persist_network_keys();
                 }
                 NwkAction::CounterReservation(r) => {
                     let ok = self
@@ -414,7 +422,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // NWK events → stack logic
+    // NWK events â†’ stack logic
     // ---------------------------------------------------------------
 
     fn pump_nwk_events(&mut self) -> bool {
@@ -702,7 +710,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // APS → NWK / storage
+    // APS â†’ NWK / storage
     // ---------------------------------------------------------------
 
     fn pump_aps_actions(&mut self) -> bool {
@@ -747,9 +755,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.aps.commit_counter_reservation(partner, reservation);
                     }
                 }
-                ApsAction::Persist(_) => {
-                    // TODO(PW-STO-002): serialize link keys, bindings, groups
-                    // and AIB. Spec: R23.2 §2.2.8.1, §4.4.12.
+                ApsAction::Persist(item) => {
+                    // R23.2 §2.2.8.1, §4.4.12.
+                    let _ = match item {
+                        PersistItem::LinkKeys | PersistItem::Aib => self.persist_link_keys(),
+                        PersistItem::Bindings => self.persist_bindings(),
+                        PersistItem::Groups => self.persist_groups(),
+                    };
                 }
             }
         }
@@ -757,7 +769,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // APS events → stack logic
+    // APS events â†’ stack logic
     // ---------------------------------------------------------------
 
     fn pump_aps_events(&mut self) -> bool {
@@ -849,7 +861,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     // ---------------------------------------------------------------
-    // ZDO / ZCL → APS
+    // ZDO / ZCL â†’ APS
     // ---------------------------------------------------------------
 
     fn send_aps(

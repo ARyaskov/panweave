@@ -29,9 +29,11 @@
 extern crate alloc;
 
 mod context;
+mod persist;
 mod pump;
 mod stack;
 
+pub use persist::Restored;
 pub use stack::{
     EndpointError, JoinMode, Stack, StackAps, StackConfig, StackEvent, StackNwk, StackZcl,
     StackZdo, ZclFrame, ZdpData,

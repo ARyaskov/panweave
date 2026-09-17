@@ -39,6 +39,8 @@ pub enum Kind {
     NetworkKeys,
     /// Scalar NIB attributes needed to rejoin after a reset.
     Nib,
+    /// End-device children of a router (R23.2 §3.6.9, §3.6.10.7).
+    Children,
     /// A link-key entry; `id` is the partner IEEE address.
     LinkKey,
     /// Outgoing APS frame counter reservation of a link key; `id` is the

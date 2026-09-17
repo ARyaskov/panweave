@@ -65,6 +65,8 @@ pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: Rng> {
     pub aps: &'a mut StackAps<C>,
     pub policy: &'a TrustCenterPolicy,
     pub is_trust_center: bool,
+    /// Set when the binding table changed (runtime persists it).
+    pub bindings_changed: bool,
 }
 
 fn relationship_of(r: Relationship) -> NeighborRelationship {
@@ -187,7 +189,10 @@ impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
             cluster: req.cluster,
             destination: req.destination,
         }) {
-            Ok(()) => ZdpStatus::Success,
+            Ok(()) => {
+                self.bindings_changed = true;
+                ZdpStatus::Success
+            }
             Err(ApsStatus::TableFull) => ZdpStatus::InsufficientSpace,
             Err(_) => ZdpStatus::InvalidRequestType,
         }
@@ -199,7 +204,10 @@ impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
             cluster: req.cluster,
             destination: req.destination,
         }) {
-            Ok(()) => ZdpStatus::Success,
+            Ok(()) => {
+                self.bindings_changed = true;
+                ZdpStatus::Success
+            }
             Err(ApsStatus::InvalidBinding) => ZdpStatus::NoEntry,
             Err(_) => ZdpStatus::InvalidRequestType,
         }
@@ -211,6 +219,7 @@ impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
         } else {
             let _ = self.aps.bindings.remove_device(device);
         }
+        self.bindings_changed = true;
     }
 
     fn permit_joining(&mut self, duration: u8, from_trust_center: bool) -> ZdpStatus {

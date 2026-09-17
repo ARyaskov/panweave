@@ -62,9 +62,9 @@ id = "PW-BDB-POL-006"
 section = "§6.7"
 summary = "Persistent data set retained across power cycles"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-storage"
-tests = []
+status = "implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots"]
 
 [[requirement]]
 id = "PW-BDB-POL-007"
@@ -98,10 +98,10 @@ id = "PW-BDB-INIT-001"
 section = "§7.1"
 summary = "Initialization procedure: restore persistent data, if on a network attempt rejoin per §10.1 (routers resume, end devices rejoin), otherwise wait for commissioning"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::init"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots", "factory_reset_erases_network_state"]
+notes = "Stack::restore + Stack::resume: routers and the coordinator resume on their network and re-announce, end devices perform a secured rejoin (falling back to a Trust Center rejoin is left to the application via JoinMode::TrustCenterRejoin); the BDB commissioning-mode dispatch that follows initialization is part of the pending panweave-bdb crate."
 [[requirement]]
 id = "PW-BDB-INIT-002"
 section = "§7.2"
@@ -233,10 +233,10 @@ id = "PW-BDB-RESET-001"
 section = "§13.1–§13.3"
 summary = "Reset to factory new via Basic cluster Reset to Factory Defaults, touchlink reset, or local action: leave network, clear persistent data"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::reset"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::persist"
+tests = ["factory_reset_erases_network_state"]
+notes = "Stack::erase_persisted clears all network state records; the Basic cluster Reset to Factory Defaults command and touchlink reset are not wired."
 [[requirement]]
 id = "PW-BDB-RESET-002"
 section = "§13.4, §13.5"

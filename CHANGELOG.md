@@ -32,3 +32,10 @@ Keep a Changelog; versions follow SemVer.
   driver; the Milestone 1 end-to-end test.
 * Milestone 2: router + sleepy end device (polling, tunnelled key, routed
   reports, rejoin after router failure); network-wide permit joining.
+* Persistence and warm start: NIB, network keys, end-device children,
+  link keys / AIB, bindings and groups are stored through the `Storage`
+  trait on layer triggers; `Stack::restore` / `Stack::resume` rebuild a
+  device after a reset (routers resume, end devices rejoin securely) with
+  frame counters continuing past the last persisted reservation;
+  `Stack::erase_persisted` for factory reset. The APS counter is seeded
+  from the RNG on boot (ADR-0006).

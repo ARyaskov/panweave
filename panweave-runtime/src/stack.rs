@@ -274,7 +274,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let mut nib = Nib::new(config.role, config.ieee);
         nib.rx_on_when_idle = !config.sleepy;
         nib.capability_information = config.capability();
-        let nwk = Nwk::new(nib, NwkConfig::default(), rng);
+        let mut nwk = Nwk::new(nib, NwkConfig::default(), rng);
         let is_tc = config.role == LogicalDeviceType::Coordinator && !config.distributed;
         let mut aps = Aps::new(
             config.ieee,
@@ -283,6 +283,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ..ApsConfig::default()
             },
         );
+        aps.seed_counter(nwk.rng().next_u8());
         if is_tc {
             aps.aib.trust_center_address = config.ieee;
         } else {

@@ -37,6 +37,11 @@ with indirect delivery, the network key tunnelled through the parent,
 bindings and attribute reports across the router, and a secured rejoin to
 the coordinator after the router fails.
 
+Persistence: `panweave-runtime/tests/warm_start.rs` reboots the end
+device and the coordinator from their persisted storage — addresses,
+keys and children survive, frame counters never roll back, the end device
+rejoins securely and the coordinator resumes (`docs/storage-model.md`).
+
 ## Layout
 
 See `docs/architecture.md`. Quick tour:

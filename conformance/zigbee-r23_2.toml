@@ -288,10 +288,10 @@ id = "PW-R23-NWK-031"
 section = "§3.6.1.12"
 summary = "Reset of NWK layer: warm reset preserves persisted NIB attributes; cold reset clears tables"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-nwk::layer"
-tests = ["secured_rejoin_after_reboot_keeps_address"]
-notes = "Warm start restores identity/keys; a cold reset is a fresh layer instance."
+status = "implemented"
+module = "panweave-runtime::persist"
+tests = ["secured_rejoin_after_reboot_keeps_address", "end_device_and_coordinator_survive_reboots"]
+notes = "Stack::restore performs the warm start (NIB, keys, children restored; frame counters continue after the last persisted reservation); a cold reset is a fresh stack over erased storage (Stack::erase_persisted)."
 [[requirement]]
 id = "PW-R23-NWK-032"
 section = "§3.6.1.7"
@@ -454,10 +454,10 @@ id = "PW-R23-NWK-061"
 section = "§3.6.9"
 summary = "Persistent NIB data set survives reset"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-storage"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots"]
+notes = "PAN ID, extended PAN ID, network address, nwkUpdateId, parent address/IEEE, depth, parent information, stack profile, network manager and the end-device children (IEEE, short, End Device Configuration, Device Timeout) are stored on every NWK persist trigger; the MAC interface table is not modelled (single interface)."
 [[requirement]]
 id = "PW-R23-NWK-062"
 section = "§3.6.10"
@@ -603,6 +603,36 @@ level = "optional"
 status = "not-implemented"
 module = "panweave-aps::interpan"
 tests = []
+
+[[requirement]]
+id = "PW-R23-APS-011"
+section = "§2.2.8.1"
+summary = "APS persistent data: binding table, group table, designated coordinator, channel mask list, use extended PAN ID, use insecure join, descriptors, network manager address survive reset"
+level = "mandatory"
+status = "partially-implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots"]
+notes = "Binding and group tables and the network manager address are persisted and restored; descriptors are compile-time application data re-registered on boot; apsDesignatedCoordinator, apsChannelMaskList, apsUseExtendedPANID and apsUseInsecureJoin are StackConfig values supplied by the application rather than stored."
+
+[[requirement]]
+id = "PW-R23-SEC-032"
+section = "§4.4.12.1"
+summary = "Persistence of security-related AIB values: apsTrustCenterAddress and every apsDeviceKeyPairSet entry are stored across reboot; IncomingFrameCounter, Timeout and VerifiedFrameCounter are not persisted"
+level = "mandatory"
+status = "implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots"]
+notes = "The outgoing frame counter of each entry is restored from its last persisted reservation bound so that values are never reused; the incoming counter is stored for freshness after reboot but reset by the peer's key verification as usual. The record set is indexed from the AIB record because the Storage trait has no enumeration."
+
+[[requirement]]
+id = "PW-R23-NWK-068"
+section = "§3.6.10.7, §3.6.10.8"
+summary = "Parent routers persist end-device neighbor entries and give every child a full timeout period after reboot; end devices should send a keep-alive immediately after reboot"
+level = "mandatory"
+status = "implemented"
+module = "panweave-runtime::persist"
+tests = ["end_device_and_coordinator_survive_reboots"]
+notes = "Restored children start with timeout counter = device timeout. A rebooted end device performs a secured rejoin, which doubles as the initial keep-alive."
 
 # ---------------------------------------------------------------- Application framework / descriptors
 

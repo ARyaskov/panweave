@@ -639,6 +639,15 @@ impl<
         }
     }
 
+    /// Sets the next APS counter value. R23.2 §2.2.5.1.7 only requires
+    /// the counter to increment per transmission; starting at a random
+    /// value after a reset keeps a rebooted device's first frames from
+    /// colliding with entries still live in its peers' duplicate
+    /// rejection tables (§2.2.8.4.2).
+    pub fn seed_counter(&mut self, initial: u8) {
+        self.counter = initial;
+    }
+
     pub(crate) fn next_counter(&mut self) -> u8 {
         let c = self.counter;
         self.counter = self.counter.wrapping_add(1);
