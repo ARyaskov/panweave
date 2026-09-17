@@ -116,10 +116,10 @@ id = "PW-BDB-INIT-003"
 section = "§7.3"
 summary = "Ensuring TC connectivity via keep-alive cluster, poll control, or node descriptor polling"
 level = "conditional"
-status = "not-implemented"
-module = "panweave-bdb::keepalive"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::keep_alive"
+tests = ["router_keep_alive_detects_a_vanished_trust_center", "poll_control_check_in_puts_the_sleepy_device_into_fast_poll_mode"]
+notes = "The Keep-Alive client (Match_Desc discovery of the Trust Center's cluster 0x0025, APS-secured attribute reads at the advertised base/jitter pacing, TrustCenterLost after three failures) and the Poll Control server / client are implemented in panweave-runtime; the Node Descriptor polling fallback of §7.3 for Trust Centers without either cluster is not (TODO(PW-BDB-TC-CONNECTIVITY))."
 [[requirement]]
 id = "PW-BDB-INIT-004"
 section = "§7.4"
@@ -161,19 +161,19 @@ id = "PW-BDB-STEER-003"
 section = "§9.4, §9.5"
 summary = "Join using key negotiation (DLK) with Network Commissioning Request and Security_Start_Key_Negotiation"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::steering::dlk_join"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::dlk"
+tests = ["anonymous_key_negotiation_join_through_router", "install_code_authenticated_negotiation", "wrong_passphrase_fails_and_restores_the_entry"]
+notes = "Joining with a Network Commissioning Request and the Security_Start_Key_Negotiation / Security_Key_Negotiation exchanges, anonymous (well-known passphrase) or install-code authenticated, through a router parent; failures restore the previous key-pair entry."
 [[requirement]]
 id = "PW-BDB-STEER-004"
 section = "§9.6"
 summary = "Certificate-based TCLK exchange (CBKE) when supported"
 level = "optional"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::key_establishment"
-tests = []
-
+tests = ["cbke_over_the_key_establishment_cluster_installs_a_working_link_key"]
+notes = "The Key Establishment cluster and CBKE machines are in panweave-smart-energy and the simulator test installs the derived Trust Center link key on both sides; the curve arithmetic is host-supplied (ADR-0012) and the runtime does not start the exchange by itself after joining."
 [[requirement]]
 id = "PW-BDB-STEER-005"
 section = "§9.7"
@@ -197,10 +197,10 @@ id = "PW-BDB-STEER-007"
 section = "§9.9"
 summary = "Device interview procedure (R23): TC retrieves descriptors/configuration before authorising; joiner responds; timeouts"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::interview"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-runtime::dlk"
+tests = ["anonymous_key_negotiation_join_through_router"]
+notes = "Authorization is withheld until the negotiated key is verified (R23.2 §4.7.3.3); the Trust Center's optional descriptor / configuration retrieval between verification and the network key is not exposed as a hook (see PW-R23-SEC-031, TODO(PW-INTERVIEW))."
 [[requirement]]
 id = "PW-BDB-REJOIN-001"
 section = "§10.1"
@@ -242,6 +242,7 @@ id = "PW-BDB-RESET-002"
 section = "§13.4, §13.5"
 summary = "Removing a node: TC uses Mgmt_Leave / Remove Device on centralized networks; any router on distributed"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-bdb::reset"
-tests = []
+status = "partially-implemented"
+module = "panweave-runtime::stack"
+tests = ["trust_center_removes_a_device_through_its_parent"]
+notes = "Stack::remove_device (Trust Center only) sends a NWK Leave to a child or an APS Remove Device to the device's parent (R23.2 §4.6.3.6.1); a Mgmt_Leave_req codec exists in panweave-zdo but no convenience for removing a node with it, and the distributed-network case (any router issuing the leave) is not wrapped (TODO(PW-BDB-REMOVE-NODE))."
