@@ -12,10 +12,10 @@ Panweave is an independent implementation; this table records the maintainers' o
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
-| SE1.4a | 18 | 0 | 1 | 17 | 0 | 0 | 0 |
+| SE1.4a | 18 | 0 | 3 | 14 | 0 | 0 | 1 |
 | ZCL8 | 36 | 17 | 3 | 16 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 145 | 36 | 53 | 3 | 0 | 0 |
+| **All** | 237 | 145 | 38 | 50 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -91,11 +91,11 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Id | Section | Level | Status | Module | Summary | Tests | Notes |
 |---|---|---|---|---|---|---|---|
-| PW-SE-PROF-001 | §5.2, §5.3 | mandatory | not-implemented | `panweave-smart-energy::profile` | Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters) | — |  |
+| PW-SE-PROF-001 | §5.2, §5.3 | mandatory | partially-implemented | `panweave-smart-energy::profile` | Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters) | — | Table 5-1 startup, Table 5-2 join, Table 5-4 end-device, Table 5-6 concentrator and Table 5-8 fragmentation values are constants in panweave-smart-energy::profile; applying them to a StackConfig (a Smart Energy preset) and the binding parameters of §5.3.9 are not done (TODO(PW-SE-PROFILE)). |
 | PW-SE-SEC-001 | §5.4.1–§5.4.3 | mandatory | not-implemented | `panweave-smart-energy::security` | Joining with preinstalled TCLKs (install codes), rejoin policy, leaving | — |  |
 | PW-SE-SEC-002 | §5.4.4, §5.4.5 | mandatory | not-implemented | `panweave-smart-energy::security` | Network key and link key update policies; key retirement | — |  |
-| PW-SE-SEC-003 | §5.4.6 | mandatory | not-implemented | `panweave-smart-energy::security::policy` | Cluster usage of security keys: APS link-key encryption mandatory for listed clusters | — |  |
-| PW-SE-SEC-004 | §5.4.7, Annex C | mandatory | not-implemented | `panweave-smart-energy::key_establishment` | Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors | — | Requires ECMQV over binary curves; no vetted no_std Rust implementation exists. Tracked as blocked pending a reviewed dependency or in-tree implementation. |
+| PW-SE-SEC-003 | §5.4.6 | mandatory | requires-clarification | `panweave-smart-energy` | Cluster usage of security keys: APS link-key encryption mandatory for listed clusters | `key_policy` | link_key_required encodes Table 5-12 for every readable row; the rows Power Configuration, Key Establishment and Keep-Alive are unreadable in the source extraction and follow ADR-0012 (all three treated as exempt, Key Establishment necessarily so). Enforcement (Default Response FAILURE for unsecured frames of clusters that require the link key) is not wired into the ZCL dispatcher yet (TODO(PW-SE-KEYPOLICY)). |
+| PW-SE-SEC-004 | §5.4.7, Annex C | mandatory | partially-implemented | `panweave-smart-energy::key_establishment` | Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors | `annex_c5_suite1_transform`, `annex_c6_suite2_transform`, `annex_c5_exchange_between_machines` | Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite bitmap and suite negotiation), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012); binding the machines to a ZCL endpoint and the Trust Center link-key update after a successful exchange are not done (TODO(PW-SE-CBKE-ENDPOINT)). |
 | PW-SE-SEC-005 | §5.4.8, §5.13 | optional | not-implemented | `panweave-smart-energy::security` | Trust Center swap-out, keep-alive, coexistence rules | — |  |
 | PW-SE-COMM-001 | §5.5 | mandatory | not-implemented | `panweave-smart-energy::commissioning` | Commissioning: formation, commissioning modes, service discovery and binding | — |  |
 | PW-SE-DEV-001 | §6.3 | mandatory | not-implemented | `panweave-smart-energy::devices` | SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications) | — |  |

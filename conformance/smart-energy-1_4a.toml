@@ -8,10 +8,10 @@ id = "PW-SE-PROF-001"
 section = "§5.2, §5.3"
 summary = "Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters)"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::profile"
 tests = []
-
+notes = "Table 5-1 startup, Table 5-2 join, Table 5-4 end-device, Table 5-6 concentrator and Table 5-8 fragmentation values are constants in panweave-smart-energy::profile; applying them to a StackConfig (a Smart Energy preset) and the binding parameters of §5.3.9 are not done (TODO(PW-SE-PROFILE))."
 [[requirement]]
 id = "PW-SE-SEC-001"
 section = "§5.4.1–§5.4.3"
@@ -35,19 +35,19 @@ id = "PW-SE-SEC-003"
 section = "§5.4.6"
 summary = "Cluster usage of security keys: APS link-key encryption mandatory for listed clusters"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-smart-energy::security::policy"
-tests = []
-
+status = "requires-clarification"
+module = "panweave-smart-energy"
+tests = ["key_policy"]
+notes = "link_key_required encodes Table 5-12 for every readable row; the rows Power Configuration, Key Establishment and Keep-Alive are unreadable in the source extraction and follow ADR-0012 (all three treated as exempt, Key Establishment necessarily so). Enforcement (Default Response FAILURE for unsecured frames of clusters that require the link key) is not wired into the ZCL dispatcher yet (TODO(PW-SE-KEYPOLICY))."
 [[requirement]]
 id = "PW-SE-SEC-004"
 section = "§5.4.7, Annex C"
 summary = "Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::key_establishment"
-tests = []
-notes = "Requires ECMQV over binary curves; no vetted no_std Rust implementation exists. Tracked as blocked pending a reviewed dependency or in-tree implementation."
+tests = ["annex_c5_suite1_transform", "annex_c6_suite2_transform", "annex_c5_exchange_between_machines"]
+notes = "Cluster codecs (Initiate / Ephemeral Data / Confirm Key / Terminate, the KeyEstablishmentSuite bitmap and suite negotiation), Suite 1 and Suite 2 implicit certificate parsing with the C.3.1.2.3.1.2 checks, the KDF and MACU/MACV transforms (C.5 / C.6 vectors) and the initiator / responder machines are implemented. The ECMQV curve arithmetic over sect163k1 / sect283k1 is supplied by the host through the Ecmqv trait (ADR-0012); binding the machines to a ZCL endpoint and the Trust Center link-key update after a successful exchange are not done (TODO(PW-SE-CBKE-ENDPOINT))."
 
 [[requirement]]
 id = "PW-SE-SEC-005"

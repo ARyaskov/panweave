@@ -11,15 +11,22 @@ categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std"]
+std = ["alloc", "panweave-types/std", "panweave-security/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-security = { workspace = true }
+heapless = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+panweave-security = { workspace = true, features = ["crypto-software"] }
 
 [lints]
 workspace = true

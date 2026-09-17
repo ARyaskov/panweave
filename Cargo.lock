@@ -845,8 +845,12 @@ name = "panweave-smart-energy"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
+ "panweave-security",
  "panweave-types",
  "serde",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]

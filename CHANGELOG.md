@@ -123,6 +123,13 @@ Keep a Changelog; versions follow SemVer.
   joining by association, rejoin or out-of-band adoption, permit
   joining, leave, Manage Joiners provisional link keys, Identify and
   Finding & Binding — reporting completions as `Event::Direct`.
+* `panweave-smart-energy`: the profile identifier, cluster identifiers
+  (Table 5-14), the per-cluster APS link-key policy `link_key_required`
+  (Table 5-12, ADR-0012), the profile parameters of §5.3, and the Key
+  Establishment cluster (Annex C): command and certificate codecs for
+  both suites, the KDF and MACU / MACV transforms (Annex C.5 / C.6
+  vectors) and the CBKE initiator / responder machines over a
+  host-supplied `Ecmqv` primitive.
 * `Stack` provisioning helpers: `form_network_params`
   (`FormationParams`: key, extended PAN ID, PAN ID, channels, network
   address, update ID), `adopt_network` (`AdoptParams`: join a network
