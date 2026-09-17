@@ -100,6 +100,14 @@ Keep a Changelog; versions follow SemVer.
   persists the Proxy Table (`Kind::GreenPower`) and reports
   `StackEvent::GreenPowerCommissioningMode`; `Simulator::inject` plays a
   stack-less Green Power Device.
+* `panweave-direct`: Zigbee Direct 1.1 secure session establishment
+  (Initiator / Responder machines for the four Session Establishment
+  messages, SPEKE/Curve25519/AES-MMO-128 and ECDHE-PSK/P-256/SHA-256 with
+  MacTag confirmation, the Security Service local TLVs), secured
+  characteristic payloads (`SecureChannel`: AES-CCM-128 with the unique
+  address, counters and freshness rules), Basic / Admin authorization key
+  derivation, the BLE advertisement extension and the GATT identifiers of
+  the three services — each checked against the Annex B vectors.
 * Criterion benchmarks (`crypto`, `tlv`, `frame`, `dispatch`), fuzz
   targets for the ZDP security services and the ZCL dispatcher, a
   dispatcher property test, `docs/performance.md`.

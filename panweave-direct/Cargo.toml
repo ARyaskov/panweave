@@ -5,21 +5,36 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: direct"
+description = "Panweave Zigbee stack: Zigbee Direct 1.1 security sessions, secured characteristics, advertisement and service codecs"
 keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = []
-std = ["alloc", "panweave-types/std"]
-alloc = ["panweave-types/alloc"]
+default = ["curve25519", "p256"]
+std = ["alloc", "panweave-types/std", "panweave-codec/std", "panweave-security/std"]
+alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
-defmt = ["dep:defmt", "panweave-types/defmt"]
+defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt"]
+# SPEKE/Curve25519/AES-MMO-128/HMAC-AES-MMO-128 (Authenticate characteristic 1).
+curve25519 = ["panweave-security/dlk"]
+# ECDHE-PSK/P-256/SHA-256/HMAC-SHA-256-128 (Authenticate characteristic 3).
+p256 = ["dep:p256", "dep:sha2", "dep:hmac"]
 
 [dependencies]
 panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+panweave-security = { workspace = true }
+heapless = { workspace = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+p256 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
+
+[dev-dependencies]
+panweave-security = { workspace = true, features = ["crypto-software", "dlk"] }
 
 [lints]
 workspace = true

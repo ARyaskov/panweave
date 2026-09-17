@@ -10,12 +10,12 @@ Panweave is an independent implementation; this table records the maintainers' o
 |---|---|---|---|---|---|---|---|
 | BDB3.1 | 27 | 14 | 4 | 8 | 1 | 0 | 0 |
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
-| ZD1.1 | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
+| ZD1.1 | 11 | 5 | 1 | 5 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 0 | 1 | 17 | 0 | 0 | 0 |
 | ZCL8 | 36 | 17 | 3 | 16 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 140 | 32 | 62 | 3 | 0 | 0 |
+| **All** | 237 | 145 | 33 | 56 | 3 | 0 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -61,12 +61,12 @@ Panweave is an independent implementation; this table records the maintainers' o
 
 | Id | Section | Level | Status | Module | Summary | Tests | Notes |
 |---|---|---|---|---|---|---|---|
-| PW-ZD-SEC-001 | §6.2, §6.3 | mandatory | not-implemented | `panweave-direct::security::state` | ZDD security states (unprovisioned/provisioned), session types (provisioning, authorization, BLE secure), state transitions | — |  |
-| PW-ZD-SEC-002 | §6.5.1.2 | mandatory | not-implemented | `panweave-direct::security::p256` | Session establishment ECDHE-PSK/P-256/SHA-256/HMAC-SHA-256-128: four messages carrying method and public point TLVs, key derivation and MAC tag confirmation | — |  |
-| PW-ZD-SEC-003 | §6.5.1.3 | mandatory | not-implemented | `panweave-direct::security::curve25519` | Session establishment SPEKE/Curve25519/AES-MMO-128/HMAC-AES-MMO-128 | — |  |
-| PW-ZD-SEC-004 | §6.4 | mandatory | not-implemented | `panweave-direct::security::channel` | Secured characteristic payloads with CCM, nonce from unique address and counters, counter monotonicity, exception handling | — |  |
-| PW-ZD-SEC-005 | §6.5.2 | mandatory | not-implemented | `panweave-direct::tlv` | Security service local TLVs (method, P-256 point, Curve25519 point, network key sequence number, MacTag) | — |  |
-| PW-ZD-ZDD-001 | §7.6 | mandatory | not-implemented | `panweave-direct::zdd::advertising` | ZDD BLE advertisement extension (service UUID, network status, PAN identifier data) | — |  |
+| PW-ZD-SEC-001 | §6.2, §6.3 | mandatory | partially-implemented | `panweave-direct::auth` | ZDD security states (unprovisioned/provisioned), session types (provisioning, authorization, BLE secure), state transitions | `annex_b3_authorization_keys` | Session types follow from the pre-shared secret (Psk::is_provisioning), authorization levels are modelled (auth::Level) and the Basic / Admin keys are derived per Table 2 (Annex B.3 vectors); the Responder refuses secrets the application does not offer (e.g. anonymous sessions while the Anonymous Join Countdown Timer is 0). The provisioned / unprovisioned ZDD state machine and the one-authorization-session rule are left to the ZDD integration. |
+| PW-ZD-SEC-002 | §6.5.1.2 | mandatory | implemented | `panweave-direct::session` | Session establishment ECDHE-PSK/P-256/SHA-256/HMAC-SHA-256-128: four messages carrying method and public point TLVs, key derivation and MAC tag confirmation | `annex_b1_ecdhe_p256_vectors`, `responder_refuses_wrong_method_and_psk` | Initiator (ZVD) and Responder (ZDD) machines for the four Session Establishment messages; P-256 ECDH with SHA-256 shared-secret hashing over the ordered session identifier, HMAC-SHA-256-128 session key and 32-octet MacTags (KC_2_U / KC_2_V); every Annex B.1 vector reproduced. Feature p256. |
+| PW-ZD-SEC-003 | §6.5.1.3 | mandatory | implemented | `panweave-direct::session` | Session establishment SPEKE/Curve25519/AES-MMO-128/HMAC-AES-MMO-128 | `annex_b2_speke_curve25519_vectors` | SPEKE with the PSK-derived generator, AES-MMO-128 hashing and HMAC-AES-MMO-128 (shared with the R23 DLK primitives of panweave-security), 16-octet MacTags; Annex B.2 vectors reproduced. Feature curve25519. SPEKE/Curve25519/SHA-256 stays reserved (Method 2 is decoded but refused). |
+| PW-ZD-SEC-004 | §6.4 | mandatory | implemented | `panweave-direct::secure` | Secured characteristic payloads with CCM, nonce from unique address and counters, counter monotonicity, exception handling | `annex_b4_join_network_write` | SecureChannel keeps the session key and the incoming / outgoing counters: AES-CCM-128 with the 34-octet unique address of the characteristic as associated data, the nonce of §6.4.3, counter \|\| ciphertext \|\| MIC framing, freshness (strictly increasing counter) and authenticity checks that leave the incoming counter untouched on failure, and CounterExhausted at 0xffffffff; Annex B.4 reproduced. The ATT error responses themselves belong to the BLE host integration. |
+| PW-ZD-SEC-005 | §6.5.2 | mandatory | implemented | `panweave-direct::tlv` | Security service local TLVs (method, P-256 point, Curve25519 point, network key sequence number, MacTag) | `annex_b1_ecdhe_p256_vectors`, `annex_b2_speke_curve25519_vectors` | Key Negotiation Method (method + PSK enumerations), P-256 and Curve25519 Public Point (EUI-64 + point), Network Key Sequence Number and MacTag TLVs in the Annex I TLV format. |
+| PW-ZD-ZDD-001 | §7.6 | mandatory | implemented | `panweave-direct::advertisement` | ZDD BLE advertisement extension (service UUID, network status, PAN identifier data) | `round_trip_and_not_joined_defaults` | Service Data AD structure with the Commissioning Service UUID, version 1, ZDTS / PermitJoin flags, PAN ID and NWK address (0xffff when not joined); encode and find-in-advertisement. |
 | PW-ZD-ZDD-002 | §7.7.2 | mandatory | not-implemented | `panweave-direct::zdd::commissioning` | Commissioning service characteristics: form network, permit joining, join network (MAC association / rejoin / out-of-band), leave, commissioning status, manage joiners, identify, finding and binding; TLV items | — |  |
 | PW-ZD-ZDD-003 | §7.7.3, §7.7.4 | mandatory | not-implemented | `panweave-direct::zdd::tunnel` | Tunnel service NPDU characteristic, NPDU message TLV, trusted-link pre/post processing in the NWK layer, joining centralized/distributed networks on behalf of the ZVD, ZVD as trust center, ZVD rejoin/forming | — |  |
 | PW-ZD-ZVD-001 | §8 | mandatory | not-implemented | `panweave-direct::zvd` | ZVD behaviour: discovery of ZDDs, security, reconnection, commissioning and tunnel clients, EUI-64 allocation | — |  |

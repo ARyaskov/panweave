@@ -194,8 +194,8 @@ BLE core (GATT) — abstracted in Panweave.
 
 | Chapter | Content | Owning module |
 |---|---|---|
-| 6 | Security model, session establishment (P-256 ECDHE-PSK and Curve25519 SPEKE variants), CCM nonce/counters, security service characteristics and TLVs, ZVD provisioning | `panweave-direct::security` |
-| 7 | ZDD behaviour: BLE advertising extension, commissioning service (form/permit/join/leave/status/manage joiners/identify/finding&binding), tunnel service (NPDU characteristic), trusted-link pre/post processing hooks into NWK | `panweave-direct::{zdd, commissioning, tunnel}` |
+| 6 | Security model, session establishment (P-256 ECDHE-PSK and Curve25519 SPEKE variants), CCM nonce/counters, security service characteristics and TLVs, ZVD provisioning | `panweave-direct::{session, secure, auth, tlv}` |
+| 7 | ZDD behaviour: BLE advertising extension, commissioning service (form/permit/join/leave/status/manage joiners/identify/finding&binding), tunnel service (NPDU characteristic), trusted-link pre/post processing hooks into NWK | `panweave-direct::{advertisement, gatt}` (commissioning / tunnel: planned) |
 | 8 | ZVD behaviour: discovery, security, reconnection, commissioning/tunnel clients, EUI-64 allocation | `panweave-direct::zvd` |
 | 9–10 | Network key rotation with limited authorisation sessions; legacy-network support (ephemeral authorisation, routing on behalf of ZVD) | `panweave-direct::sessions` |
 

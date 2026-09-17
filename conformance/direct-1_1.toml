@@ -8,55 +8,55 @@ id = "PW-ZD-SEC-001"
 section = "§6.2, §6.3"
 summary = "ZDD security states (unprovisioned/provisioned), session types (provisioning, authorization, BLE secure), state transitions"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::security::state"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-direct::auth"
+tests = ["annex_b3_authorization_keys"]
+notes = "Session types follow from the pre-shared secret (Psk::is_provisioning), authorization levels are modelled (auth::Level) and the Basic / Admin keys are derived per Table 2 (Annex B.3 vectors); the Responder refuses secrets the application does not offer (e.g. anonymous sessions while the Anonymous Join Countdown Timer is 0). The provisioned / unprovisioned ZDD state machine and the one-authorization-session rule are left to the ZDD integration."
 [[requirement]]
 id = "PW-ZD-SEC-002"
 section = "§6.5.1.2"
 summary = "Session establishment ECDHE-PSK/P-256/SHA-256/HMAC-SHA-256-128: four messages carrying method and public point TLVs, key derivation and MAC tag confirmation"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::security::p256"
-tests = []
-
+status = "implemented"
+module = "panweave-direct::session"
+tests = ["annex_b1_ecdhe_p256_vectors", "responder_refuses_wrong_method_and_psk"]
+notes = "Initiator (ZVD) and Responder (ZDD) machines for the four Session Establishment messages; P-256 ECDH with SHA-256 shared-secret hashing over the ordered session identifier, HMAC-SHA-256-128 session key and 32-octet MacTags (KC_2_U / KC_2_V); every Annex B.1 vector reproduced. Feature p256."
 [[requirement]]
 id = "PW-ZD-SEC-003"
 section = "§6.5.1.3"
 summary = "Session establishment SPEKE/Curve25519/AES-MMO-128/HMAC-AES-MMO-128"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::security::curve25519"
-tests = []
-
+status = "implemented"
+module = "panweave-direct::session"
+tests = ["annex_b2_speke_curve25519_vectors"]
+notes = "SPEKE with the PSK-derived generator, AES-MMO-128 hashing and HMAC-AES-MMO-128 (shared with the R23 DLK primitives of panweave-security), 16-octet MacTags; Annex B.2 vectors reproduced. Feature curve25519. SPEKE/Curve25519/SHA-256 stays reserved (Method 2 is decoded but refused)."
 [[requirement]]
 id = "PW-ZD-SEC-004"
 section = "§6.4"
 summary = "Secured characteristic payloads with CCM, nonce from unique address and counters, counter monotonicity, exception handling"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::security::channel"
-tests = []
-
+status = "implemented"
+module = "panweave-direct::secure"
+tests = ["annex_b4_join_network_write"]
+notes = "SecureChannel keeps the session key and the incoming / outgoing counters: AES-CCM-128 with the 34-octet unique address of the characteristic as associated data, the nonce of §6.4.3, counter || ciphertext || MIC framing, freshness (strictly increasing counter) and authenticity checks that leave the incoming counter untouched on failure, and CounterExhausted at 0xffffffff; Annex B.4 reproduced. The ATT error responses themselves belong to the BLE host integration."
 [[requirement]]
 id = "PW-ZD-SEC-005"
 section = "§6.5.2"
 summary = "Security service local TLVs (method, P-256 point, Curve25519 point, network key sequence number, MacTag)"
 level = "mandatory"
-status = "not-implemented"
+status = "implemented"
 module = "panweave-direct::tlv"
-tests = []
-
+tests = ["annex_b1_ecdhe_p256_vectors", "annex_b2_speke_curve25519_vectors"]
+notes = "Key Negotiation Method (method + PSK enumerations), P-256 and Curve25519 Public Point (EUI-64 + point), Network Key Sequence Number and MacTag TLVs in the Annex I TLV format."
 [[requirement]]
 id = "PW-ZD-ZDD-001"
 section = "§7.6"
 summary = "ZDD BLE advertisement extension (service UUID, network status, PAN identifier data)"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-direct::zdd::advertising"
-tests = []
-
+status = "implemented"
+module = "panweave-direct::advertisement"
+tests = ["round_trip_and_not_joined_defaults"]
+notes = "Service Data AD structure with the Commissioning Service UUID, version 1, ZDTS / PermitJoin flags, PAN ID and NWK address (0xffff when not joined); encode and find-in-advertisement."
 [[requirement]]
 id = "PW-ZD-ZDD-002"
 section = "§7.7.2"
