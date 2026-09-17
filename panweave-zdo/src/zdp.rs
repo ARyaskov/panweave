@@ -150,6 +150,10 @@ pub enum ZdpStatus {
     BadKeyNegotiationMethod,
     /// TEMPORARY_FAILURE.
     TemporaryFailure,
+    /// `MISSING_TLV` (0xD6, reused from the NWK layer, §2.4.6).
+    MissingTlv,
+    /// `INVALID_TLV` (0xD7, reused from the NWK layer, §2.4.6).
+    InvalidTlv,
     /// Any other value (including NWK/APS status codes relayed in
     /// management responses).
     Unknown(u8),
@@ -178,6 +182,8 @@ impl ZdpStatus {
             0x90 => ZdpStatus::FrameTooLarge,
             0x91 => ZdpStatus::BadKeyNegotiationMethod,
             0x92 => ZdpStatus::TemporaryFailure,
+            0xD6 => ZdpStatus::MissingTlv,
+            0xD7 => ZdpStatus::InvalidTlv,
             other => ZdpStatus::Unknown(other),
         }
     }
@@ -204,6 +210,8 @@ impl ZdpStatus {
             ZdpStatus::FrameTooLarge => 0x90,
             ZdpStatus::BadKeyNegotiationMethod => 0x91,
             ZdpStatus::TemporaryFailure => 0x92,
+            ZdpStatus::MissingTlv => 0xD6,
+            ZdpStatus::InvalidTlv => 0xD7,
             ZdpStatus::Unknown(v) => v,
         }
     }

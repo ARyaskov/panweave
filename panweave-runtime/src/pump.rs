@@ -8,14 +8,18 @@ use panweave_aps::layer::{
     ApsAction, ApsEvent, DataIndication, DataRequest, Delivery, Destination, DeviceState, KeyRoute,
     PersistItem, TransportedKey, TxOptions,
 };
+use panweave_aps::layer::{RelayInfo, SecurityStatus};
+use panweave_codec::Decode;
 use panweave_codec::Encode;
+use panweave_codec::tlv::TlvSet;
 use panweave_mac::frame::{FrameType as MacFrameType, MacAddress};
 use panweave_mac::radio::RxMetadata;
 use panweave_mac::service::{MacEvent, RxDisposition, TxStatus};
 use panweave_nwk::layer::{JoinMethod, JoinParams};
 use panweave_nwk::layer::{NwkAction, NwkEvent, RxOutcome};
+use panweave_nwk::tlv::{GlobalTlvs, SupportedKeyNegotiationMethods};
 use panweave_security::cipher::BlockCipher;
-use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
+use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy};
 use panweave_storage::{Key, Kind, Storage};
 use panweave_types::{
@@ -24,6 +28,11 @@ use panweave_types::{
 };
 use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
 use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
+use panweave_zdo::security::{
+    RetrieveAuthenticationTokenRsp, SelectedKeyNegotiationMethod, StartKeyNegotiationRsp,
+    StartKeyUpdateReq,
+};
+use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
 use crate::stack::{PendingChild, Phase, Stack, StackEvent, ZclFrame, ZdpData};
@@ -46,9 +55,9 @@ struct OwnedIndication {
     profile: ProfileId,
     cluster: panweave_types::ClusterId,
     asdu: Vec<u8, ASDU_BUF>,
-    security: panweave_aps::layer::SecurityStatus,
+    security: SecurityStatus,
     lqi: u8,
-    relayed: Option<panweave_aps::layer::RelayInfo>,
+    relayed: Option<RelayInfo>,
     counter: u8,
     nwk_broadcast: bool,
 }
@@ -177,6 +186,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 nwk,
                 aps,
                 config,
+                dlk,
                 ..
             } = self;
             let is_tc = aps.config.is_trust_center;
@@ -186,10 +196,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 policy: &config.trust_center_policy,
                 is_trust_center: is_tc,
                 bindings_changed: false,
+                dlk,
             };
             let out = zdo.on_data(&borrowed, &mut ctx);
             if ctx.bindings_changed {
                 let _ = self.persist_bindings();
+            }
+            self.zdo.restricted_mode = self.aps.aib.zdo_restricted_mode;
+            if let Some((method, via)) = self.dlk.start_requested.take() {
+                // Security_Start_Key_Update_req accepted: negotiate with
+                // the Trust Center (§4.6.3.5 step 1).
+                let _ = self.start_key_negotiation(method.sender, method, via);
             }
             match out {
                 Some(ZdoIndication::Response {
@@ -198,7 +215,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     cluster,
                     data,
                     matched,
+                    src_ieee,
+                    security,
+                    relayed,
                 }) => {
+                    if cluster == cluster::response_of(cluster::SECURITY_START_KEY_NEGOTIATION_REQ)
+                        && let Ok(rsp) = StartKeyNegotiationRsp::decode_exact(data)
+                    {
+                        self.on_key_negotiation_response(src_ieee, rsp.status, rsp.tlvs, relayed);
+                    }
+                    if cluster
+                        == cluster::response_of(cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ)
+                    {
+                        self.on_authentication_token(src_ieee, security, data);
+                    }
                     if let Ok(data) = Vec::from_slice(data) {
                         self.push_event(StackEvent::Zdp(ZdpData {
                             src,
@@ -571,9 +601,37 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let _ = self
             .zdo
             .device_announce(short, self.config.ieee, self.config.capability());
+        // On a centralized network the Trust Center is the coordinator
+        // (network address 0x0000, §4.6.3.1): make the pair addressable.
+        let tc = self.aps.aib.trust_center_address;
+        if !self.aps.aib.is_distributed() && AddrView(&self.nwk).short_of(tc).is_none() {
+            let _ = self.nwk.address_map.record(tc, ShortAddress::COORDINATOR);
+        }
+        // §2.4.3.4.2: a device that negotiated its link key obtains its
+        // authentication token (passphrase) once, for later re-negotiation.
+        let negotiated = self.aps.security.entry(tc).is_some_and(|e| {
+            e.negotiation_state == panweave_security::material::KeyNegotiationState::Complete
+                && e.passphrase_update_allowed
+        });
+        if !rejoin && !self.aps.aib.is_distributed() && negotiated {
+            let tc_short = AddrView(&self.nwk)
+                .short_of(tc)
+                .unwrap_or(ShortAddress::COORDINATOR);
+            let mut tlv = [0u8; 3];
+            let mut w = panweave_codec::Writer::new(&mut tlv);
+            let _ = panweave_zdo::security::AuthenticationTokenId(
+                panweave_nwk::tlv::tag::SYMMETRIC_PASSPHRASE,
+            )
+            .write(&mut w);
+            let req = panweave_zdo::security::RetrieveAuthenticationTokenReq { tlvs: &tlv };
+            let _ = self.zdo.request_secured(
+                tc_short,
+                cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ,
+                &req,
+            );
+        }
         // BDB 3.1 §10.2.4: request a unique Trust Center link key after a
         // join with a global key on a centralized network.
-        let tc = self.aps.aib.trust_center_address;
         let global = self
             .aps
             .security
@@ -614,7 +672,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         };
         if self.aps.config.is_trust_center {
-            self.trust_center_authorize(device, short, status, None);
+            self.trust_center_authorize(device, short, status, None, joiner_tlvs);
         } else if self.aps.aib.is_distributed() {
             // Distributed network: the router hands out the network key
             // itself (§4.6.3.2.1).
@@ -640,12 +698,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Trust Center authorization (§4.6.3.2.2, §4.7.3). `parent` is the
     /// router that reported the join (None when we are the parent).
+    #[allow(clippy::too_many_lines)]
     fn trust_center_authorize(
         &mut self,
         device: ExtendedAddress,
         short: ShortAddress,
         status: UpdateDeviceStatus,
         parent: Option<ShortAddress>,
+        joiner_tlvs: &[u8],
     ) {
         let kind = match status {
             UpdateDeviceStatus::SecuredRejoin => JoinKind::SecuredRejoin,
@@ -655,15 +715,31 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 JoinKind::TrustCenterRejoin
             }
         };
+        // Supported Key Negotiation Methods inside the Joiner
+        // Encapsulation (§4.7.3.3): the joiner offers SPEKE.
+        let offers_dlk = cfg!(feature = "dlk")
+            && TlvSet::validate(joiner_tlvs, |_| false)
+                .ok()
+                .and_then(|set| {
+                    set.joiner_encapsulation()
+                        .and_then(|inner| inner.key_negotiation_methods())
+                        .or_else(|| set.key_negotiation_methods())
+                })
+                .is_some_and(|m| {
+                    m.protocols & SupportedKeyNegotiationMethods::PROTO_SPEKE_CURVE25519_AES_MMO
+                        != 0
+                });
         let decision = self.config.trust_center_policy.evaluate_join(
             kind,
             self.aps.security.entry(device),
-            false,
+            offers_dlk,
             None,
         );
         match decision {
-            JoinDecision::TransportNetworkKey { create_entry }
-            | JoinDecision::NegotiateKey { create_entry } => {
+            JoinDecision::NegotiateKey { create_entry } => {
+                self.start_joiner_negotiation(device, short, parent, create_entry);
+            }
+            JoinDecision::TransportNetworkKey { create_entry } => {
                 if create_entry {
                     let e = LinkKeyEntry::provisional(
                         device,
@@ -695,7 +771,129 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
     }
 
-    fn send_network_key(&mut self, device: ExtendedAddress, short: ShortAddress, route: KeyRoute) {
+    /// Trust Center side of Dynamic Key Negotiation Joining (§4.7.3.3
+    /// steps 2–3): prepares the key-pair entry with its passphrase and
+    /// asks the joiner to start negotiating through its parent.
+    fn start_joiner_negotiation(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        parent: Option<ShortAddress>,
+        create_entry: bool,
+    ) {
+        let secret = if create_entry {
+            // Step 2c: anonymous negotiation with the well-known
+            // passphrase (policy 0x03).
+            let mut e = LinkKeyEntry::provisional(
+                device,
+                Key128::WELL_KNOWN_GLOBAL_TCLK,
+                LinkKeyKind::Unique,
+            );
+            // The well-known passphrase is implied by the selected secret
+            // and is not stored: the entry receives a real token later
+            // (§2.4.3.4.2).
+            e.initial_join_authentication = InitialJoinAuthentication::AnonymousKeyNegotiation;
+            let _ = self.aps.install_link_key(e);
+            SelectedKeyNegotiationMethod::SECRET_ANONYMOUS
+        } else {
+            // A pre-installed install-code entry: its passphrase is the
+            // install-code derived key (§4.7.3.3).
+            // The install-code derived key serves as the passphrase until
+            // a token replaces it (§4.7.3.3, `passphrase_for`).
+            match self.aps.security.keys_mut().get_mut(device) {
+                Some(e) => {
+                    e.initial_join_authentication =
+                        InitialJoinAuthentication::KeyNegotiationWithAuthentication;
+                    if e.passphrase.is_some() {
+                        SelectedKeyNegotiationMethod::SECRET_AUTH_TOKEN
+                    } else {
+                        SelectedKeyNegotiationMethod::SECRET_INSTALL_CODE
+                    }
+                }
+                None => return,
+            }
+        };
+        let method = SelectedKeyNegotiationMethod {
+            protocol: SelectedKeyNegotiationMethod::PROTOCOL_SPEKE_AES_MMO,
+            secret,
+            sender: self.config.ieee,
+        };
+        let mut tlvs = [0u8; 12 + 8];
+        let mut w = panweave_codec::Writer::new(&mut tlvs);
+        if method.write(&mut w).is_err() {
+            return;
+        }
+        let _ = panweave_nwk::tlv::FragmentationParameters {
+            node: self.nwk.nib.network_address,
+            options: 0,
+            max_incoming_transfer_unit: self.aps.aib.max_size_asdu,
+        }
+        .write(&mut w);
+        let n = w.position();
+        let req = StartKeyUpdateReq {
+            tlvs: tlvs.get(..n).unwrap_or(&[]),
+        };
+        let relay = RelayInfo {
+            parent: parent.unwrap_or(self.nwk.nib.network_address),
+            joiner: device,
+        };
+        if self
+            .zdo
+            .request_via(short, cluster::SECURITY_START_KEY_UPDATE_REQ, &req, relay)
+            .is_err()
+        {
+            return;
+        }
+        let deadline = self.now + self.aps.aib.security_timeout_period;
+        let _ = self.dlk.joins.push(crate::dlk::PendingJoin {
+            device,
+            short,
+            parent,
+            secret,
+            deadline,
+        });
+    }
+
+    /// Security_Retrieve_Authentication_Token_rsp (§2.4.4.4.2.2): store
+    /// the passphrase handed out by the Trust Center once.
+    fn on_authentication_token(
+        &mut self,
+        src_ieee: Option<ExtendedAddress>,
+        security: SecurityStatus,
+        data: &[u8],
+    ) {
+        let tc = self.aps.aib.trust_center_address;
+        if security != SecurityStatus::LinkKey || src_ieee != Some(tc) {
+            return;
+        }
+        let Ok(rsp) = RetrieveAuthenticationTokenRsp::decode_exact(data) else {
+            return;
+        };
+        if rsp.status != ZdpStatus::Success {
+            return;
+        }
+        let Some(token) = TlvSet::validate(rsp.tlvs, |_| false)
+            .ok()
+            .and_then(|set| set.symmetric_passphrase())
+        else {
+            return;
+        };
+        if let Some(e) = self.aps.security.keys_mut().get_mut(tc)
+            && e.passphrase_update_allowed
+        {
+            e.passphrase = Some(Key128::from_bytes(token.value));
+            e.passphrase_update_allowed = false;
+            self.aps.request_link_key_persistence();
+            self.push_event(StackEvent::AuthenticationTokenStored);
+        }
+    }
+
+    pub(crate) fn send_network_key(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        route: KeyRoute,
+    ) {
         let seq = self.network_key_sequence;
         let Some(key) = self.nwk.security.keys.get(seq).map(|s| s.key.clone()) else {
             return;
@@ -823,9 +1021,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     device,
                     short,
                     status,
+                    joiner_tlvs,
                     ..
                 } => {
-                    self.trust_center_authorize(device, short, status, Some(src));
+                    self.trust_center_authorize(device, short, status, Some(src), &joiner_tlvs);
                 }
                 ApsEvent::RemoveDevice { target, .. } => {
                     let _ = self.nwk.leave(Some(target), false, false);
@@ -849,9 +1048,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         );
                     }
                 }
-                ApsEvent::KeyVerified { .. } => {}
-                ApsEvent::ConfirmKey { status, .. } => {
-                    if status == ApsStatus::Success {
+                ApsEvent::KeyVerified {
+                    partner, relayed, ..
+                } => {
+                    if self.aps.config.is_trust_center {
+                        self.on_joiner_key_verified(partner, relayed);
+                    }
+                }
+                ApsEvent::ConfirmKey { src, status, .. } => {
+                    let ok = status == ApsStatus::Success;
+                    if self.dlk.session.as_ref().is_some_and(|s| s.partner == src) {
+                        self.on_key_negotiation_confirmed(src, ok);
+                    } else if ok {
                         self.push_event(StackEvent::LinkKeyUpdated);
                     }
                 }
@@ -895,6 +1103,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 cluster,
                 frame,
                 via,
+                secure,
             } = a;
             let destination = match via {
                 Some(r) => Destination::Relayed {
@@ -913,6 +1122,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             };
             let options = TxOptions {
                 ack: dst.is_unicast(),
+                security: secure,
                 ..TxOptions::ACKED
             };
             self.send_aps(
@@ -934,7 +1144,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     // TODO(PW-ZDP-014): run the energy scan / channel change.
                     // Spec: R23.2 §2.4.3.3.9.2. Report NOT_SUPPORTED for now.
                     let notify = panweave_zdo::zdp::MgmtNwkUpdateNotify {
-                        status: panweave_zdo::ZdpStatus::NotSupported,
+                        status: ZdpStatus::NotSupported,
                         scanned_channels: req.scan_channels,
                         total_transmissions: 0,
                         transmission_failures: 0,

@@ -14,7 +14,7 @@ panweave-types = { workspace = true, features = ["std"] }
 panweave-mac = { workspace = true, features = ["std"] }
 panweave-security = { workspace = true, features = ["std", "crypto-software"] }
 panweave-storage = { workspace = true, features = ["std"] }
-panweave-runtime = { workspace = true, features = ["std"] }
+panweave-runtime = { workspace = true, features = ["std", "dlk"] }
 panweave-testkit = { workspace = true, features = ["std"] }
 panweave-zcl = { workspace = true, features = ["std"] }
 panweave-bdb = { workspace = true, features = ["std"] }

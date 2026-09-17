@@ -159,6 +159,50 @@ pub enum InitialJoinAuthentication {
     KeyNegotiationWithAuthentication,
 }
 
+impl InitialJoinAuthentication {
+    /// Table 2-121 `InitialJoinMethod` value.
+    pub const fn raw(self) -> u8 {
+        match self {
+            InitialJoinAuthentication::None => 0,
+            InitialJoinAuthentication::InstallCodeKey => 1,
+            InitialJoinAuthentication::AnonymousKeyNegotiation => 2,
+            InitialJoinAuthentication::KeyNegotiationWithAuthentication => 3,
+        }
+    }
+}
+
+/// `PostJoinKeyUpdateMethod` (Table 4-36) / `ActiveLinkKeyType`
+/// (Table 2-121): how the current link key was established.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PostJoinKeyUpdate {
+    /// Not updated since the join (0x00).
+    #[default]
+    NotUpdated,
+    /// Request Key / Transport Key (0x01).
+    KeyRequest,
+    /// Unauthenticated (anonymous) key negotiation (0x02).
+    UnauthenticatedNegotiation,
+    /// Authenticated key negotiation (0x03).
+    AuthenticatedNegotiation,
+    /// Certificate-based mutual authentication (0x04).
+    CertificateBased,
+}
+
+impl PostJoinKeyUpdate {
+    /// Table 2-121 value.
+    pub const fn raw(self) -> u8 {
+        match self {
+            PostJoinKeyUpdate::NotUpdated => 0,
+            PostJoinKeyUpdate::KeyRequest => 1,
+            PostJoinKeyUpdate::UnauthenticatedNegotiation => 2,
+            PostJoinKeyUpdate::AuthenticatedNegotiation => 3,
+            PostJoinKeyUpdate::CertificateBased => 4,
+        }
+    }
+}
+
 /// `KeyNegotiationState` (Table 4-36).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -194,9 +238,14 @@ pub struct LinkKeyEntry {
     pub negotiation_state: KeyNegotiationState,
     /// Selected key negotiation method (TLV value), 0 when none.
     pub negotiation_method: u8,
-    /// Whether a passphrase is set (the passphrase itself is held in the
-    /// Trust Center state, not here).
-    pub has_passphrase: bool,
+    /// How the current key was established after the join.
+    pub post_join_key_update: PostJoinKeyUpdate,
+    /// The pre-shared secret for key negotiation (`Passphrase`), when
+    /// one is set.
+    pub passphrase: Option<Key128>,
+    /// `PassphraseUpdateAllowed`: a device may obtain an authentication
+    /// token once (§2.4.3.4.2).
+    pub passphrase_update_allowed: bool,
     /// Peer supports APS frame counter synchronisation (bit 0 of
     /// Features & Capabilities).
     pub frame_counter_sync: bool,
@@ -217,7 +266,9 @@ impl LinkKeyEntry {
             initial_join_authentication: InitialJoinAuthentication::None,
             negotiation_state: KeyNegotiationState::None,
             negotiation_method: 0,
-            has_passphrase: false,
+            post_join_key_update: PostJoinKeyUpdate::NotUpdated,
+            passphrase: None,
+            passphrase_update_allowed: true,
             frame_counter_sync: false,
             timeout_secs: 0xFFFF,
         }
@@ -228,6 +279,12 @@ impl LinkKeyEntry {
     #[inline]
     pub const fn is_verified(&self) -> bool {
         matches!(self.attributes, KeyAttributes::VerifiedKey)
+    }
+
+    /// True when a passphrase is set.
+    #[inline]
+    pub const fn has_passphrase(&self) -> bool {
+        self.passphrase.is_some()
     }
 }
 
@@ -246,6 +303,9 @@ impl fmt::Debug for LinkKeyEntry {
 impl Drop for LinkKeyEntry {
     fn drop(&mut self) {
         self.key.zeroize();
+        if let Some(p) = self.passphrase.as_mut() {
+            p.zeroize();
+        }
     }
 }
 

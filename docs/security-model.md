@@ -125,6 +125,33 @@ counters (where the spec requires persistence) and Zigbee Direct counters.
   authorisation (`Update Device` handling, authorisation token) until the
   interview completes according to policy.
 
+## Dynamic Link Key negotiation (R23.2 §4.4.9, §4.6.3.5, §4.7.3.3)
+
+Implemented in `panweave-runtime::dlk` over the ZDO security services of
+`panweave-zdo::security` (feature `dlk`, Curve25519 via `x25519-dalek`):
+
+* The joiner advertises SPEKE in the Supported Key Negotiation Methods
+  TLV of its Network Commissioning Request. The Trust Center selects the
+  pre-shared secret from its key-pair entry: an install-code derived key
+  (authenticated) or, only under `InstallCodePolicy::OptionalWithAnonymousNegotiation`,
+  the well-known passphrase (anonymous).
+* Security_Start_Key_Update_req / Security_Start_Key_Negotiation_req/rsp
+  travel through the parent's Relay Message commands (or directly, NWK
+  unsecured, when the Trust Center is the parent); the joiner then proves
+  the derived key with Verify Key and the Trust Center confirms before
+  transporting the network key. What a joiner accepts unsecured during
+  this phase is fixed by ADR-0008.
+* Both sides back the previous key-pair entry up and restore it when the
+  exchange fails or `apsSecurityTimeOutPeriod` expires; no partial key
+  material survives a failure.
+* After the join the device fetches its authentication token once
+  (Security_Retrieve_Authentication_Token); the Trust Center locks the
+  entry (`PassphraseUpdateAllowed = FALSE`). Later negotiations use the
+  token and are therefore authenticated.
+* A key established by negotiation cannot be downgraded through Request
+  Key (`TrustCenterPolicy::allow_tclk_request` refuses negotiated
+  entries).
+
 ## Zigbee Direct boundary
 
 BLE transport is abstract. `panweave-direct` treats every GATT write as

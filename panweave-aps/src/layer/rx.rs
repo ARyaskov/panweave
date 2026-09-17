@@ -236,6 +236,28 @@ impl<
         sec: FrameSecurity,
     ) -> Option<DataIndication<'a>> {
         let mut ctx = ctx;
+        // Unsecured frames the parent forwarded from the Trust Center
+        // are limited to the key negotiation services a joining device
+        // processes before authorization (§4.6.3.2.3.1).
+        // The Trust Center likewise accepts a relayed joiner's
+        // Security_Start_Key_Negotiation_req / Start_Key_Update_rsp
+        // (§4.6.3.2.2.2).
+        let negotiation = sec.status == SecurityStatus::Unsecured
+            && !ctx.nwk_secured
+            && header.profile == Some(ProfileId::ZDP)
+            && match (self.state, ctx.relayed.is_some(), header.cluster) {
+                (
+                    DeviceState::JoinedUnauthorized,
+                    _,
+                    Some(ClusterId(0x0045) | ClusterId(0x8040) | ClusterId(0x8041)),
+                ) => true,
+                (
+                    DeviceState::JoinedAuthorized,
+                    true,
+                    Some(ClusterId(0x0040) | ClusterId(0x8045)),
+                ) => self.config.is_trust_center,
+                _ => false,
+            };
         if self.state != DeviceState::JoinedAuthorized && ctx.relayed.is_none() {
             // While joined-but-unauthorized only frames the parent
             // extracted from a Tunnel / Relay Message Downstream reach
@@ -244,7 +266,7 @@ impl<
             let from_tc = sec.status == SecurityStatus::LinkKey
                 && sec.extended_nonce
                 && sec.partner == Some(self.trust_center_partner());
-            if self.state != DeviceState::JoinedUnauthorized || !from_tc {
+            if self.state != DeviceState::JoinedUnauthorized || !(from_tc || negotiation) {
                 self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
                 return None;
             }
@@ -252,8 +274,13 @@ impl<
                 parent: ctx.src,
                 joiner: self.local_ieee,
             });
+            // The parent only forwards what the Trust Center relayed.
+            ctx.src_ieee = Some(self.trust_center_partner());
         }
-        if sec.status == SecurityStatus::Unsecured && !self.config.accept_unsecured_data {
+        if sec.status == SecurityStatus::Unsecured
+            && !self.config.accept_unsecured_data
+            && !negotiation
+        {
             self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
             return None;
         }
@@ -330,7 +357,13 @@ impl<
         let asdu = buf.get(start..end)?;
         Some(DataIndication {
             src: ctx.src,
-            src_ieee: ctx.relayed.map(|r| r.joiner).or(ctx.src_ieee),
+            // Relayed frames come from the joiner (at the Trust Center) or
+            // from the Trust Center (at the joiner).
+            src_ieee: ctx
+                .relayed
+                .map(|r| r.joiner)
+                .filter(|j| *j != self.local_ieee)
+                .or(ctx.src_ieee),
             src_endpoint,
             delivery,
             profile,

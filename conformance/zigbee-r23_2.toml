@@ -814,37 +814,37 @@ id = "PW-R23-ZDP-016"
 section = "§2.4.3.4.1, §2.4.4.4.1"
 summary = "Security_Start_Key_Negotiation_req/rsp carrying key negotiation method and public point TLVs"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::security::key_negotiation"
-tests = []
-
+status = "implemented"
+module = "panweave-zdo::security"
+tests = ["security_services", "anonymous_key_negotiation_join_through_router", "install_code_authenticated_negotiation"]
+notes = "Curve25519 Public Point TLV, SPEKE/AES-MMO-128 (protocol 1); SPEKE/SHA-256 (protocol 2) and CBKE are answered with NO_MATCH."
 [[requirement]]
 id = "PW-R23-ZDP-017"
 section = "§2.4.3.4.2, §2.4.4.4.2"
 summary = "Security_Retrieve_Authentication_Token_req/rsp"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::security::auth_token"
-tests = []
-
+status = "implemented"
+module = "panweave-zdo::security"
+tests = ["security_services", "anonymous_key_negotiation_join_through_router"]
+notes = "The Trust Center hands out a random 128-bit passphrase once (PassphraseUpdateAllowed) and locks the entry when generating it rather than after the APS acknowledgement of the response (§2.4.3.4.2.4 step 10)."
 [[requirement]]
 id = "PW-R23-ZDP-018"
 section = "§2.4.3.4.3, §2.4.3.4.4, §2.4.4.4.3, §2.4.4.4.4"
 summary = "Security_Get_Authentication_Level_req/rsp, Security_Set_Configuration_req/rsp"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::security::config"
-tests = []
-
+status = "implemented"
+module = "panweave-zdo::security"
+tests = ["security_services"]
+notes = "Set_Configuration applies Configuration Parameters, Next PAN ID and Next Channel Change; Get_Authentication_Level reports InitialJoinMethod / ActiveLinkKeyType from the key-pair set."
 [[requirement]]
 id = "PW-R23-ZDP-019"
 section = "§2.4.3.4.5, §2.4.3.4.6, §2.4.3.4.7 and responses"
 summary = "Security_Get_Configuration, Security_Start_Key_Update, Security_Decommission"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-zdo::security::config"
-tests = []
-
+status = "partially-implemented"
+module = "panweave-zdo::security"
+tests = ["security_services", "anonymous_key_negotiation_join_through_router"]
+notes = "Get_Configuration serves Configuration Parameters, Next PAN ID / Channel, PAN ID Conflict Report (reset on read), Supported Key Negotiation Methods, Router Information and Fragmentation Parameters; Start_Key_Update and Decommission are implemented (NO_MATCH stands in for NOT_FOUND, ADR-0007). Security_Challenge (0x0047) is decoded but not processed."
 [[requirement]]
 id = "PW-R23-ZDP-020"
 section = "§2.4.3.1.8–§2.4.3.1.10, §2.4.3.1.13–§2.4.3.1.23, §2.4.3.2.1, §2.4.3.2.4–§2.4.3.2.11, §2.4.3.3.1, §2.4.3.3.6, §2.4.3.3.8"
@@ -1108,20 +1108,20 @@ id = "PW-R23-SEC-025"
 section = "§4.4.9, §4.9.6, Annex J"
 summary = "Dynamic Link Key negotiation: ECDHE (Curve25519) with SPEKE using passphrase or well-known passphrase, AES-MMO based KDF, key confirmation; results in unverified TCLK"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-security::dlk"
-tests = ["annex_c7_1_1_well_known_psk_vector", "annex_c7_1_2_passphrase_vector_generator", "non_contributory_points_are_rejected", "random_ephemerals_agree"]
-notes = "SPEKE/Curve25519/AES-MMO derivation done; ZDO message exchange and TC state machine pending."
+status = "implemented"
+module = "panweave-runtime::dlk"
+tests = ["annex_c7_1_1_well_known_psk_vector", "annex_c7_1_2_passphrase_vector_generator", "non_contributory_points_are_rejected", "random_ephemerals_agree", "anonymous_key_negotiation_join_through_router", "install_code_authenticated_negotiation", "wrong_passphrase_fails_and_restores_the_entry"]
+notes = "Dynamic Key Negotiation Joining end to end (Start_Key_Update → Start_Key_Negotiation via Relay Message → Verify / Confirm Key → Transport Key) with anonymous and install-code secrets, entry backup/restore and apsSecurityTimeOutPeriod deadlines; on-network TCLK re-negotiation after Node_Desc_rsp (BDB §7.2) is not implemented (Request Key is used after a symmetric join). The dlk feature enables Curve25519."
 
 [[requirement]]
 id = "PW-R23-SEC-026"
 section = "§4.9.7"
 summary = "Passphrase update after joining via Security_Set_Configuration / symmetric passphrase TLV"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::device::passphrase"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::dlk"
+tests = ["anonymous_key_negotiation_join_through_router"]
+notes = "Passphrase obtained with Security_Retrieve_Authentication_Token after a negotiated join; Security_Set_Configuration does not carry a passphrase in R23.2 (the symmetric passphrase TLV is only used in the token response)."
 [[requirement]]
 id = "PW-R23-SEC-027"
 section = "§4.8"
@@ -1145,10 +1145,10 @@ id = "PW-R23-SEC-029"
 section = "§4.9.1"
 summary = "Joining device policies: preconfigured key type, TCLK requirement, behaviour on failed TCLK exchange"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::device"
-tests = []
-
+status = "implemented"
+module = "panweave-runtime::dlk"
+tests = ["wrong_passphrase_fails_and_restores_the_entry", "install_code_authenticated_negotiation"]
+notes = "Preconfigured key type is StackConfig::preconfigured_link_key; a failed or timed-out negotiation restores the previous key-pair entry (§4.4.9) and the joiner leaves after apsSecurityTimeOutPeriod without a network key."
 [[requirement]]
 id = "PW-R23-SEC-030"
 section = "Annex C"
@@ -1163,12 +1163,12 @@ id = "PW-R23-SEC-031"
 section = "§4.6.3.7, Annex I.4.12"
 summary = "Device interview state: TC withholds authorization until interview complete; device capability extension TLV"
 level = "mandatory"
-status = "not-implemented"
-module = "panweave-security::trust_center::interview"
-tests = []
+status = "partially-implemented"
+module = "panweave-runtime::dlk"
+tests = ["anonymous_key_negotiation_join_through_router"]
 
 # ---------------------------------------------------------------- Annex D MAC
-
+notes = "Authorization is withheld until the negotiated key is verified (§4.7.3.3 steps 4–10); the optional application-level interview between verification and the network key is not exposed. Device Capability Extension TLV is parsed but virtual devices are not admitted."
 [[requirement]]
 id = "PW-R23-MAC-001"
 section = "Annex D.2–D.9"

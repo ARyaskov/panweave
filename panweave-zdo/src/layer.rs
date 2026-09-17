@@ -16,7 +16,11 @@ use panweave_types::{
     ShortAddress, TransactionSequence,
 };
 
+use panweave_codec::tlv::{self, Tlv};
+use panweave_nwk::tlv::tag as tlv_tag;
+
 use crate::descriptor::{NodeDescriptor, PowerDescriptor, SimpleDescriptor};
+use crate::security::{self, GetConfigurationReq, SelectedKeyNegotiationMethod};
 use crate::zdp::{
     ActiveEpReq, AddrRequestType, AddrRsp, BindReq, ClearAllBindingsReq, DeviceAnnce,
     EndpointListRsp, IeeeAddrReq, MatchDescReq, MgmtBindReq, MgmtLeaveReq, MgmtLqiReq,
@@ -51,6 +55,9 @@ pub trait ZdoContext {
     fn trust_center(&self) -> ExtendedAddress;
     /// This device is the Trust Center.
     fn is_trust_center(&self) -> bool;
+    /// This device is joined but not yet authorized (no network key):
+    /// the Trust Center may still be unknown (§4.6.3.2.3).
+    fn awaiting_authorization(&self) -> bool;
     /// Logical device type.
     fn logical_type(&self) -> LogicalDeviceType;
     /// Calls `f` for every end-device child (address discovery, §2.4.3.1.1).
@@ -97,6 +104,46 @@ pub trait ZdoContext {
     /// A Parent_annce_rsp says `child` is also claimed by `router`; the
     /// local entry should be removed (§2.4.4.2.19).
     fn child_claimed_elsewhere(&mut self, child: ExtendedAddress, router: ShortAddress);
+
+    // ---- Security services (§2.4.3.4) --------------------------------
+
+    /// APSME-KEY-NEGOTIATION.indication for a Security_Start_Key_Negotiation_req
+    /// from `partner` carrying its public `point`; derives the link key
+    /// and returns the local public point (§2.4.3.4.1.4). `aps_encrypted`
+    /// reports the request's APS security so that the authorization rule
+    /// of §2.4.4.4.1 can be applied.
+    fn key_negotiation(
+        &mut self,
+        partner: ExtendedAddress,
+        point: &[u8; 32],
+        aps_encrypted: bool,
+    ) -> Result<[u8; 32], ZdpStatus>;
+    /// Security_Retrieve_Authentication_Token_req at the Trust Center:
+    /// the passphrase to hand to `requester` (§2.4.3.4.2.4 steps 2–7).
+    fn authentication_token(&mut self, requester: ExtendedAddress) -> Result<[u8; 16], ZdpStatus>;
+    /// Security_Get_Authentication_Level_req: (InitialJoinMethod,
+    /// ActiveLinkKeyType) of `target` from the key-pair set
+    /// (§2.4.3.4.3.4 steps 6–8).
+    fn authentication_level(&self, target: ExtendedAddress) -> Result<(u8, u8), ZdpStatus>;
+    /// Security_Start_Key_Update_req from the Trust Center: start the
+    /// selected method (§2.4.3.4.6.4 steps 4–5). Returns `NoMatch` when
+    /// the method is unsupported.
+    fn start_key_update(
+        &mut self,
+        method: &SelectedKeyNegotiationMethod,
+        via: Option<RelayInfo>,
+    ) -> ZdpStatus;
+    /// Security_Decommission_req: removes the key-pair entries and
+    /// bindings of `devices`; true when something was removed
+    /// (§2.4.3.4.7.4 steps 7–8).
+    fn decommission(&mut self, devices: &[ExtendedAddress]) -> bool;
+    /// Security_Set_Configuration_req: applies one global TLV
+    /// (§2.4.3.4.4.3 step 3).
+    fn set_configuration(&mut self, tlv: &Tlv<'_>) -> ZdpStatus;
+    /// Security_Get_Configuration_req: writes the current value of the
+    /// global TLV `tag`; false when the device has no value for it
+    /// (§2.4.3.4.5.2 step 2).
+    fn get_configuration(&mut self, tag: u8, w: &mut Writer<'_>) -> bool;
 }
 
 /// Outputs for the runtime.
@@ -113,6 +160,9 @@ pub enum ZdoAction {
         frame: ZdpBuf,
         /// Reply through a relay (the request arrived relayed).
         via: Option<RelayInfo>,
+        /// APS-encrypt the frame with the destination's link key (the
+        /// security services of §2.4.3.4 and their responses).
+        secure: bool,
     },
 }
 
@@ -157,6 +207,12 @@ pub enum ZdoIndication<'a> {
         data: &'a [u8],
         /// The response matched an outstanding request.
         matched: bool,
+        /// Sender IEEE address when known.
+        src_ieee: Option<ExtendedAddress>,
+        /// APS security of the frame.
+        security: SecurityStatus,
+        /// The response arrived through a relay.
+        relayed: Option<RelayInfo>,
     },
     /// Device_annce received (already applied through the context).
     DeviceAnnounce {
@@ -346,6 +402,39 @@ impl<const EPS: usize> Zdo<EPS> {
             cluster,
             frame,
             via: None,
+            secure: false,
+        });
+        Ok(seq)
+    }
+
+    /// Sends a tracked request through a relay (a joining device towards
+    /// the Trust Center, or the Trust Center towards a joiner, §4.6.3.5).
+    pub fn request_via(
+        &mut self,
+        dst: ShortAddress,
+        cluster: ClusterId,
+        payload: &impl Encode,
+        via: RelayInfo,
+    ) -> Result<TransactionSequence, ZdoError> {
+        if cluster::is_response(cluster) {
+            return Err(ZdoError::InvalidParameter);
+        }
+        let seq = self.next_seq();
+        let frame = Self::frame(seq, payload)?;
+        self.pending
+            .push(PendingRequest {
+                seq,
+                cluster,
+                dst,
+                deadline: self.now.saturating_add(self.response_timeout),
+            })
+            .map_err(|_| ZdoError::Busy)?;
+        self.push_action(ZdoAction::Send {
+            dst,
+            cluster,
+            frame,
+            via: Some(via),
+            secure: false,
         });
         Ok(seq)
     }
@@ -365,6 +454,7 @@ impl<const EPS: usize> Zdo<EPS> {
             cluster,
             frame,
             via: None,
+            secure: false,
         });
         Ok(seq)
     }
@@ -377,14 +467,59 @@ impl<const EPS: usize> Zdo<EPS> {
         payload: &impl Encode,
         via: Option<RelayInfo>,
     ) {
+        self.respond_with(dst, seq, request_cluster, payload, via, false);
+    }
+
+    fn respond_with(
+        &mut self,
+        dst: ShortAddress,
+        seq: TransactionSequence,
+        request_cluster: ClusterId,
+        payload: &impl Encode,
+        via: Option<RelayInfo>,
+        secure: bool,
+    ) {
         if let Ok(frame) = Self::frame(seq, payload) {
             self.push_action(ZdoAction::Send {
                 dst,
                 cluster: cluster::response_of(request_cluster),
                 frame,
                 via,
+                secure,
             });
         }
+    }
+
+    /// Sends a tracked request APS-encrypted with `dst`'s link key
+    /// (Security_Retrieve_Authentication_Token_req,
+    /// Security_Get_Authentication_Level_req, …, §2.4.3.4).
+    pub fn request_secured(
+        &mut self,
+        dst: ShortAddress,
+        cluster: ClusterId,
+        payload: &impl Encode,
+    ) -> Result<TransactionSequence, ZdoError> {
+        if cluster::is_response(cluster) {
+            return Err(ZdoError::InvalidParameter);
+        }
+        let seq = self.next_seq();
+        let frame = Self::frame(seq, payload)?;
+        self.pending
+            .push(PendingRequest {
+                seq,
+                cluster,
+                dst,
+                deadline: self.now.saturating_add(self.response_timeout),
+            })
+            .map_err(|_| ZdoError::Busy)?;
+        self.push_action(ZdoAction::Send {
+            dst,
+            cluster,
+            frame,
+            via: None,
+            secure: true,
+        });
+        Ok(seq)
     }
 
     /// Broadcasts Device_annce (§2.4.3.1.11).
@@ -468,6 +603,9 @@ impl<const EPS: usize> Zdo<EPS> {
                 cluster: ind.cluster,
                 data: frame.data,
                 matched: matched.is_some(),
+                src_ieee: ind.src_ieee,
+                security: ind.security,
+                relayed: ind.relayed,
             });
         }
         // Broadcast requests never generate error responses (§2.4.4.1).
@@ -904,6 +1042,15 @@ impl<const EPS: usize> Zdo<EPS> {
                     broadcast,
                 });
             }
+            cluster::SECURITY_START_KEY_NEGOTIATION_REQ
+            | cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ
+            | cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ
+            | cluster::SECURITY_SET_CONFIGURATION_REQ
+            | cluster::SECURITY_GET_CONFIGURATION_REQ
+            | cluster::SECURITY_START_KEY_UPDATE_REQ
+            | cluster::SECURITY_DECOMMISSION_REQ => {
+                self.handle_security(ind, frame, broadcast, ctx);
+            }
             other => {
                 if !broadcast {
                     self.respond(
@@ -919,6 +1066,263 @@ impl<const EPS: usize> Zdo<EPS> {
             }
         }
         None
+    }
+
+    /// Security client services (§2.4.3.4). Replies are built into a
+    /// scratch buffer and sent with the request's relay information.
+    #[allow(clippy::too_many_lines)]
+    fn handle_security<'a>(
+        &mut self,
+        ind: &DataIndication<'a>,
+        frame: &ZdpFrame<'a>,
+        broadcast: bool,
+        ctx: &mut impl ZdoContext,
+    ) {
+        let (src, seq, data, via) = (ind.src, frame.seq, frame.data, ind.relayed);
+        let aps_encrypted = ind.security == SecurityStatus::LinkKey;
+        let from_tc = ind.src_ieee == Some(ctx.trust_center());
+        let centralized = ctx.trust_center() != ExtendedAddress::BROADCAST;
+        let mut out = [0u8; MAX_ZDP];
+        let mut w = Writer::new(&mut out);
+        let status = match ind.cluster {
+            cluster::SECURITY_START_KEY_NEGOTIATION_REQ => {
+                let Some(sender) = ind.src_ieee else { return };
+                match security::validate(data) {
+                    Err(e) => {
+                        if broadcast {
+                            return;
+                        }
+                        e
+                    }
+                    Ok(set) => match security::PublicPoint::find(&set) {
+                        None => ZdpStatus::MissingTlv,
+                        Some(p) if p.device != sender => ZdpStatus::InvalidTlv,
+                        Some(p) => match ctx.key_negotiation(p.device, &p.point, aps_encrypted) {
+                            Ok(point) => {
+                                let mine = security::PublicPoint {
+                                    device: ctx.local_ieee(),
+                                    point,
+                                };
+                                if mine.write(&mut w).is_err() {
+                                    return;
+                                }
+                                ZdpStatus::Success
+                            }
+                            Err(e) => e,
+                        },
+                    },
+                }
+            }
+            cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ => {
+                if broadcast || !aps_encrypted {
+                    return;
+                }
+                if !ctx.is_trust_center() {
+                    ZdpStatus::NotSupported
+                } else {
+                    let Some(requester) = ind.src_ieee else {
+                        return;
+                    };
+                    match security::validate(data) {
+                        Err(e) => e,
+                        Ok(set) => match security::AuthenticationTokenId::find(&set) {
+                            None => ZdpStatus::InvalidTlv,
+                            Some(id) if id.0 != tlv_tag::SYMMETRIC_PASSPHRASE => {
+                                ZdpStatus::InvalidRequestType
+                            }
+                            Some(_) => match ctx.authentication_token(requester) {
+                                Ok(token) => {
+                                    if tlv::write_tlv(&mut w, tlv_tag::SYMMETRIC_PASSPHRASE, &token)
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                    ZdpStatus::Success
+                                }
+                                Err(e) => e,
+                            },
+                        },
+                    }
+                }
+            }
+            cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ => {
+                if broadcast || !aps_encrypted {
+                    return;
+                }
+                if !ctx.is_trust_center() {
+                    ZdpStatus::NotAuthorized
+                } else {
+                    match security::validate(data) {
+                        Err(e) => e,
+                        Ok(set) => match security::TargetIeee::find(&set) {
+                            None => ZdpStatus::InvalidRequestType,
+                            Some(t)
+                                if t.0 == ctx.local_ieee() || t.0 == ExtendedAddress::BROADCAST =>
+                            {
+                                ZdpStatus::InvalidRequestType
+                            }
+                            Some(t) => match ctx.authentication_level(t.0) {
+                                Ok((initial, active)) => {
+                                    let lvl = security::DeviceAuthenticationLevel {
+                                        device: t.0,
+                                        initial_join_method: initial,
+                                        active_link_key_type: active,
+                                    };
+                                    if lvl.write(&mut w).is_err() {
+                                        return;
+                                    }
+                                    ZdpStatus::Success
+                                }
+                                Err(e) => e,
+                            },
+                        },
+                    }
+                }
+            }
+            cluster::SECURITY_SET_CONFIGURATION_REQ => {
+                if centralized && broadcast {
+                    return;
+                }
+                if ctx.is_trust_center() || (centralized && !from_tc) {
+                    ZdpStatus::NotAuthorized
+                } else {
+                    match security::validate(data) {
+                        Err(e) => {
+                            if broadcast {
+                                return;
+                            }
+                            e
+                        }
+                        Ok(set) => {
+                            let mut ps = security::ProcessingStatus::default();
+                            let mut processed = 0;
+                            for t in set.iter() {
+                                if !tlv::is_global_tag(t.tag) {
+                                    continue;
+                                }
+                                let st = ctx.set_configuration(&t);
+                                if st == ZdpStatus::Success {
+                                    processed += 1;
+                                }
+                                let _ = ps.0.push((t.tag, st));
+                            }
+                            if broadcast {
+                                return;
+                            }
+                            if ps.0.is_empty() {
+                                ZdpStatus::MissingTlv
+                            } else {
+                                if ps.write(&mut w).is_err() {
+                                    return;
+                                }
+                                if processed > 0 {
+                                    ZdpStatus::Success
+                                } else {
+                                    ZdpStatus::InvalidRequestType
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cluster::SECURITY_GET_CONFIGURATION_REQ => {
+                if broadcast {
+                    return;
+                }
+                if centralized && !from_tc {
+                    ZdpStatus::NotAuthorized
+                } else {
+                    match GetConfigurationReq::decode_exact(data) {
+                        Err(_) => ZdpStatus::InvalidRequestType,
+                        Ok(req) => {
+                            let mut status = ZdpStatus::Success;
+                            for id in req.tlv_ids {
+                                let mark = w.position();
+                                if ctx.get_configuration(*id, &mut w) {
+                                    continue;
+                                }
+                                if w.position() != mark {
+                                    // The value did not fit (§2.4.3.4.5.2 step 5).
+                                    status = ZdpStatus::FrameTooLarge;
+                                    break;
+                                }
+                            }
+                            if status != ZdpStatus::Success {
+                                w = Writer::new(&mut out);
+                            }
+                            status
+                        }
+                    }
+                }
+            }
+            cluster::SECURITY_START_KEY_UPDATE_REQ => {
+                // While joining the Trust Center address may be unset:
+                // it is learnt from the Sending Device EUI64 (step 3).
+                let joining = ctx.awaiting_authorization();
+                if !joining && (!centralized || !from_tc) {
+                    ZdpStatus::NotAuthorized
+                } else {
+                    match security::validate(data) {
+                        Err(_) => ZdpStatus::InvalidRequestType,
+                        Ok(set) => match SelectedKeyNegotiationMethod::find(&set) {
+                            None => ZdpStatus::InvalidRequestType,
+                            Some(m)
+                                if m.protocol
+                                    == SelectedKeyNegotiationMethod::PROTOCOL_ZIGBEE_3_0 =>
+                            {
+                                ZdpStatus::InvalidRequestType
+                            }
+                            Some(m) => ctx.start_key_update(&m, via),
+                        },
+                    }
+                }
+            }
+            cluster::SECURITY_DECOMMISSION_REQ => {
+                if broadcast {
+                    return;
+                }
+                if ctx.is_trust_center() || (centralized && !aps_encrypted) {
+                    ZdpStatus::NotAuthorized
+                } else {
+                    match security::validate(data) {
+                        Err(e) => e,
+                        Ok(set) => match security::Eui64List::find(&set) {
+                            None => ZdpStatus::InvalidRequestType,
+                            Some(list) if list.0.contains(&ctx.local_ieee()) => {
+                                ZdpStatus::InvalidRequestType
+                            }
+                            Some(list) => {
+                                let devices: Vec<ExtendedAddress, { security::MAX_EUI64_LIST }> =
+                                    list.0
+                                        .iter()
+                                        .copied()
+                                        .filter(|a| *a != ExtendedAddress::BROADCAST)
+                                        .collect();
+                                if ctx.decommission(&devices) {
+                                    ZdpStatus::Success
+                                } else {
+                                    // "NOT_FOUND" is not a ZDP enumeration;
+                                    // NO_MATCH is the closest defined value
+                                    // (ADR-0007).
+                                    ZdpStatus::NoMatch
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+            _ => return,
+        };
+        let n = w.position();
+        let tlvs = out.get(..n).unwrap_or(&[]);
+        self.respond_with(
+            src,
+            seq,
+            ind.cluster,
+            &security::StartKeyNegotiationRsp { status, tlvs },
+            via,
+            aps_encrypted,
+        );
     }
 
     /// Status for a descriptor request about another device

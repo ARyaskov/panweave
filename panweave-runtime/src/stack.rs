@@ -212,6 +212,15 @@ pub enum StackEvent {
     ZclReport(ZclFrame),
     /// The Trust Center link key was updated (verified).
     LinkKeyUpdated,
+    /// A dynamic link key negotiation with `partner` failed or timed out;
+    /// the previous key-pair entry was restored (R23.2 §4.4.9).
+    KeyNegotiationFailed {
+        /// The peer.
+        partner: ExtendedAddress,
+    },
+    /// The Trust Center handed out a symmetric authentication token
+    /// (passphrase) for future key negotiations (§2.4.3.4.2).
+    AuthenticationTokenStored,
     /// Identify server state changed (`seconds` remaining, 0 = stopped).
     Identify {
         /// Endpoint.
@@ -280,6 +289,7 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) network_key_sequence: KeySequenceNumber,
     pub(crate) next_poll: Option<Instant>,
     pub(crate) fast_polls_left: u8,
+    pub(crate) dlk: crate::dlk::DlkState,
     /// Events dropped on overflow.
     pub dropped_events: u32,
 }
@@ -360,6 +370,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             network_key_sequence: KeySequenceNumber(0),
             next_poll: None,
             fast_polls_left: 0,
+            dlk: crate::dlk::DlkState::default(),
             dropped_events: 0,
         }
     }
@@ -570,6 +581,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.aps.poll_timers(now);
         self.zdo.poll_timers(now);
         self.zcl.poll_timers(now);
+        self.poll_dlk(now);
         self.service_polling(now);
         self.pump();
     }
@@ -614,6 +626,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.aps.next_deadline(),
             self.zdo.next_deadline(),
             self.zcl.next_deadline(),
+            self.dlk_deadline(),
             self.next_poll
                 .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
         ]

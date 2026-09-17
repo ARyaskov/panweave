@@ -2,14 +2,28 @@
 //! ZDO (`ZdoContext`).
 
 use panweave_aps::layer::NwkView;
+use panweave_aps::layer::RelayInfo;
 use panweave_aps::tables::BindingEntry;
+use panweave_codec::Writer;
+use panweave_codec::tlv::Tlv;
 use panweave_nwk::neighbor::Relationship;
 use panweave_nwk::routing::RouteStatus;
+use panweave_nwk::tlv::tag as tlv_tag;
+use panweave_nwk::tlv::{
+    ConfigurationParameters, FragmentationParameters, NextChannelChange, NextPanIdChange,
+    PanIdConflictReport, RouterInformation, SupportedKeyNegotiationMethods,
+};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::trust_center::TrustCenterPolicy;
+#[cfg(feature = "dlk")]
+use panweave_types::KeyAttributes;
 use panweave_types::{
-    ApsStatus, ExtendedAddress, LogicalDeviceType, MacCapability, Rng, ShortAddress,
+    ApsStatus, ChannelMask, CryptoRng, ExtendedAddress, Key128, LogicalDeviceType, MacCapability,
+    Rng, ShortAddress,
 };
+use panweave_zdo::security::SelectedKeyNegotiationMethod;
+
+use crate::dlk::DlkState;
 use panweave_zdo::layer::ZdoContext;
 use panweave_zdo::zdp::{
     BindReq, NeighborDeviceType, NeighborRecord, NeighborRelationship, RouteRecord,
@@ -60,13 +74,15 @@ impl<C: BlockCipher, R: Rng> NwkView for AddrView<'_, C, R> {
 }
 
 /// The ZDO's view of the stack.
-pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: Rng> {
+pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng> {
     pub nwk: &'a mut StackNwk<C, R>,
     pub aps: &'a mut StackAps<C>,
     pub policy: &'a TrustCenterPolicy,
     pub is_trust_center: bool,
     /// Set when the binding table changed (runtime persists it).
     pub bindings_changed: bool,
+    /// Key negotiation state.
+    pub dlk: &'a mut DlkState,
 }
 
 fn relationship_of(r: Relationship) -> NeighborRelationship {
@@ -80,7 +96,7 @@ fn relationship_of(r: Relationship) -> NeighborRelationship {
     }
 }
 
-impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
+impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
     fn local_short(&self) -> ShortAddress {
         self.nwk.nib.network_address
     }
@@ -95,6 +111,10 @@ impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
 
     fn trust_center(&self) -> ExtendedAddress {
         self.aps.aib.trust_center_address
+    }
+
+    fn awaiting_authorization(&self) -> bool {
+        self.aps.state() == panweave_aps::layer::DeviceState::JoinedUnauthorized
     }
 
     fn is_trust_center(&self) -> bool {
@@ -271,5 +291,269 @@ impl<C: BlockCipher, R: Rng> ZdoContext for ZdoCtx<'_, C, R> {
 
     fn child_claimed_elsewhere(&mut self, child: ExtendedAddress, _router: ShortAddress) {
         let _ = self.nwk.neighbors.remove_extended(child);
+    }
+
+    // ---- Security services (§2.4.3.4) --------------------------------
+
+    fn key_negotiation(
+        &mut self,
+        partner: ExtendedAddress,
+        point: &[u8; 32],
+        aps_encrypted: bool,
+    ) -> Result<[u8; 32], ZdpStatus> {
+        #[cfg(not(feature = "dlk"))]
+        {
+            let _ = (partner, point, aps_encrypted);
+            Err(ZdpStatus::NotSupported)
+        }
+        #[cfg(feature = "dlk")]
+        {
+            use panweave_security::dlk::Ephemeral;
+            use panweave_security::material::{KeyNegotiationState, LinkKeyKind};
+            use panweave_zdo::security::SelectedKeyNegotiationMethod;
+
+            // §2.4.3.4.1.4: a unique, non-provisional entry requires an
+            // APS-encrypted request unless the authentication token is
+            // the pre-shared secret.
+            let entry = self.aps.security.entry(partner);
+            let Some(e) = entry else {
+                // No key-pair entry (§4.7.3.3 step 2a / §4.4.9): refuse.
+                return Err(ZdpStatus::NotAuthorized);
+            };
+            let secret = self
+                .dlk
+                .joins
+                .iter()
+                .find(|j| j.device == partner)
+                .map_or_else(
+                    || {
+                        if e.passphrase.is_some() {
+                            SelectedKeyNegotiationMethod::SECRET_AUTH_TOKEN
+                        } else {
+                            SelectedKeyNegotiationMethod::SECRET_ANONYMOUS
+                        }
+                    },
+                    |j| j.secret,
+                );
+            let token_secret = secret == SelectedKeyNegotiationMethod::SECRET_AUTH_TOKEN;
+            if e.kind == LinkKeyKind::Unique
+                && e.attributes != KeyAttributes::ProvisionalKey
+                && !aps_encrypted
+                && !token_secret
+            {
+                return Err(ZdpStatus::NotAuthorized);
+            }
+            let Some(psk) = crate::dlk::passphrase_for(Some(e), secret) else {
+                return Err(ZdpStatus::NotAuthorized);
+            };
+            let ephemeral = Ephemeral::generate::<C, _>(self.nwk.rng(), psk.as_bytes());
+            let key = ephemeral
+                .derive::<C>(self.nwk.nib.ieee_address, partner, point)
+                .map_err(|_| ZdpStatus::InvalidTlv)?;
+            let mine = *ephemeral.public();
+            if !self.aps.set_negotiated_key(
+                partner,
+                &key,
+                LinkKeyKind::Unique,
+                KeyAttributes::UnverifiedKey,
+            ) {
+                return Err(ZdpStatus::TemporaryFailure);
+            }
+            if let Some(e) = self.aps.security.keys_mut().get_mut(partner) {
+                e.negotiation_state = KeyNegotiationState::Complete;
+                e.negotiation_method = SelectedKeyNegotiationMethod::PROTOCOL_SPEKE_AES_MMO;
+                e.post_join_key_update = crate::dlk::update_method(secret);
+            }
+            Ok(mine)
+        }
+    }
+
+    fn authentication_token(&mut self, requester: ExtendedAddress) -> Result<[u8; 16], ZdpStatus> {
+        let Some(e) = self.aps.security.keys_mut().get_mut(requester) else {
+            return Err(ZdpStatus::NotPermitted);
+        };
+        if !e.passphrase_update_allowed {
+            return Err(ZdpStatus::NotPermitted);
+        }
+        // Step 6: an existing passphrase is returned, otherwise a fresh
+        // random token is generated. Step 10 (lock after the APS
+        // acknowledgement) is applied immediately: the token is stored
+        // and the entry locked once handed out.
+        let token = match &e.passphrase {
+            Some(p) => {
+                let mut t = [0u8; 16];
+                t.copy_from_slice(p.as_bytes());
+                t
+            }
+            None => {
+                let mut t = [0u8; 16];
+                self.nwk.rng().fill_bytes(&mut t);
+                t
+            }
+        };
+        let Some(e) = self.aps.security.keys_mut().get_mut(requester) else {
+            return Err(ZdpStatus::NotPermitted);
+        };
+        e.passphrase = Some(Key128::from_bytes(token));
+        e.passphrase_update_allowed = false;
+        self.aps.request_link_key_persistence();
+        Ok(token)
+    }
+
+    fn authentication_level(&self, target: ExtendedAddress) -> Result<(u8, u8), ZdpStatus> {
+        let e = self.aps.security.entry(target).ok_or(ZdpStatus::NoMatch)?;
+        Ok((
+            e.initial_join_authentication.raw(),
+            e.post_join_key_update.raw(),
+        ))
+    }
+
+    fn start_key_update(
+        &mut self,
+        method: &SelectedKeyNegotiationMethod,
+        via: Option<RelayInfo>,
+    ) -> ZdpStatus {
+        if !cfg!(feature = "dlk")
+            || method.protocol != SelectedKeyNegotiationMethod::PROTOCOL_SPEKE_AES_MMO
+        {
+            return ZdpStatus::NoMatch;
+        }
+        let placeholder = self.aps.aib.trust_center_address;
+        if placeholder == ExtendedAddress::BROADCAST && self.awaiting_authorization() {
+            // Step 3: learn the Trust Center; the pre-configured entry
+            // was installed under the placeholder (§4.6.3.1).
+            self.aps.security.rename(placeholder, method.sender);
+            self.aps.aib.trust_center_address = method.sender;
+        }
+        self.dlk.start_requested = Some((*method, via));
+        ZdpStatus::Success
+    }
+
+    fn decommission(&mut self, devices: &[ExtendedAddress]) -> bool {
+        let mut changed = false;
+        for d in devices {
+            if self.aps.security.remove(*d) {
+                changed = true;
+                self.aps.request_link_key_persistence();
+            }
+            if self.aps.bindings.remove_device(*d) > 0 {
+                changed = true;
+                self.bindings_changed = true;
+            }
+            let _ = self.nwk.neighbors.remove_extended(*d);
+        }
+        changed
+    }
+
+    fn set_configuration(&mut self, t: &Tlv<'_>) -> ZdpStatus {
+        match t.tag {
+            tlv_tag::CONFIGURATION_PARAMETERS => match ConfigurationParameters::parse(t) {
+                Ok(p) => {
+                    self.aps.aib.zdo_restricted_mode =
+                        p.0 & ConfigurationParameters::ZDO_RESTRICTED_MODE != 0;
+                    self.aps
+                        .config
+                        .require_link_key_encryption_for_transport_key =
+                        p.0 & ConfigurationParameters::REQUIRE_LINK_KEY_FOR_TRANSPORT_KEY != 0;
+                    self.nwk.nib.leave_request_allowed =
+                        p.0 & ConfigurationParameters::LEAVE_REQUEST_ALLOWED != 0;
+                    ZdpStatus::Success
+                }
+                Err(_) => ZdpStatus::InvalidRequestType,
+            },
+            tlv_tag::NEXT_PAN_ID_CHANGE => match NextPanIdChange::parse(t) {
+                Ok(p) => {
+                    self.nwk.nib.next_pan_id = p.pan_id;
+                    ZdpStatus::Success
+                }
+                Err(_) => ZdpStatus::InvalidRequestType,
+            },
+            tlv_tag::NEXT_CHANNEL_CHANGE => match NextChannelChange::parse(t) {
+                Ok(c) => {
+                    let mask = c.mask.channels_only();
+                    if mask.is_empty() || mask.and(ChannelMask::ALL_2_4GHZ) != mask {
+                        // Not a supported channel of the interface.
+                        ZdpStatus::InvalidRequestType
+                    } else {
+                        self.nwk.nib.next_channel_change = c.mask;
+                        ZdpStatus::Success
+                    }
+                }
+                Err(_) => ZdpStatus::InvalidRequestType,
+            },
+            _ => ZdpStatus::NotSupported,
+        }
+    }
+
+    fn get_configuration(&mut self, tag: u8, w: &mut Writer<'_>) -> bool {
+        match tag {
+            tlv_tag::CONFIGURATION_PARAMETERS => {
+                let mut bits = 0u16;
+                if self.aps.aib.zdo_restricted_mode {
+                    bits |= ConfigurationParameters::ZDO_RESTRICTED_MODE;
+                }
+                if self
+                    .aps
+                    .config
+                    .require_link_key_encryption_for_transport_key
+                {
+                    bits |= ConfigurationParameters::REQUIRE_LINK_KEY_FOR_TRANSPORT_KEY;
+                }
+                if self.nwk.nib.leave_request_allowed {
+                    bits |= ConfigurationParameters::LEAVE_REQUEST_ALLOWED;
+                }
+                ConfigurationParameters(bits).write(w).is_ok()
+            }
+            tlv_tag::NEXT_PAN_ID_CHANGE => NextPanIdChange {
+                pan_id: self.nwk.nib.next_pan_id,
+            }
+            .write(w)
+            .is_ok(),
+            tlv_tag::NEXT_CHANNEL_CHANGE => {
+                if self.nwk.nib.next_channel_change.is_empty() {
+                    return false;
+                }
+                NextChannelChange {
+                    mask: self.nwk.nib.next_channel_change,
+                }
+                .write(w)
+                .is_ok()
+            }
+            tlv_tag::PAN_ID_CONFLICT_REPORT => {
+                // §2.4.3.4.5.2 step 3: report and reset the count.
+                let count = self.nwk.nib.pan_id_conflict_count;
+                self.nwk.nib.pan_id_conflict_count = 0;
+                PanIdConflictReport { count }.write(w).is_ok()
+            }
+            tlv_tag::SUPPORTED_KEY_NEGOTIATION_METHODS => SupportedKeyNegotiationMethods {
+                protocols: self.aps.aib.supported_key_negotiation_methods,
+                secrets: SupportedKeyNegotiationMethods::SECRET_AUTH_TOKEN
+                    | SupportedKeyNegotiationMethods::SECRET_INSTALL_CODE,
+                source: Some(self.nwk.nib.ieee_address),
+            }
+            .write(w)
+            .is_ok(),
+            tlv_tag::ROUTER_INFORMATION => {
+                if !self.nwk.nib.is_router_or_coordinator() {
+                    return false;
+                }
+                let mut info = RouterInformation(0);
+                if self.nwk.nib.hub_connectivity {
+                    info.0 |= RouterInformation::HUB_CONNECTIVITY;
+                }
+                if self.nwk.nib.preferred_parent {
+                    info.0 |= RouterInformation::PREFERRED_PARENT;
+                }
+                info.write(w).is_ok()
+            }
+            tlv_tag::FRAGMENTATION_PARAMETERS => FragmentationParameters {
+                node: self.nwk.nib.network_address,
+                options: 0,
+                max_incoming_transfer_unit: self.aps.aib.max_size_asdu,
+            }
+            .write(w)
+            .is_ok(),
+            _ => false,
+        }
     }
 }

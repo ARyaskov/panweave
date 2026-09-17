@@ -24,6 +24,7 @@ extern crate alloc;
 
 pub mod descriptor;
 pub mod layer;
+pub mod security;
 pub mod zdp;
 
 pub use descriptor::{NodeDescriptor, PowerDescriptor, ServerMask, SimpleDescriptor};

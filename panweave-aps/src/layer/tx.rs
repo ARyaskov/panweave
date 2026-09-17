@@ -280,6 +280,18 @@ impl<
             }
             Destination::Relayed {
                 parent,
+                joiner: Some(j),
+                endpoint,
+            } if parent == self.local_short || view.unauthenticated_child(j) == Some(parent) => {
+                // The Trust Center is the joiner's parent: deliver the
+                // frame the way a relaying parent would after extracting
+                // it, NWK-unsecured to the unauthorized child.
+                let short = view.unauthenticated_child(j).ok_or(ApsError::NoKey)?;
+                self.queue_direct_to_joiner(id, short, j, endpoint, req, counter)?;
+                self.track_request(id, 1, None)?;
+            }
+            Destination::Relayed {
+                parent,
                 joiner,
                 endpoint,
             } => {
@@ -351,6 +363,52 @@ impl<
             },
             req.asdu,
             req.options.fragmentation_permitted && ack,
+        )
+    }
+
+    /// A data frame for an unauthorized child of this device: unicast,
+    /// unacknowledged, NWK-unsecured (§4.6.3.2.1 as performed by the
+    /// parent).
+    fn queue_direct_to_joiner(
+        &mut self,
+        id: RequestId,
+        short: ShortAddress,
+        joiner: ExtendedAddress,
+        endpoint: Endpoint,
+        req: &DataRequest<'_>,
+        counter: u8,
+    ) -> Result<(), ApsError> {
+        let mut header = Header::data(
+            Addressing::Endpoint(endpoint),
+            req.cluster,
+            req.profile,
+            req.src_endpoint,
+            counter,
+        )
+        .with_ack_request(false);
+        let partner = if req.options.security {
+            Some(self.link_key_for(joiner).ok_or(ApsError::NoKey)?)
+        } else {
+            None
+        };
+        header = header.secured(partner.is_some());
+        self.queue_tx(
+            TxParams {
+                request: id,
+                kind: TxKind::Data,
+                dst: short,
+                partner,
+                key_id: KeyIdentifier::Data,
+                extended_nonce: true,
+                header,
+                nwk_secure: false,
+                radius: Some(1),
+                ack: false,
+                post: None,
+                wrap: None,
+            },
+            req.asdu,
+            false,
         )
     }
 

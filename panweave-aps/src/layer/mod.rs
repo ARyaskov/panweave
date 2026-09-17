@@ -400,6 +400,9 @@ pub enum ApsEvent {
         partner: ExtendedAddress,
         /// Key type.
         key_type: KeyType,
+        /// Relay information when the Verify Key arrived through a
+        /// parent router (the partner is still unauthorized).
+        relayed: Option<RelayInfo>,
     },
     /// APSME-CONFIRM-KEY.indication (joiner side).
     ConfirmKey {

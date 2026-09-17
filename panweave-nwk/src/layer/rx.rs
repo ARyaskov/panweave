@@ -384,7 +384,16 @@ impl<
                 self.join.as_ref().is_some_and(|j| !j.secure)
             }
             Some(_) => false,
-            None => for_me && (aps_command || aps_secured),
+            // Data frames from the parent while joined-but-unauthorized:
+            // the parent forwards the Trust Center's key negotiation
+            // messages unsecured (§4.6.3.2.3.1); the APS layer restricts
+            // them to the security services.
+            None => {
+                for_me
+                    && (aps_command
+                        || aps_secured
+                        || (self.nib.joined && src == self.nib.parent_address))
+            }
         }
     }
 

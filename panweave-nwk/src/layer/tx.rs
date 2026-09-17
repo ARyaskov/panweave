@@ -225,6 +225,12 @@ impl<
         if self.nib.is_end_device() && self.nib.parent_information.0 != 0 {
             header = header.with_end_device_initiator(true);
         }
+        if !self.nib.authenticated {
+            // A joined-but-unauthorized device identifies itself so that
+            // the parent can match the frame to its unauthenticated child
+            // (§4.6.3.2.1, Relay Message Upstream).
+            header = header.with_src_ieee(self.nib.ieee_address);
+        }
         if dst.is_broadcast() {
             let (frame, header_len) = Self::build_npdu(&header, payload)?;
             let id = self.alloc_tx_id();

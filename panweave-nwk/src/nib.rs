@@ -6,8 +6,8 @@
 
 use panweave_security::aux_header::SecurityLevel;
 use panweave_types::{
-    Channel, ChannelPage, Duration, ExtendedAddress, LogicalDeviceType, MacCapability, PanId,
-    ShortAddress,
+    Channel, ChannelMask, ChannelPage, Duration, ExtendedAddress, LogicalDeviceType, MacCapability,
+    PanId, ShortAddress,
 };
 
 use crate::command::{ParentInformation, TimeoutIndex};
@@ -131,6 +131,8 @@ pub struct Nib {
     pub preferred_parent: bool,
     /// `nwkNextPanId` (0xFFFF = none).
     pub next_pan_id: PanId,
+    /// `nwkNextChannelChange` (empty = none).
+    pub next_channel_change: ChannelMask,
     /// `nwkPanIdConflictCount`.
     pub pan_id_conflict_count: u16,
     /// `nwkRoutingSequenceNumber`.
@@ -199,6 +201,7 @@ impl Nib {
             hub_connectivity: false,
             preferred_parent: false,
             next_pan_id: PanId::BROADCAST,
+            next_channel_change: ChannelMask::EMPTY,
             pan_id_conflict_count: 0,
             routing_sequence_number: 0,
             tx_total: 0,

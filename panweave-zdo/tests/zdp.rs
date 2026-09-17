@@ -153,6 +153,40 @@ impl ZdoContext for Ctx {
         self.children.iter().any(|(i, _)| *i == child)
     }
     fn child_claimed_elsewhere(&mut self, _child: ExtendedAddress, _router: ShortAddress) {}
+    fn awaiting_authorization(&self) -> bool {
+        false
+    }
+    fn key_negotiation(
+        &mut self,
+        _partner: ExtendedAddress,
+        point: &[u8; 32],
+        _aps_encrypted: bool,
+    ) -> Result<[u8; 32], ZdpStatus> {
+        // Echo the point: the tests only check the frame plumbing.
+        Ok(*point)
+    }
+    fn authentication_token(&mut self, _r: ExtendedAddress) -> Result<[u8; 16], ZdpStatus> {
+        Ok([0x42; 16])
+    }
+    fn authentication_level(&self, _t: ExtendedAddress) -> Result<(u8, u8), ZdpStatus> {
+        Ok((1, 3))
+    }
+    fn start_key_update(
+        &mut self,
+        _m: &panweave_zdo::security::SelectedKeyNegotiationMethod,
+        _via: Option<panweave_aps::layer::RelayInfo>,
+    ) -> ZdpStatus {
+        ZdpStatus::Success
+    }
+    fn decommission(&mut self, devices: &[ExtendedAddress]) -> bool {
+        !devices.is_empty()
+    }
+    fn set_configuration(&mut self, _tlv: &panweave_codec::tlv::Tlv<'_>) -> ZdpStatus {
+        ZdpStatus::Success
+    }
+    fn get_configuration(&mut self, _tag: u8, _w: &mut panweave_codec::Writer<'_>) -> bool {
+        false
+    }
 }
 
 fn node_desc(lt: LogicalDeviceType) -> NodeDescriptor {
@@ -280,6 +314,7 @@ impl Pair {
                 cluster,
                 data,
                 matched,
+                ..
             }) => responses.push((src, seq, cluster, data.to_vec(), matched)),
             Some(ZdoIndication::DeviceAnnounce { ieee, short, .. }) => {
                 announces.push((ieee, short));
@@ -739,4 +774,245 @@ fn device_announce_and_timeouts() {
         })
     );
     assert!(p.a.next_deadline().is_none());
+}
+
+#[test]
+fn security_services() {
+    use panweave_codec::Writer;
+    use panweave_zdo::security::{
+        self, AuthenticationTokenId, DeviceAuthenticationLevel, Eui64List,
+        GetAuthenticationLevelReq, GetConfigurationReq, PublicPoint,
+        RetrieveAuthenticationTokenReq, SelectedKeyNegotiationMethod, StartKeyNegotiationReq,
+        StartKeyNegotiationRsp, StartKeyUpdateReq, TargetIeee,
+    };
+    let mut p = Pair::new();
+    let mut buf = [0u8; 96];
+
+    // Start_Key_Negotiation: B asks A (the Trust Center); the context
+    // echoes the point; the response carries A's point.
+    let mut w = Writer::new(&mut buf);
+    PublicPoint {
+        device: B_IEEE,
+        point: [0x5A; 32],
+    }
+    .write(&mut w)
+    .unwrap();
+    let n = w.position();
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_START_KEY_NEGOTIATION_REQ,
+        &StartKeyNegotiationReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run();
+    let (_, _, c, data, matched) = p.last_response().clone();
+    assert_eq!(c, ClusterId(0x8040));
+    assert!(matched);
+    let rsp = StartKeyNegotiationRsp::decode_exact(&data).unwrap();
+    assert_eq!(rsp.status, ZdpStatus::Success);
+    let set = security::validate(rsp.tlvs).unwrap();
+    assert_eq!(
+        PublicPoint::find(&set),
+        Some(PublicPoint {
+            device: A_IEEE,
+            point: [0x5A; 32]
+        })
+    );
+    // A point claiming another device is INVALID_TLV; none is MISSING_TLV.
+    let mut w = Writer::new(&mut buf);
+    PublicPoint {
+        device: CHILD_IEEE,
+        point: [1; 32],
+    }
+    .write(&mut w)
+    .unwrap();
+    let n = w.position();
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_START_KEY_NEGOTIATION_REQ,
+        &StartKeyNegotiationReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run();
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::InvalidTlv
+    );
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_START_KEY_NEGOTIATION_REQ,
+        &StartKeyNegotiationReq { tlvs: &[] },
+    )
+    .unwrap();
+    p.run();
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::MissingTlv
+    );
+
+    // Retrieve_Authentication_Token: dropped without APS security, served
+    // by the Trust Center with the passphrase TLV otherwise.
+    let mut w = Writer::new(&mut buf);
+    AuthenticationTokenId(69).write(&mut w).unwrap();
+    let n = w.position();
+    let before = p.responses.len();
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ,
+        &RetrieveAuthenticationTokenReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run();
+    assert_eq!(p.responses.len(), before);
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ,
+        &RetrieveAuthenticationTokenReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    let rsp = StartKeyNegotiationRsp::decode_exact(&p.last_response().3).unwrap();
+    assert_eq!(rsp.status, ZdpStatus::Success);
+    let set = security::validate(rsp.tlvs).unwrap();
+    assert_eq!(set.value(69), Some(&[0x42u8; 16][..]));
+    // Wrong token type.
+    let mut w = Writer::new(&mut buf);
+    AuthenticationTokenId(7).write(&mut w).unwrap();
+    let n = w.position();
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_RETRIEVE_AUTHENTICATION_TOKEN_REQ,
+        &RetrieveAuthenticationTokenReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::InvalidRequestType
+    );
+
+    // Get_Authentication_Level at the Trust Center.
+    let mut w = Writer::new(&mut buf);
+    TargetIeee(CHILD_IEEE).write(&mut w).unwrap();
+    let n = w.position();
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ,
+        &GetAuthenticationLevelReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    let rsp = StartKeyNegotiationRsp::decode_exact(&p.last_response().3).unwrap();
+    assert_eq!(rsp.status, ZdpStatus::Success);
+    assert_eq!(
+        DeviceAuthenticationLevel::find(&security::validate(rsp.tlvs).unwrap()),
+        Some(DeviceAuthenticationLevel {
+            device: CHILD_IEEE,
+            initial_join_method: 1,
+            active_link_key_type: 3,
+        })
+    );
+    // Asking a non-Trust-Center: NOT_AUTHORIZED.
+    p.a.request(
+        B_SHORT,
+        cluster::SECURITY_GET_AUTHENTICATION_LEVEL_REQ,
+        &GetAuthenticationLevelReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::NotAuthorized
+    );
+
+    // Start_Key_Update from the Trust Center to B is accepted; from B to
+    // the Trust Center it is NOT_AUTHORIZED.
+    let mut w = Writer::new(&mut buf);
+    SelectedKeyNegotiationMethod {
+        protocol: 1,
+        secret: 255,
+        sender: A_IEEE,
+    }
+    .write(&mut w)
+    .unwrap();
+    let n = w.position();
+    p.a.request(
+        B_SHORT,
+        cluster::SECURITY_START_KEY_UPDATE_REQ,
+        &StartKeyUpdateReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::Success
+    );
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_START_KEY_UPDATE_REQ,
+        &StartKeyUpdateReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::NotAuthorized
+    );
+
+    // Decommission: rejected at the Trust Center, applied at B.
+    let mut list = Eui64List(heapless::Vec::new());
+    list.0.push(CHILD_IEEE).unwrap();
+    let mut w = Writer::new(&mut buf);
+    list.write(&mut w).unwrap();
+    let n = w.position();
+    p.a.request(
+        B_SHORT,
+        cluster::SECURITY_DECOMMISSION_REQ,
+        &security::DecommissionReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::Success
+    );
+    p.b.request(
+        A_SHORT,
+        cluster::SECURITY_DECOMMISSION_REQ,
+        &security::DecommissionReq { tlvs: &buf[..n] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    assert_eq!(
+        StartKeyNegotiationRsp::decode_exact(&p.last_response().3)
+            .unwrap()
+            .status,
+        ZdpStatus::NotAuthorized
+    );
+
+    // Get_Configuration: the test context has no values → empty SUCCESS.
+    p.a.request(
+        B_SHORT,
+        cluster::SECURITY_GET_CONFIGURATION_REQ,
+        &GetConfigurationReq { tlv_ids: &[75, 66] },
+    )
+    .unwrap();
+    p.run_with(SecurityStatus::LinkKey);
+    let rsp = StartKeyNegotiationRsp::decode_exact(&p.last_response().3).unwrap();
+    assert_eq!(rsp.status, ZdpStatus::Success);
+    assert!(rsp.tlvs.is_empty());
 }

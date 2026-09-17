@@ -815,7 +815,7 @@ fn trust_center_join_and_link_key_update() {
     let ev = net.events(TC_SHORT);
     assert!(ev.iter().any(|e| matches!(
         e,
-        ApsEvent::KeyVerified { partner, key_type: KeyType::TrustCenterLinkKey } if *partner == JOINER_IEEE
+        ApsEvent::KeyVerified { partner, key_type: KeyType::TrustCenterLinkKey, .. } if *partner == JOINER_IEEE
     )));
     let ev = net.events(JOINER_SHORT);
     assert!(ev.iter().any(|e| matches!(

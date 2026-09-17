@@ -16,6 +16,8 @@ alloc = ["panweave-types/alloc"]
 serde = ["panweave-types/serde"]
 defmt = ["panweave-types/defmt", "panweave-runtime/defmt", "panweave-bdb/defmt"]
 crypto-software = ["panweave-security/crypto-software"]
+# Curve25519 dynamic link keys (R23 §4.4.9).
+dlk = ["panweave-runtime/dlk", "panweave-security/dlk"]
 
 [dependencies]
 panweave-types = { workspace = true }

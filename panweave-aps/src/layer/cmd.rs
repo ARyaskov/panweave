@@ -140,6 +140,32 @@ impl<
         )
     }
 
+    /// Requests persistence of the key-pair set after a direct change.
+    pub fn request_link_key_persistence(&mut self) {
+        self.push_action(ApsAction::Persist(PersistItem::LinkKeys));
+    }
+
+    /// Replaces the key of `partner`'s entry with a negotiated or
+    /// transported key (counters reset), persisting the key-pair set and
+    /// the new outgoing counter reservation (§4.4.9, §4.7.3.3 step 5).
+    pub fn set_negotiated_key(
+        &mut self,
+        partner: ExtendedAddress,
+        key: &Key128,
+        kind: LinkKeyKind,
+        attributes: KeyAttributes,
+    ) -> bool {
+        if !self
+            .security
+            .replace_key(partner, key.clone(), attributes, kind)
+        {
+            return false;
+        }
+        self.push_action(ApsAction::Persist(PersistItem::LinkKeys));
+        self.request_counter_reservations();
+        true
+    }
+
     /// Installs a link-key entry and requests persistence of its first
     /// outgoing counter reservation.
     pub fn install_link_key(&mut self, entry: LinkKeyEntry) -> Result<(), LinkKeyEntry> {
@@ -498,6 +524,97 @@ impl<
         self.finish_command(id, ApsCommandId::VerifyKey)
     }
 
+    /// APSME-VERIFY-KEY.request from a joined-but-unauthorized device,
+    /// relayed upstream through `parent` (§4.6.3.5, §4.6.3.2.3.1).
+    pub fn verify_key_via(
+        &mut self,
+        device: ExtendedAddress,
+        parent: ShortAddress,
+        key_type: KeyType,
+    ) -> Result<RequestId, ApsError> {
+        if self.config.is_trust_center || key_type != KeyType::TrustCenterLinkKey {
+            return Err(ApsError::IllegalRequest);
+        }
+        let hash = {
+            let e = self.security.entry(device).ok_or(ApsError::NoKey)?;
+            key_hierarchy::verify_key_hash::<C>(&e.key)
+        };
+        let id = self.alloc_request();
+        let cmd = ApsCommand::VerifyKey(VerifyKey {
+            key_type,
+            source: self.local_ieee,
+            hash,
+        });
+        let inner_counter = self.next_counter();
+        let inner_header = Header::command(inner_counter, false).with_ack_request(false);
+        self.send_command_wrapped(
+            id,
+            parent,
+            &cmd,
+            None,
+            key_type,
+            true,
+            false,
+            None,
+            Some(Wrap::Relay {
+                joiner: self.local_ieee,
+                downstream: false,
+                inner_header,
+                inner_partner: None,
+            }),
+        )?;
+        self.finish_command(id, ApsCommandId::RelayMessageUpstream)
+    }
+
+    /// APSME-CONFIRM-KEY.request from the Trust Center to a
+    /// joined-but-unauthorized device, relayed downstream through
+    /// `parent` (§4.6.3.5).
+    pub fn confirm_key_via(
+        &mut self,
+        device: ExtendedAddress,
+        parent: ShortAddress,
+        key_type: KeyType,
+        status: ApsStatus,
+    ) -> Result<RequestId, ApsError> {
+        if !self.config.is_trust_center || self.aib.is_distributed() {
+            return Err(ApsError::IllegalRequest);
+        }
+        let (partner, status) = match self.link_key_for(device) {
+            Some(p) => (Some(p).filter(|_| status.is_success()), status),
+            None => (None, ApsStatus::SecurityFail),
+        };
+        let id = self.alloc_request();
+        let cmd = ApsCommand::ConfirmKey(ConfirmKey {
+            status,
+            key_type,
+            destination: device,
+        });
+        let inner_counter = self.next_counter();
+        let inner_header = Header::command(inner_counter, false)
+            .with_ack_request(false)
+            .secured(partner.is_some());
+        self.send_command_wrapped(
+            id,
+            parent,
+            &cmd,
+            None,
+            key_type,
+            true,
+            true,
+            None,
+            Some(Wrap::Relay {
+                joiner: device,
+                downstream: true,
+                inner_header,
+                inner_partner: partner,
+            }),
+        )?;
+        if partner.is_some() {
+            self.security.reset_incoming(device);
+        }
+        self.finish_command(id, ApsCommandId::RelayMessageDownstream)
+    }
+
     /// APSME-CONFIRM-KEY.request (§4.4.8.1.3): APS-encrypted only on
     /// SUCCESS.
     pub fn confirm_key(
@@ -506,6 +623,20 @@ impl<
         short: ShortAddress,
         key_type: KeyType,
         status: ApsStatus,
+    ) -> Result<RequestId, ApsError> {
+        self.confirm_key_with(device, short, key_type, status, true)
+    }
+
+    /// [`Self::confirm_key`] with explicit NWK security: a Trust Center
+    /// that is the parent of a joined-but-unauthorized device confirms
+    /// its negotiated key NWK-unsecured (§4.6.3.5).
+    fn confirm_key_with(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        key_type: KeyType,
+        status: ApsStatus,
+        nwk_secure: bool,
     ) -> Result<RequestId, ApsError> {
         if key_type == KeyType::TrustCenterLinkKey
             && (!self.config.is_trust_center || self.aib.is_distributed())
@@ -528,7 +659,9 @@ impl<
             key_type,
             destination: device,
         });
-        self.send_command(id, short, &cmd, partner, key_type, true, true, None)?;
+        self.send_command(
+            id, short, &cmd, partner, key_type, nwk_secure, nwk_secure, None,
+        )?;
         if partner.is_some() {
             self.security.reset_incoming(device);
         }
@@ -617,7 +750,10 @@ impl<
                     ctx.nwk_secured && (aps_secured || !unique)
                 }
                 ApsCommandId::RequestKey => aps_secured && ctx.nwk_secured,
-                ApsCommandId::VerifyKey => ctx.nwk_secured,
+                // A joiner negotiating a link key verifies it through its
+                // parent's relay before holding the network key
+                // (§4.6.3.2.2.2).
+                ApsCommandId::VerifyKey => ctx.nwk_secured || ctx.relayed.is_some(),
                 ApsCommandId::RelayMessageUpstream => ctx.nwk_secured || from_unauthenticated_child,
                 _ => false,
             };
@@ -638,11 +774,13 @@ impl<
         }
         if self.state == DeviceState::JoinedUnauthorized {
             // Joining: the parent forwards the Trust Center's frames
-            // unsecured; the handlers validate the contents.
+            // unsecured; the handlers validate the contents. A Confirm
+            // Key reaches the joiner inside a Relay Message Downstream
+            // during key negotiation (§4.6.3.2.3.1).
             return matches!(
                 id,
                 ApsCommandId::TransportKey | ApsCommandId::RelayMessageDownstream
-            );
+            ) || (id == ApsCommandId::ConfirmKey && aps_secured);
         }
         let tc = self.aib.trust_center_address;
         let from_tc = if let Some(p) = sec.partner {
@@ -1037,9 +1175,17 @@ impl<
             self.push_event(ApsEvent::KeyVerified {
                 partner: src,
                 key_type: vk.key_type,
+                relayed: ctx.relayed,
             });
         }
-        let _ = self.confirm_key(src, short, vk.key_type, status);
+        let _ = match ctx.relayed {
+            // We are the joiner's parent: no relay, NWK-unsecured.
+            Some(r) if view.unauthenticated_child(src) == Some(r.parent) => {
+                self.confirm_key_with(src, r.parent, vk.key_type, status, false)
+            }
+            Some(r) => self.confirm_key_via(src, r.parent, vk.key_type, status),
+            None => self.confirm_key(src, short, vk.key_type, status),
+        };
     }
 
     /// APSME-CONFIRM-KEY.indication processing (§4.4.8.2.3).

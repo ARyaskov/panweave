@@ -11,6 +11,8 @@ categories.workspace = true
 
 [features]
 default = []
+# Curve25519 SPEKE dynamic link keys (R23 §4.4.9).
+dlk = ["panweave-security/dlk"]
 std = ["alloc", "panweave-types/std", "panweave-mac/std", "panweave-nwk/std", "panweave-aps/std", "panweave-zdo/std", "panweave-zcl/std", "panweave-bdb/std", "panweave-storage/std", "panweave-security/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
@@ -32,7 +34,8 @@ serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 
 [dev-dependencies]
-panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-security = { workspace = true, features = ["crypto-software", "dlk"] }
+panweave-runtime = { path = ".", features = ["dlk"] }
 panweave-testkit = { workspace = true }
 panweave-sim = { workspace = true }
 
