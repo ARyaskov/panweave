@@ -12,9 +12,9 @@ Panweave is an independent implementation; this table records the maintainers' o
 | DTL2 | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 0 | 0 | 9 | 0 | 0 | 0 |
-| R23.2 | 129 | 12 | 4 | 112 | 1 | 0 | 0 |
 | SE1.4a | 18 | 0 | 0 | 18 | 0 | 0 | 0 |
 | ZCL8 | 36 | 0 | 0 | 36 | 0 | 0 | 0 |
+| R23.2 | 129 | 12 | 4 | 112 | 1 | 0 | 0 |
 | **All** | 233 | 12 | 4 | 216 | 1 | 0 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
@@ -86,6 +86,70 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-GP-SINK-001 | A.3.2.9, A.3.6.2, A.3.8.2 | conditional | not-implemented | `panweave-green-power::sink` | Sink (combo basic): sink table, commissioning (unidirectional and bidirectional), key derivation/delivery, GP Pairing distribution to proxies, translation of GPD commands to ZCL, security and freshness checks | — |  |
 | PW-GP-COMM-001 | A.3.9 | mandatory | not-implemented | `panweave-green-power::commissioning` | Commissioning procedure: sink commissioning mode window, proxy commissioning window, channel request handling, commissioning reply, success | — |  |
 | PW-GP-EP-001 | A.2.4, A.2.5 | mandatory | not-implemented | `panweave-green-power::endpoint` | Green Power endpoint 242 with profile 0xA1E0; proxy alias addressing | — |  |
+
+## SE1.4a — Zigbee Smart Energy Standard 1.4a
+
+| Id | Section | Level | Status | Module | Summary | Tests | Notes |
+|---|---|---|---|---|---|---|---|
+| PW-SE-PROF-001 | §5.2, §5.3 | mandatory | not-implemented | `panweave-smart-energy::profile` | Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters) | — |  |
+| PW-SE-SEC-001 | §5.4.1–§5.4.3 | mandatory | not-implemented | `panweave-smart-energy::security` | Joining with preinstalled TCLKs (install codes), rejoin policy, leaving | — |  |
+| PW-SE-SEC-002 | §5.4.4, §5.4.5 | mandatory | not-implemented | `panweave-smart-energy::security` | Network key and link key update policies; key retirement | — |  |
+| PW-SE-SEC-003 | §5.4.6 | mandatory | not-implemented | `panweave-smart-energy::security::policy` | Cluster usage of security keys: APS link-key encryption mandatory for listed clusters | — |  |
+| PW-SE-SEC-004 | §5.4.7, Annex C | mandatory | not-implemented | `panweave-smart-energy::key_establishment` | Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors | — | Requires ECMQV over binary curves; no vetted no_std Rust implementation exists. Tracked as blocked pending a reviewed dependency or in-tree implementation. |
+| PW-SE-SEC-005 | §5.4.8, §5.13 | optional | not-implemented | `panweave-smart-energy::security` | Trust Center swap-out, keep-alive, coexistence rules | — |  |
+| PW-SE-COMM-001 | §5.5 | mandatory | not-implemented | `panweave-smart-energy::commissioning` | Commissioning: formation, commissioning modes, service discovery and binding | — |  |
+| PW-SE-DEV-001 | §6.3 | mandatory | not-implemented | `panweave-smart-energy::devices` | SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications) | — |  |
+| PW-SE-CL-001 | Annex D.2 | mandatory | not-implemented | `panweave-smart-energy::clusters::drlc` | Demand Response and Load Control cluster | — |  |
+| PW-SE-CL-002 | Annex D.3 | mandatory | not-implemented | `panweave-smart-energy::clusters::metering` | Metering cluster | — |  |
+| PW-SE-CL-003 | Annex D.4 | mandatory | not-implemented | `panweave-smart-energy::clusters::price` | Price cluster | — |  |
+| PW-SE-CL-004 | Annex D.5 | mandatory | not-implemented | `panweave-smart-energy::clusters::messaging` | Messaging cluster | — |  |
+| PW-SE-CL-005 | Annex D.6 | optional | not-implemented | `panweave-smart-energy::clusters::tunneling` | Tunneling cluster | — |  |
+| PW-SE-CL-006 | Annex D.7 | optional | not-implemented | `panweave-smart-energy::clusters::prepayment` | Prepayment cluster | — |  |
+| PW-SE-CL-007 | Annex D.9, D.10, D.11, D.12, D.13, D.14 | optional | not-implemented | `panweave-smart-energy::clusters` | Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | — |  |
+| PW-SE-CL-008 | Annex A.3, §6.1.6 | mandatory | not-implemented | `panweave-zcl::clusters::keep_alive` | Keep-Alive cluster | — |  |
+| PW-SE-CL-009 | Annex B | optional | not-implemented | `panweave-aps::interpan` | Enhanced inter-PAN transmission | — |  |
+| PW-SE-EV-001 | Annex E | mandatory | not-implemented | `panweave-smart-energy::events` | Overlapping DRLC event rules | — |  |
+
+## ZCL8 — Zigbee Cluster Library Specification, Revision 8
+
+| Id | Section | Level | Status | Module | Summary | Tests | Notes |
+|---|---|---|---|---|---|---|---|
+| PW-ZCL-FND-001 | §2.4.1 | mandatory | not-implemented | `panweave-zcl::frame` | ZCL frame header: frame control (frame type, manufacturer specific, direction, disable default response), optional manufacturer code, transaction sequence number, command identifier | — |  |
+| PW-ZCL-FND-002 | §2.6.2 | mandatory | not-implemented | `panweave-zcl::types` | Data types: null, general data, boolean, bitmaps, unsigned/signed integers 8–64 bit, enums, floats, strings (octet/character, long variants), arrays/structures/sets/bags, time/date/UTC, cluster/attribute/BACnet OID, IEEE address, 128-bit security key; invalid/unknown values | — |  |
+| PW-ZCL-FND-003 | §2.5.1, §2.5.2 | mandatory | not-implemented | `panweave-zcl::global::read` | Read Attributes / Read Attributes Response with per-attribute status | — |  |
+| PW-ZCL-FND-004 | §2.5.3–§2.5.6 | mandatory | not-implemented | `panweave-zcl::global::write` | Write Attributes, Write Attributes Undivided, Write Attributes Response, Write Attributes No Response; type checking, read-only, invalid value semantics | — |  |
+| PW-ZCL-FND-005 | §2.5.7, §2.5.8 | mandatory | not-implemented | `panweave-zcl::global::reporting` | Configure Reporting / Response with min/max intervals, reportable change, timeout; direction semantics | — |  |
+| PW-ZCL-FND-006 | §2.5.9, §2.5.10 | mandatory | not-implemented | `panweave-zcl::global::reporting` | Read Reporting Configuration / Response | — |  |
+| PW-ZCL-FND-007 | §2.5.11 | mandatory | not-implemented | `panweave-zcl::reporting` | Report Attributes command generated by the reporting engine according to configuration | — |  |
+| PW-ZCL-FND-008 | §2.5.12 | mandatory | not-implemented | `panweave-zcl::global::default_response` | Default Response generation rules (unicast, not for default responses, disable-default-response bit, error cases) | — |  |
+| PW-ZCL-FND-009 | §2.5.13, §2.5.14 | mandatory | not-implemented | `panweave-zcl::global::discover` | Discover Attributes / Response with discovery complete flag | — |  |
+| PW-ZCL-FND-010 | §2.5.15–§2.5.18 | optional | not-implemented | `panweave-zcl::global::structured` | Read/Write Attributes Structured | — |  |
+| PW-ZCL-FND-011 | §2.5.19–§2.5.22 | mandatory | not-implemented | `panweave-zcl::global::discover` | Discover Commands Received/Generated and Discover Attributes Extended with responses | — |  |
+| PW-ZCL-FND-012 | §2.6.3 | mandatory | not-implemented | `panweave-zcl::status` | Status enumeration | — |  |
+| PW-ZCL-FND-013 | §2.3.3, §2.4.2 | mandatory | not-implemented | `panweave-zcl::dispatch` | Manufacturer-specific clusters, attributes, commands; command direction and server/client roles; unsupported cluster/attribute/command handling | — |  |
+| PW-ZCL-FND-014 | §2.3.2 | mandatory | not-implemented | `panweave-zcl::cluster` | Global attributes: ClusterRevision, AttributeReportingStatus | — |  |
+| PW-ZCL-GEN-001 | §3.2 | mandatory | not-implemented | `panweave-zcl::clusters::basic` | Basic cluster attributes and Reset to Factory Defaults command | — |  |
+| PW-ZCL-GEN-002 | §3.3 | optional | not-implemented | `panweave-zcl::clusters::power_configuration` | Power Configuration cluster | — |  |
+| PW-ZCL-GEN-003 | §3.5 | mandatory | not-implemented | `panweave-zcl::clusters::identify` | Identify cluster: IdentifyTime attribute, Identify, Identify Query, Trigger Effect commands, Identify Query Response | — |  |
+| PW-ZCL-GEN-004 | §3.6 | mandatory | not-implemented | `panweave-zcl::clusters::groups` | Groups cluster: NameSupport, Add/View/Get Membership/Remove/Remove All/Add If Identifying and responses | — |  |
+| PW-ZCL-GEN-005 | §3.7 | optional | not-implemented | `panweave-zcl::clusters::scenes` | Scenes cluster with scene table, extension fields, transitions | — |  |
+| PW-ZCL-GEN-006 | §3.8 | mandatory | not-implemented | `panweave-zcl::clusters::on_off` | On/Off cluster: OnOff, GlobalSceneControl, OnTime, OffWaitTime, StartUpOnOff; Off/On/Toggle/Off With Effect/On With Recall Global Scene/On With Timed Off | — |  |
+| PW-ZCL-GEN-007 | §3.10 | mandatory | not-implemented | `panweave-zcl::clusters::level` | Level Control cluster: CurrentLevel and related attributes; Move to Level, Move, Step, Stop (with/without On/Off), transitions and rate semantics | — |  |
+| PW-ZCL-GEN-008 | §3.11 | optional | not-implemented | `panweave-zcl::clusters::alarms` | Alarms cluster | — |  |
+| PW-ZCL-GEN-009 | §3.12 | optional | not-implemented | `panweave-zcl::clusters::time` | Time cluster | — |  |
+| PW-ZCL-GEN-010 | §3.15 | optional | not-implemented | `panweave-zcl::clusters::diagnostics` | Diagnostics cluster | — |  |
+| PW-ZCL-GEN-011 | §3.16 | optional | not-implemented | `panweave-zcl::clusters::poll_control` | Poll Control cluster: check-in, fast polling, long/short poll intervals | — |  |
+| PW-ZCL-MEAS-001 | §4.2–§4.8 | optional | not-implemented | `panweave-zcl::clusters::measurement` | Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing | — |  |
+| PW-ZCL-MEAS-002 | §4.9 | optional | not-implemented | `panweave-zcl::clusters::electrical_measurement` | Electrical Measurement cluster | — |  |
+| PW-ZCL-LIGHT-001 | §5.2 | optional | not-implemented | `panweave-zcl::clusters::color_control` | Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions | — |  |
+| PW-ZCL-HVAC-001 | §6.3, §6.4 | optional | not-implemented | `panweave-zcl::clusters::hvac` | Thermostat and Fan Control clusters | — |  |
+| PW-ZCL-CLOS-001 | §7.3, §7.4 | optional | not-implemented | `panweave-zcl::clusters::closures` | Door Lock and Window Covering clusters | — |  |
+| PW-ZCL-IAS-001 | §8.2 | optional | not-implemented | `panweave-zcl::clusters::ias_zone` | IAS Zone cluster: enrolment (auto/trip-to-pair), zone status change notification, enroll request/response | — |  |
+| PW-ZCL-IAS-002 | §8.3, §8.4 | optional | not-implemented | `panweave-zcl::clusters::ias` | IAS ACE and IAS WD clusters | — |  |
+| PW-ZCL-OTA-001 | §11 | optional | not-implemented | `panweave-zcl::clusters::ota` | OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification | — |  |
+| PW-ZCL-COMM-001 | §13.2 | optional | not-implemented | `panweave-zcl::clusters::commissioning` | Commissioning cluster (startup attribute set) | — |  |
+| PW-ZCL-COMM-002 | §13.3 | optional | not-implemented | `panweave-zcl::clusters::touchlink` | Touchlink commissioning cluster (inter-PAN commands, utility commands) | — |  |
+| PW-ZCL-MISC-001 | §9, §12, §14, §15 | optional | not-implemented | `panweave-zcl::clusters` | Protocol interface, telecommunications, retail and appliance clusters | — | Low priority; metadata entries only. |
 
 ## R23.2 — Zigbee Specification, Revision 23.2
 
@@ -220,68 +284,4 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-R23-MAC-004 | Annex D.12–D.14 | optional | not-applicable | `vendor radio backends` | Sub-GHz FSK PHY/MAC (GB and regional): duty cycle, LBT | — | PHY-specific; outside the hardware-independent core. |
 | PW-R23-MAC-005 | Annex E, Annex F | optional | not-implemented | `panweave-nwk::network_manager` | Network manager as channel manager for interference reporting; multiple frequency band usage | — |  |
 | PW-R23-MAC-006 | Annex K | optional | not-implemented | `panweave-nwk::routing` | Provisional routing improvements (extended route information TLVs) | — | Provisional; not planned until stabilised. |
-
-## SE1.4a — Zigbee Smart Energy Standard 1.4a
-
-| Id | Section | Level | Status | Module | Summary | Tests | Notes |
-|---|---|---|---|---|---|---|---|
-| PW-SE-PROF-001 | §5.2, §5.3 | mandatory | not-implemented | `panweave-smart-energy::profile` | Stack profile requirements and startup attribute set (join, security, end device, link status, concentrator, APS transport/fragmentation, binding parameters) | — |  |
-| PW-SE-SEC-001 | §5.4.1–§5.4.3 | mandatory | not-implemented | `panweave-smart-energy::security` | Joining with preinstalled TCLKs (install codes), rejoin policy, leaving | — |  |
-| PW-SE-SEC-002 | §5.4.4, §5.4.5 | mandatory | not-implemented | `panweave-smart-energy::security` | Network key and link key update policies; key retirement | — |  |
-| PW-SE-SEC-003 | §5.4.6 | mandatory | not-implemented | `panweave-smart-energy::security::policy` | Cluster usage of security keys: APS link-key encryption mandatory for listed clusters | — |  |
-| PW-SE-SEC-004 | §5.4.7, Annex C | mandatory | not-implemented | `panweave-smart-energy::key_establishment` | Key Establishment cluster with CBKE suites (ECMQV over sect163k1 suite 1 and sect283k1 suite 2), certificates, test vectors | — | Requires ECMQV over binary curves; no vetted no_std Rust implementation exists. Tracked as blocked pending a reviewed dependency or in-tree implementation. |
-| PW-SE-SEC-005 | §5.4.8, §5.13 | optional | not-implemented | `panweave-smart-energy::security` | Trust Center swap-out, keep-alive, coexistence rules | — |  |
-| PW-SE-COMM-001 | §5.5 | mandatory | not-implemented | `panweave-smart-energy::commissioning` | Commissioning: formation, commissioning modes, service discovery and binding | — |  |
-| PW-SE-DEV-001 | §6.3 | mandatory | not-implemented | `panweave-smart-energy::devices` | SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications) | — |  |
-| PW-SE-CL-001 | Annex D.2 | mandatory | not-implemented | `panweave-smart-energy::clusters::drlc` | Demand Response and Load Control cluster | — |  |
-| PW-SE-CL-002 | Annex D.3 | mandatory | not-implemented | `panweave-smart-energy::clusters::metering` | Metering cluster | — |  |
-| PW-SE-CL-003 | Annex D.4 | mandatory | not-implemented | `panweave-smart-energy::clusters::price` | Price cluster | — |  |
-| PW-SE-CL-004 | Annex D.5 | mandatory | not-implemented | `panweave-smart-energy::clusters::messaging` | Messaging cluster | — |  |
-| PW-SE-CL-005 | Annex D.6 | optional | not-implemented | `panweave-smart-energy::clusters::tunneling` | Tunneling cluster | — |  |
-| PW-SE-CL-006 | Annex D.7 | optional | not-implemented | `panweave-smart-energy::clusters::prepayment` | Prepayment cluster | — |  |
-| PW-SE-CL-007 | Annex D.9, D.10, D.11, D.12, D.13, D.14 | optional | not-implemented | `panweave-smart-energy::clusters` | Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | — |  |
-| PW-SE-CL-008 | Annex A.3, §6.1.6 | mandatory | not-implemented | `panweave-zcl::clusters::keep_alive` | Keep-Alive cluster | — |  |
-| PW-SE-CL-009 | Annex B | optional | not-implemented | `panweave-aps::interpan` | Enhanced inter-PAN transmission | — |  |
-| PW-SE-EV-001 | Annex E | mandatory | not-implemented | `panweave-smart-energy::events` | Overlapping DRLC event rules | — |  |
-
-## ZCL8 — Zigbee Cluster Library Specification, Revision 8
-
-| Id | Section | Level | Status | Module | Summary | Tests | Notes |
-|---|---|---|---|---|---|---|---|
-| PW-ZCL-FND-001 | §2.4.1 | mandatory | not-implemented | `panweave-zcl::frame` | ZCL frame header: frame control (frame type, manufacturer specific, direction, disable default response), optional manufacturer code, transaction sequence number, command identifier | — |  |
-| PW-ZCL-FND-002 | §2.6.2 | mandatory | not-implemented | `panweave-zcl::types` | Data types: null, general data, boolean, bitmaps, unsigned/signed integers 8–64 bit, enums, floats, strings (octet/character, long variants), arrays/structures/sets/bags, time/date/UTC, cluster/attribute/BACnet OID, IEEE address, 128-bit security key; invalid/unknown values | — |  |
-| PW-ZCL-FND-003 | §2.5.1, §2.5.2 | mandatory | not-implemented | `panweave-zcl::global::read` | Read Attributes / Read Attributes Response with per-attribute status | — |  |
-| PW-ZCL-FND-004 | §2.5.3–§2.5.6 | mandatory | not-implemented | `panweave-zcl::global::write` | Write Attributes, Write Attributes Undivided, Write Attributes Response, Write Attributes No Response; type checking, read-only, invalid value semantics | — |  |
-| PW-ZCL-FND-005 | §2.5.7, §2.5.8 | mandatory | not-implemented | `panweave-zcl::global::reporting` | Configure Reporting / Response with min/max intervals, reportable change, timeout; direction semantics | — |  |
-| PW-ZCL-FND-006 | §2.5.9, §2.5.10 | mandatory | not-implemented | `panweave-zcl::global::reporting` | Read Reporting Configuration / Response | — |  |
-| PW-ZCL-FND-007 | §2.5.11 | mandatory | not-implemented | `panweave-zcl::reporting` | Report Attributes command generated by the reporting engine according to configuration | — |  |
-| PW-ZCL-FND-008 | §2.5.12 | mandatory | not-implemented | `panweave-zcl::global::default_response` | Default Response generation rules (unicast, not for default responses, disable-default-response bit, error cases) | — |  |
-| PW-ZCL-FND-009 | §2.5.13, §2.5.14 | mandatory | not-implemented | `panweave-zcl::global::discover` | Discover Attributes / Response with discovery complete flag | — |  |
-| PW-ZCL-FND-010 | §2.5.15–§2.5.18 | optional | not-implemented | `panweave-zcl::global::structured` | Read/Write Attributes Structured | — |  |
-| PW-ZCL-FND-011 | §2.5.19–§2.5.22 | mandatory | not-implemented | `panweave-zcl::global::discover` | Discover Commands Received/Generated and Discover Attributes Extended with responses | — |  |
-| PW-ZCL-FND-012 | §2.6.3 | mandatory | not-implemented | `panweave-zcl::status` | Status enumeration | — |  |
-| PW-ZCL-FND-013 | §2.3.3, §2.4.2 | mandatory | not-implemented | `panweave-zcl::dispatch` | Manufacturer-specific clusters, attributes, commands; command direction and server/client roles; unsupported cluster/attribute/command handling | — |  |
-| PW-ZCL-FND-014 | §2.3.2 | mandatory | not-implemented | `panweave-zcl::cluster` | Global attributes: ClusterRevision, AttributeReportingStatus | — |  |
-| PW-ZCL-GEN-001 | §3.2 | mandatory | not-implemented | `panweave-zcl::clusters::basic` | Basic cluster attributes and Reset to Factory Defaults command | — |  |
-| PW-ZCL-GEN-002 | §3.3 | optional | not-implemented | `panweave-zcl::clusters::power_configuration` | Power Configuration cluster | — |  |
-| PW-ZCL-GEN-003 | §3.5 | mandatory | not-implemented | `panweave-zcl::clusters::identify` | Identify cluster: IdentifyTime attribute, Identify, Identify Query, Trigger Effect commands, Identify Query Response | — |  |
-| PW-ZCL-GEN-004 | §3.6 | mandatory | not-implemented | `panweave-zcl::clusters::groups` | Groups cluster: NameSupport, Add/View/Get Membership/Remove/Remove All/Add If Identifying and responses | — |  |
-| PW-ZCL-GEN-005 | §3.7 | optional | not-implemented | `panweave-zcl::clusters::scenes` | Scenes cluster with scene table, extension fields, transitions | — |  |
-| PW-ZCL-GEN-006 | §3.8 | mandatory | not-implemented | `panweave-zcl::clusters::on_off` | On/Off cluster: OnOff, GlobalSceneControl, OnTime, OffWaitTime, StartUpOnOff; Off/On/Toggle/Off With Effect/On With Recall Global Scene/On With Timed Off | — |  |
-| PW-ZCL-GEN-007 | §3.10 | mandatory | not-implemented | `panweave-zcl::clusters::level` | Level Control cluster: CurrentLevel and related attributes; Move to Level, Move, Step, Stop (with/without On/Off), transitions and rate semantics | — |  |
-| PW-ZCL-GEN-008 | §3.11 | optional | not-implemented | `panweave-zcl::clusters::alarms` | Alarms cluster | — |  |
-| PW-ZCL-GEN-009 | §3.12 | optional | not-implemented | `panweave-zcl::clusters::time` | Time cluster | — |  |
-| PW-ZCL-GEN-010 | §3.15 | optional | not-implemented | `panweave-zcl::clusters::diagnostics` | Diagnostics cluster | — |  |
-| PW-ZCL-GEN-011 | §3.16 | optional | not-implemented | `panweave-zcl::clusters::poll_control` | Poll Control cluster: check-in, fast polling, long/short poll intervals | — |  |
-| PW-ZCL-MEAS-001 | §4.2–§4.8 | optional | not-implemented | `panweave-zcl::clusters::measurement` | Measurement clusters: Illuminance, Illuminance Level Sensing, Temperature, Pressure, Flow, Water Content (humidity), Occupancy Sensing | — |  |
-| PW-ZCL-MEAS-002 | §4.9 | optional | not-implemented | `panweave-zcl::clusters::electrical_measurement` | Electrical Measurement cluster | — |  |
-| PW-ZCL-LIGHT-001 | §5.2 | optional | not-implemented | `panweave-zcl::clusters::color_control` | Color Control cluster: hue/saturation, XY, color temperature, enhanced hue, color loop, commands and transitions | — |  |
-| PW-ZCL-HVAC-001 | §6.3, §6.4 | optional | not-implemented | `panweave-zcl::clusters::hvac` | Thermostat and Fan Control clusters | — |  |
-| PW-ZCL-CLOS-001 | §7.3, §7.4 | optional | not-implemented | `panweave-zcl::clusters::closures` | Door Lock and Window Covering clusters | — |  |
-| PW-ZCL-IAS-001 | §8.2 | optional | not-implemented | `panweave-zcl::clusters::ias_zone` | IAS Zone cluster: enrolment (auto/trip-to-pair), zone status change notification, enroll request/response | — |  |
-| PW-ZCL-IAS-002 | §8.3, §8.4 | optional | not-implemented | `panweave-zcl::clusters::ias` | IAS ACE and IAS WD clusters | — |  |
-| PW-ZCL-OTA-001 | §11 | optional | not-implemented | `panweave-zcl::clusters::ota` | OTA Upgrade cluster: image notify, query next image, image block/page, upgrade end, file format, signature verification | — |  |
-| PW-ZCL-COMM-001 | §13.2 | optional | not-implemented | `panweave-zcl::clusters::commissioning` | Commissioning cluster (startup attribute set) | — |  |
-| PW-ZCL-COMM-002 | §13.3 | optional | not-implemented | `panweave-zcl::clusters::touchlink` | Touchlink commissioning cluster (inter-PAN commands, utility commands) | — |  |
-| PW-ZCL-MISC-001 | §9, §12, §14, §15 | optional | not-implemented | `panweave-zcl::clusters` | Protocol interface, telecommunications, retail and appliance clusters | — | Low priority; metadata entries only. |
 
