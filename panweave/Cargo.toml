@@ -55,5 +55,9 @@ required-features = ["direct"]
 name = "cbke"
 required-features = ["smart-energy"]
 
+[[test]]
+name = "se_messaging"
+required-features = ["smart-energy"]
+
 [lints]
 workspace = true

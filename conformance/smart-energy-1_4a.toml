@@ -108,10 +108,10 @@ id = "PW-SE-CL-004"
 section = "Annex D.5"
 summary = "Messaging cluster"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-smart-energy::clusters::messaging"
-tests = ["codecs_and_display", "server_store_answers_get_last_message_and_cancellation"]
-notes = "Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules, and a server-side Server holding the current message for Get Last Message, gathering Message Confirmations per client, and keeping a pending Cancel All Messages for GetMessageCancellation until its implementation time. Binding to a ZCL endpoint dispatcher is not done (TODO(PW-SE-MESSAGING-DISPATCH))."
+status = "implemented"
+module = "panweave-smart-energy::clusters::messaging,panweave::smart_energy_drivers::messaging"
+tests = ["codecs_and_display", "server_store_answers_get_last_message_and_cancellation", "esi_messages_reach_the_display_and_are_confirmed"]
+notes = "Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules, and a server-side Server holding the current message for Get Last Message, gathering Message Confirmations per client, and keeping a pending Cancel All Messages for GetMessageCancellation until its implementation time. The facade drivers (feature smart-energy) bind them to a Stack: MessagingClient decodes the server's commands from the stack events, applies them to the Display, answers with Default Responses (MALFORMED_COMMAND, INVALID_FIELD, NOT_FOUND, INSUFFICIENT_SPACE), expires messages and scheduled cancellations on poll, and sends Get Last Message / Message Confirmation / GetMessageCancellation; MessagingServer publishes, cancels and answers Get Last Message (Display (Protected) Message or NOT_FOUND) and GetMessageCancellation, recording confirmations. All frames go APS link-key protected (Table 5-12). UTC comes from the endpoint's Time server or the driver's UtcClock."
 [[requirement]]
 id = "PW-SE-CL-005"
 section = "Annex D.6"
