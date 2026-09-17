@@ -215,7 +215,7 @@ annexes (R23.2 Annex D.12–D.14).
 | Annex A | Keep-Alive cluster, status enumerations | `panweave-zcl::clusters::keep_alive` |
 | Annex B | Enhanced inter-PAN | `panweave-aps::interpan` |
 | Annex C | Key Establishment cluster (CBKE suites 1 and 2) and test vectors | `panweave-smart-energy::key_establishment` (curve arithmetic through the `Ecmqv` trait, ADR-0012) |
-| Annex D | DRLC, Metering, Price, Messaging, Tunneling, Prepayment, OTA, Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | `panweave-smart-energy::clusters` |
+| Annex D | DRLC, Metering, Price, Messaging, Tunneling, Prepayment, OTA, Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | `panweave-smart-energy::clusters::{drlc, metering, price, messaging}` (the rest: planned) |
 | Annex E | Overlapping event rules | `panweave-smart-energy::events` |
 
 Security-sensitive: all of §5.4, Annex C, per-cluster APS-encryption

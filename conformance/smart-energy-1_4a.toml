@@ -81,37 +81,37 @@ id = "PW-SE-CL-001"
 section = "Annex D.2"
 summary = "Demand Response and Load Control cluster"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::clusters::drlc"
-tests = []
-
+tests = ["codecs_round_trip", "scheduler_accepts_supersedes_and_reports"]
+notes = "Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, and a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out and the cancellation rules of D.2.2.3.2. Not done: the server-side event store answering Get Scheduled Events, the ECDSA signature, the random 0-5 s report delay and binding the scheduler to a ZCL endpoint (TODO(PW-SE-DRLC-SERVER))."
 [[requirement]]
 id = "PW-SE-CL-002"
 section = "Annex D.3"
 summary = "Metering cluster"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::clusters::metering"
-tests = []
-
+tests = ["formatting_and_profile"]
+notes = "Mandatory Reading Information, Meter Status and Formatting attributes, the common Historical Consumption attributes, the UnitofMeasure / MeteringDeviceType / Status enumerations, the formatting and multiplier/divisor helpers and the Get Profile / Get Profile Response codecs. Mirroring, snapshots, sampling, fast poll, supply control, block and billing sets and the notification scheme are not implemented (TODO(PW-SE-METERING))."
 [[requirement]]
 id = "PW-SE-CL-003"
 section = "Annex D.4"
 summary = "Price cluster"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::clusters::price"
-tests = []
-
+tests = ["publish_price_codec_and_table"]
+notes = "Publish Price with every optional field (SE 1.0 short frames accepted), Get Current Price, Get Scheduled Prices and Price Acknowledgement codecs, and a client-side PriceTable applying the overlap rules of D.4.2.4.1 (newer Issuer Event ID wins; an active price cut by a later one ends when it starts). Block periods, conversion factor, calorific value, tariff information, price matrix, block thresholds, CO2, tier labels, billing periods, consolidated bills, CPP events, credit payments, currency conversion and tariff cancellation are not implemented (TODO(PW-SE-PRICE))."
 [[requirement]]
 id = "PW-SE-CL-004"
 section = "Annex D.5"
 summary = "Messaging cluster"
 level = "mandatory"
-status = "not-implemented"
+status = "partially-implemented"
 module = "panweave-smart-energy::clusters::messaging"
-tests = []
-
+tests = ["codecs_and_display"]
+notes = "Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), and a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules. The server-side message store and binding to a ZCL endpoint are not done (TODO(PW-SE-MESSAGING-SERVER))."
 [[requirement]]
 id = "PW-SE-CL-005"
 section = "Annex D.6"

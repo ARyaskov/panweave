@@ -23,6 +23,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod clusters;
 pub mod key_establishment;
 pub mod profile;
 

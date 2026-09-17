@@ -130,6 +130,12 @@ Keep a Changelog; versions follow SemVer.
   both suites, the KDF and MACU / MACV transforms (Annex C.5 / C.6
   vectors) and the CBKE initiator / responder machines over a
   host-supplied `Ecmqv` primitive.
+* `panweave-smart-energy::clusters`: Demand Response and Load Control
+  (codecs, client attributes and a client-side event scheduler with
+  randomization, supersede and cancellation rules), Messaging (codecs
+  and the client's message display), Price (Publish Price with its
+  optional fields, the client requests and a client-side price table)
+  and Metering (mandatory attributes, formatting helpers, Get Profile).
 * `Stack` provisioning helpers: `form_network_params`
   (`FormationParams`: key, extended PAN ID, PAN ID, channels, network
   address, update ID), `adopt_network` (`AdoptParams`: join a network

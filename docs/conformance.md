@@ -12,10 +12,10 @@ Panweave is an independent implementation; this table records the maintainers' o
 | DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 4 | 2 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
-| SE1.4a | 18 | 0 | 3 | 14 | 0 | 0 | 1 |
+| SE1.4a | 18 | 0 | 7 | 10 | 0 | 0 | 1 |
 | ZCL8 | 36 | 17 | 3 | 16 | 0 | 0 | 0 |
 | R23.2 | 133 | 105 | 17 | 9 | 2 | 0 | 0 |
-| **All** | 237 | 145 | 38 | 50 | 3 | 0 | 1 |
+| **All** | 237 | 145 | 42 | 46 | 3 | 0 | 1 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -99,10 +99,10 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-SE-SEC-005 | §5.4.8, §5.13 | optional | not-implemented | `panweave-smart-energy::security` | Trust Center swap-out, keep-alive, coexistence rules | — |  |
 | PW-SE-COMM-001 | §5.5 | mandatory | not-implemented | `panweave-smart-energy::commissioning` | Commissioning: formation, commissioning modes, service discovery and binding | — |  |
 | PW-SE-DEV-001 | §6.3 | mandatory | not-implemented | `panweave-smart-energy::devices` | SE device types (ESI, metering, IHD, PCT, load control, range extender, smart appliance, prepayment terminal, physical device, remote communications) | — |  |
-| PW-SE-CL-001 | Annex D.2 | mandatory | not-implemented | `panweave-smart-energy::clusters::drlc` | Demand Response and Load Control cluster | — |  |
-| PW-SE-CL-002 | Annex D.3 | mandatory | not-implemented | `panweave-smart-energy::clusters::metering` | Metering cluster | — |  |
-| PW-SE-CL-003 | Annex D.4 | mandatory | not-implemented | `panweave-smart-energy::clusters::price` | Price cluster | — |  |
-| PW-SE-CL-004 | Annex D.5 | mandatory | not-implemented | `panweave-smart-energy::clusters::messaging` | Messaging cluster | — |  |
+| PW-SE-CL-001 | Annex D.2 | mandatory | partially-implemented | `panweave-smart-energy::clusters::drlc` | Demand Response and Load Control cluster | `codecs_round_trip`, `scheduler_accepts_supersedes_and_reports` | Load Control Event / Cancel / Cancel All, Report Event Status (with the 42-octet signature field) and Get Scheduled Events codecs, the client attributes of Table D-7, and a client-side Scheduler applying device-class / enrollment-group filtering, expiry rejection, supersede-by-newer-event, start and duration randomization, opt-out and the cancellation rules of D.2.2.3.2. Not done: the server-side event store answering Get Scheduled Events, the ECDSA signature, the random 0-5 s report delay and binding the scheduler to a ZCL endpoint (TODO(PW-SE-DRLC-SERVER)). |
+| PW-SE-CL-002 | Annex D.3 | mandatory | partially-implemented | `panweave-smart-energy::clusters::metering` | Metering cluster | `formatting_and_profile` | Mandatory Reading Information, Meter Status and Formatting attributes, the common Historical Consumption attributes, the UnitofMeasure / MeteringDeviceType / Status enumerations, the formatting and multiplier/divisor helpers and the Get Profile / Get Profile Response codecs. Mirroring, snapshots, sampling, fast poll, supply control, block and billing sets and the notification scheme are not implemented (TODO(PW-SE-METERING)). |
+| PW-SE-CL-003 | Annex D.4 | mandatory | partially-implemented | `panweave-smart-energy::clusters::price` | Price cluster | `publish_price_codec_and_table` | Publish Price with every optional field (SE 1.0 short frames accepted), Get Current Price, Get Scheduled Prices and Price Acknowledgement codecs, and a client-side PriceTable applying the overlap rules of D.4.2.4.1 (newer Issuer Event ID wins; an active price cut by a later one ends when it starts). Block periods, conversion factor, calorific value, tariff information, price matrix, block thresholds, CO2, tier labels, billing periods, consolidated bills, CPP events, credit payments, currency conversion and tariff cancellation are not implemented (TODO(PW-SE-PRICE)). |
+| PW-SE-CL-004 | Annex D.5 | mandatory | partially-implemented | `panweave-smart-energy::clusters::messaging` | Messaging cluster | `codecs_and_display` | Display Message / Display Protected Message / Cancel Message / Cancel All Messages and Get Last Message / Message Confirmation / GetMessageCancellation codecs (inter-PAN-only messages refused per D.5.2.3.1.1.1), and a client-side Display holding the single current message with the confirmation-status and enhanced-confirmation rules. The server-side message store and binding to a ZCL endpoint are not done (TODO(PW-SE-MESSAGING-SERVER)). |
 | PW-SE-CL-005 | Annex D.6 | optional | not-implemented | `panweave-smart-energy::clusters::tunneling` | Tunneling cluster | — |  |
 | PW-SE-CL-006 | Annex D.7 | optional | not-implemented | `panweave-smart-energy::clusters::prepayment` | Prepayment cluster | — |  |
 | PW-SE-CL-007 | Annex D.9, D.10, D.11, D.12, D.13, D.14 | optional | not-implemented | `panweave-smart-energy::clusters` | Calendar, Device Management, Events, Energy Management, MDU Pairing, Sub-GHz clusters | — |  |

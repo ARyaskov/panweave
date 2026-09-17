@@ -11,7 +11,7 @@ categories.workspace = true
 
 [features]
 default = []
-std = ["alloc", "panweave-types/std", "panweave-security/std"]
+std = ["alloc", "panweave-types/std", "panweave-security/std", "panweave-zcl/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt"]
@@ -19,6 +19,8 @@ defmt = ["dep:defmt", "panweave-types/defmt"]
 [dependencies]
 panweave-types = { workspace = true }
 panweave-security = { workspace = true }
+panweave-codec = { workspace = true }
+panweave-zcl = { workspace = true }
 heapless = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }

@@ -846,8 +846,10 @@ version = "0.1.0"
 dependencies = [
  "defmt",
  "heapless",
+ "panweave-codec",
  "panweave-security",
  "panweave-types",
+ "panweave-zcl",
  "serde",
  "subtle",
  "zeroize",
