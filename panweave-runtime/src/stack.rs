@@ -257,6 +257,15 @@ pub enum StackEvent {
         /// The reporting device.
         from: ShortAddress,
     },
+    /// Another router answered this device's Parent_annce claiming
+    /// `ieee` as its own end device child (§2.4.4.2.12): the stale
+    /// neighbor entry was removed.
+    ChildClaimed {
+        /// The child.
+        ieee: ExtendedAddress,
+        /// The router that has it now.
+        by: ShortAddress,
+    },
     /// This device took a new network address after an address conflict
     /// (§3.6.1.10) and announced it.
     AddressChanged {
@@ -613,6 +622,10 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// The On-Network TCLK Update procedure awaits the Trust Center's
     /// Node_Desc_rsp until this deadline (BDB 3.1 §10.2.4).
     pub(crate) tclk_update: Option<Instant>,
+    /// `apsParentAnnounceTimer` after a reboot (§2.4.3.1.12.1): when to
+    /// broadcast the next Parent_annce and how many end device children
+    /// earlier messages already covered.
+    pub(crate) parent_annce: Option<(Instant, usize)>,
     /// The key being awaited completes a rejoin (not an initial join).
     pub(crate) awaiting_key_rejoin: bool,
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
@@ -724,6 +737,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             key_update: None,
             factory_reset_pending: false,
             tclk_update: None,
+            parent_annce: None,
             awaiting_key_rejoin: false,
             application_key_request_list: Vec::new(),
             scan_attempts_left: 0,
@@ -1124,6 +1138,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.tclk_update = None;
             self.push_event(StackEvent::LinkKeyUpdateFailed);
         }
+        self.poll_parent_annce(now);
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
         self.poll_touchlink(now);
@@ -1180,6 +1195,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.keep_alive.deadline(),
             self.key_update.map(|(_, at)| at),
             self.tclk_update,
+            self.parent_annce.map(|(at, _)| at),
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),

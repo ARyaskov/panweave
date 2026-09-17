@@ -27,7 +27,7 @@ use panweave_types::{
     ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeySequenceNumber, KeyType,
     LogicalDeviceType, NwkStatus, ProfileId, ShortAddress,
 };
-use panweave_types::{ChannelMask, TransactionSequence};
+use panweave_types::{ChannelMask, Instant, TransactionSequence};
 use panweave_zcl::layer::{ZclAction, ZclEvent, ZclIndication};
 use panweave_zdo::layer::{ZdoAction, ZdoEvent, ZdoIndication};
 use panweave_zdo::security::{
@@ -37,8 +37,14 @@ use panweave_zdo::security::{
 };
 use panweave_zdo::zdp::{
     BeaconSurveyResults, MgmtNwkBeaconSurveyReq, MgmtNwkBeaconSurveyRsp, MgmtNwkEnhancedUpdateReq,
-    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, NodeDescReq, NodeDescRsp, PotentialParents,
+    MgmtNwkUpdateNotify, MgmtNwkUpdateReq, NodeDescReq, NodeDescRsp, ParentAnnceRsp,
+    PotentialParents,
 };
+
+/// `apsParentAnnounceBaseTimer` (R23.2 Table 2-134).
+const PARENT_ANNOUNCE_BASE_TIMER: Duration = Duration::from_secs(10);
+/// `apsParentAnnounceJitterMax`.
+const PARENT_ANNOUNCE_JITTER_MAX: Duration = Duration::from_secs(10);
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
@@ -260,6 +266,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     if cluster == cluster::response_of(cluster::SECURITY_CHALLENGE_REQ) {
                         self.on_challenge_response(data);
+                    }
+                    if cluster == cluster::response_of(cluster::PARENT_ANNCE) {
+                        self.on_parent_annce_rsp(src, data);
                     }
                     if cluster == cluster::response_of(cluster::NODE_DESC_REQ)
                         && self.tclk_update.is_some()
@@ -1696,6 +1705,72 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// Arms `apsParentAnnounceTimer` (§2.4.3.1.12.1): base timer plus a
+    /// random jitter; `covered` end device children were already
+    /// announced by earlier messages.
+    pub(crate) fn schedule_parent_annce(&mut self, covered: usize) {
+        let jitter_ms =
+            u64::from(self.nwk.rng().below(
+                u32::try_from(PARENT_ANNOUNCE_JITTER_MAX.as_millis() + 1).unwrap_or(u32::MAX),
+            ));
+        let at = self
+            .now
+            .saturating_add(PARENT_ANNOUNCE_BASE_TIMER)
+            .saturating_add(Duration::from_millis(jitter_ms));
+        self.parent_annce = Some((at, covered));
+    }
+
+    /// Sends the Parent_annce(s) due (§2.4.3.1.12.1): every end device
+    /// child of the neighbor table, as many messages as needed with a
+    /// fresh timer before each; nothing when there are no children.
+    pub(crate) fn poll_parent_annce(&mut self, now: Instant) {
+        let Some((at, covered)) = self.parent_annce else {
+            return;
+        };
+        if !now.has_reached(at) {
+            return;
+        }
+        self.parent_annce = None;
+        let children: Vec<ExtendedAddress, 32> = self
+            .nwk
+            .neighbors
+            .end_device_children()
+            .map(|n| n.extended)
+            .collect();
+        let Some(rest) = children.get(covered..).filter(|r| !r.is_empty()) else {
+            return;
+        };
+        match self.zdo.parent_announce(rest) {
+            Ok(n) if covered + n < children.len() => self.schedule_parent_annce(covered + n),
+            _ => {}
+        }
+    }
+
+    /// Parent_annce_rsp (§2.4.4.2.12): the responding router has the
+    /// listed end devices as its children now; they leave our neighbor
+    /// table.
+    fn on_parent_annce_rsp(&mut self, src: ShortAddress, data: &[u8]) {
+        let Ok(rsp) = ParentAnnceRsp::decode_exact(data) else {
+            return;
+        };
+        if !rsp.status.is_success() {
+            return;
+        }
+        let mut removed = false;
+        for child in rsp.children.iter() {
+            if self.nwk.neighbors.remove_extended(child).is_some() {
+                removed = true;
+                self.push_event(StackEvent::ChildClaimed {
+                    ieee: child,
+                    by: src,
+                });
+            }
+        }
+        if removed {
+            let _ = self.persist_children();
+        }
     }
 
     /// On-Network TCLK Update procedure, step 1 (BDB 3.1 §10.2.4): ask

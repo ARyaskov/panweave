@@ -524,6 +524,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 let _ = self
                     .zdo
                     .device_announce(short, self.config.ieee, self.config.capability());
+                // §2.4.3.1.12.1: announce the end device children after
+                // apsParentAnnounceBaseTimer plus jitter.
+                self.schedule_parent_annce(0);
                 self.pump();
                 Ok(())
             }

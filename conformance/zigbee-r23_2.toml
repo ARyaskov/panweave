@@ -734,10 +734,10 @@ id = "PW-R23-ZDP-006"
 section = "§2.4.3.1.12, §2.4.4.1.9"
 summary = "Parent_annce / Parent_annce_rsp for child address reconciliation after router restart"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-zdo::layer"
-tests = ["announce_and_binding_frames"]
-notes = "Parent_annce transmission and Parent_annce_rsp generation are implemented; the apsParentAnnounceTimer with jitter after reboot and the removal of children claimed elsewhere are runtime responsibilities (ZdoContext::child_claimed_elsewhere)."
+tests = ["announce_and_binding_frames", "rebooted_parent_announces_children_and_drops_the_claimed_one"]
+notes = "A router or coordinator that resumes after a reboot arms apsParentAnnounceTimer (base 10 s plus up to 10 s of jitter) and broadcasts Parent_annce with every end device child, one message per timer expiry when they do not fit; a router that has one of them as its child answers with Parent_annce_rsp and the announcer drops that neighbor entry (StackEvent::ChildClaimed). Keepalives received meanwhile are not excluded from later messages."
 [[requirement]]
 id = "PW-R23-ZDP-007"
 section = "§2.4.3.1.14, §2.4.4.1.10"

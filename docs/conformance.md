@@ -14,8 +14,8 @@ Panweave is an independent implementation; this table records the maintainers' o
 | GP1.1.2 | 9 | 4 | 4 | 1 | 0 | 0 | 0 |
 | SE1.4a | 18 | 4 | 13 | 0 | 0 | 1 | 0 |
 | ZCL8 | 36 | 24 | 11 | 1 | 0 | 0 | 0 |
-| R23.2 | 133 | 117 | 12 | 2 | 2 | 0 | 0 |
-| **All** | 237 | 176 | 52 | 5 | 3 | 1 | 0 |
+| R23.2 | 133 | 118 | 11 | 2 | 2 | 0 | 0 |
+| **All** | 237 | 177 | 51 | 5 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -233,7 +233,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 | PW-R23-ZDP-003 | §2.4.3.1.3–§2.4.3.1.6, §2.4.4.1.3–§2.4.4.1.6 | mandatory | implemented | `panweave-zdo::layer` | Node_Desc, Power_Desc, Simple_Desc, Active_EP requests and responses | `descriptor_requests_and_responses`, `descriptor_discovery` |  |
 | PW-R23-ZDP-004 | §2.4.3.1.7, §2.4.4.1.7 | mandatory | implemented | `panweave-zdo::layer` | Match_Desc_req/rsp with profile and cluster list matching; broadcast handling | `descriptor_discovery` |  |
 | PW-R23-ZDP-005 | §2.4.3.1.11 | mandatory | partially-implemented | `panweave-zdo::layer` | Device_annce broadcast on join/rejoin with short address, IEEE address, capability; receivers update address map and detect conflicts | `announce_and_binding_frames`, `device_announce_and_timeouts` | Codec, broadcast on join and the ZdoContext hook are implemented; the address-map update and conflict detection of §2.4.3.1.11.2 are executed by the runtime's ZdoContext over the NWK tables. |
-| PW-R23-ZDP-006 | §2.4.3.1.12, §2.4.4.1.9 | mandatory | partially-implemented | `panweave-zdo::layer` | Parent_annce / Parent_annce_rsp for child address reconciliation after router restart | `announce_and_binding_frames` | Parent_annce transmission and Parent_annce_rsp generation are implemented; the apsParentAnnounceTimer with jitter after reboot and the removal of children claimed elsewhere are runtime responsibilities (ZdoContext::child_claimed_elsewhere). |
+| PW-R23-ZDP-006 | §2.4.3.1.12, §2.4.4.1.9 | mandatory | implemented | `panweave-zdo::layer` | Parent_annce / Parent_annce_rsp for child address reconciliation after router restart | `announce_and_binding_frames`, `rebooted_parent_announces_children_and_drops_the_claimed_one` | A router or coordinator that resumes after a reboot arms apsParentAnnounceTimer (base 10 s plus up to 10 s of jitter) and broadcasts Parent_annce with every end device child, one message per timer expiry when they do not fit; a router that has one of them as its child answers with Parent_annce_rsp and the announcer drops that neighbor entry (StackEvent::ChildClaimed). Keepalives received meanwhile are not excluded from later messages. |
 | PW-R23-ZDP-007 | §2.4.3.1.14, §2.4.4.1.10 | optional | implemented | `panweave-zdo::layer` | System_Server_Discovery_req/rsp with server mask | `descriptor_requests_and_responses` |  |
 | PW-R23-ZDP-008 | §2.4.3.2.2, §2.4.3.2.3, §2.4.3.2.12, §2.4.4.2 | mandatory | implemented | `panweave-zdo::layer` | Bind_req, Unbind_req, Clear_All_Bindings_req and responses with unicast/group destination address modes | `announce_and_binding_frames`, `binding_and_restricted_mode` |  |
 | PW-R23-ZDP-009 | §2.4.3.3.2, §2.4.4.3.2 | mandatory | implemented | `panweave-zdo::layer` | Mgmt_Lqi_req/rsp neighbor table listing with start index and entry format | `management_frames`, `management_requests` |  |

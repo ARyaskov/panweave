@@ -441,6 +441,10 @@ Keep a Changelog; versions follow SemVer.
   `StackEvent::LinkKeyUpdateFailed` when the descriptor never arrives.
   The Trust Center's Node_Desc_rsp carries the Selected Key
   Negotiation Method TLV (`ZdoContext::select_key_negotiation`).
+* Parent_annce after a reboot (R23.2 §2.4.3.1.12): a resumed router or
+  coordinator announces its end device children after
+  `apsParentAnnounceBaseTimer` plus jitter and drops the ones another
+  router claims in Parent_annce_rsp (`StackEvent::ChildClaimed`).
 * `panweave-zcl::clusters::ota`: the OTA Upgrade cluster — file header
   and sub-elements, all §11.13 command codecs, a client download machine
   (notify jitter, query, block requests with waits and rate limiting,
