@@ -1,3 +1,9 @@
+[env]
+# A `Node` is a few hundred kilobytes of bounded tables; debug builds keep
+# several copies of one on the stack while it is being built, so the test
+# threads get 8 MiB instead of the 2 MiB default.
+RUST_MIN_STACK = "8388608"
+
 [alias]
 # Full quality gate used by CI and before every commit.
 gate = "run --quiet --package xtask -- gate"

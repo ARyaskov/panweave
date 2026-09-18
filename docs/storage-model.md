@@ -24,6 +24,9 @@ a format octet so that a later layout can migrate or reject old data.
 | `Bindings` | binding table (§2.2.8.1) | `ApsAction::Persist(Bindings)`, ZDO Bind / Unbind / Clear_All_Bindings | no |
 | `Groups` | group table | `ApsAction::Persist(Groups)` | no |
 | `GreenPower` | one Proxy Table entry per `id` (index 0–19) in the OTA format of GP Basic §A.3.4.2.2.1; one Sink Table entry per `id` 0x100 + index in the format of §A.3.3.2.2.1 | `ProxyEvent::TableChanged` / `SinkEvent::TableChanged` (pairings, forwarded and accepted frames update the counter) | counter: monotonic per GPD, never rolled back |
+| `DirectPastKeys` | the network keys a ZDD switched away from, with their sequence numbers (ZD 1.1 §9.1) | every `StackEvent::NetworkKeySwitched` | yes |
+| `DirectConfig` | Zigbee Direct interface state and Anonymous Join Timeout (ZD 1.1 §11.3.5.4, persistent by requirement) | every Configure Zigbee Direct Interface / Anonymous Join Timeout | no |
+| `StartupSets` (per endpoint) | the saved startup attribute sets of a Commissioning server (ZCL8 §13.2.2.3.2) | Save / Restore / Reset Startup Parameters | yes |
 | `Application` | opaque application record | application | app-defined |
 
 Per R23.2 §4.4.12.1 the `Timeout` and `VerifiedFrameCounter` of a key pair

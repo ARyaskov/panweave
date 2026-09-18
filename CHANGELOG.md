@@ -212,6 +212,20 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Zigbee Direct Configuration cluster 0x003D (ZD 1.1 §11.3) and the ZDD
+  interface state: `panweave_zcl::clusters::direct_configuration`
+  (`InterfaceState`, `AnonymousJoinTimeout`, Configure Zigbee Direct
+  Interface with its response, Configure Anonymous Join Timeout;
+  accepted APS-secured from the Trust Center of a centralized network,
+  `Zcl::set_trust_center`, NOT_AUTHORIZED otherwise), `ZclEvent` /
+  `StackEvent::{DirectInterface, DirectAnonymousJoinTimeout}`,
+  `Kind::DirectConfig`; the facade's `Node::enable_direct_configuration`,
+  `direct_interface_enabled`, `anonymous_join_allowed` (the Anonymous
+  Join Countdown Timer of §11.3.5.4.4, restarted on power-up and
+  reconfiguration), `persist_direct_config` / `restore_direct_config`
+  (run by `initialize`) and `check_direct_aware` (the Match_Desc_req of
+  §6.2.3 for the client cluster on the Trust Center,
+  `DirectState::trust_center_aware`); `endpoints::client(0x003D)`.
 * Zigbee Direct Virtual Device admittance (R23.2 §4.6.3.2.2.4, ZD 1.1
   §7.7.4.3, §7.7.4.8, §9; ADR-0017): `KeyType::{EphemeralUnique,
   BasicAuthorization, AdministrativeAuthorization}`,

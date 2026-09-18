@@ -632,6 +632,21 @@ pub enum StackEvent {
         /// Power Profile ID.
         id: u8,
     },
+    /// The Zigbee Direct interface was switched by the Trust Center
+    /// (ZD 1.1 §11.3.5.4.3); the application persists and applies it.
+    DirectInterface {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Enabled.
+        enabled: bool,
+    },
+    /// The Anonymous Join Timeout was configured (ZD 1.1 §11.3.5.4.4).
+    DirectAnonymousJoinTimeout {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The timeout in seconds.
+        seconds: u32,
+    },
     /// A Get Location Data asked the RSSI Location server on `endpoint`
     /// for a fresh calculation (ZCL8 §3.13.2.3.4).
     LocationRecalculate {

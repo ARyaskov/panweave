@@ -123,6 +123,9 @@ pub enum ClusterState {
     /// RSSI Location server state: repeated responses, ping blasts
     /// and collected RSSI responses (§3.13).
     RssiLocation(crate::clusters::rssi_location::State),
+    /// Zigbee Direct Configuration server state: the security model of
+    /// the network (ZD 1.1 §11.3.5.1).
+    DirectConfiguration(crate::clusters::direct_configuration::State),
 }
 
 /// A cluster instance.
@@ -286,6 +289,7 @@ impl<const A: usize> ClusterInstance<A> {
             ClusterState::ApplianceLogs(_) => ClusterState::ApplianceLogs(
                 crate::clusters::appliance::statistics::LogQueue::default(),
             ),
+            ClusterState::DirectConfiguration(s) => ClusterState::DirectConfiguration(s),
             ClusterState::RssiLocation(s) => {
                 // The identity is kept; pending work is dropped.
                 ClusterState::RssiLocation(crate::clusters::rssi_location::State {

@@ -9,9 +9,9 @@ section = "§6.2, §6.3"
 summary = "ZDD security states (unprovisioned/provisioned), session types (provisioning, authorization, BLE secure), state transitions"
 level = "mandatory"
 status = "partially-implemented"
-module = "panweave-direct::auth"
-tests = ["annex_b3_authorization_keys"]
-notes = "Session types follow from the pre-shared secret (Psk::is_provisioning), authorization levels are modelled (auth::Level) and the Basic / Admin keys are derived per Table 2 (Annex B.3 vectors); the Responder refuses secrets the application does not offer (e.g. anonymous sessions while the Anonymous Join Countdown Timer is 0). The provisioned / unprovisioned ZDD state machine and the one-authorization-session rule are left to the ZDD integration."
+module = "panweave-direct::auth,panweave::direct"
+tests = ["annex_b3_authorization_keys", "the_trust_center_configures_the_zdd_interface"]
+notes = "Session types follow from the pre-shared secret (Psk::is_provisioning), authorization levels are modelled (auth::Level) and the Basic / Admin keys are derived per Table 2 (Annex B.3 vectors); the Responder refuses secrets the application does not offer. The facade keeps the interface state and the Anonymous Join Countdown Timer (Node::anonymous_join_allowed: only while the network is open and the countdown of §11.3.5.4.4 runs, restarted on power-up and reconfiguration) and the Zigbee Direct aware check of §6.2.3 (Node::check_direct_aware, DirectState::trust_center_aware; PW-ZD-ZCL-001). The provisioned / unprovisioned ZDD state machine, the one-authorization-session rule and the BLE OFF state are left to the ZDD integration."
 [[requirement]]
 id = "PW-ZD-SEC-002"
 section = "§6.5.1.2"
@@ -101,3 +101,12 @@ level = "conditional"
 status = "not-implemented"
 module = "panweave-direct::legacy"
 tests = []
+[[requirement]]
+id = "PW-ZD-ZCL-001"
+section = "§11.3, §6.2.3"
+summary = "Zigbee Direct Configuration cluster (0x003D): InterfaceState, AnonymousJoinTimeout, Configure Zigbee Direct Interface / Anonymous Join Timeout, Trust Center authorization, persistence, the Zigbee Direct aware check"
+level = "mandatory"
+status = "implemented"
+module = "panweave-zcl::clusters::direct_configuration,panweave::direct"
+tests = ["interface_and_timeout_are_configured_by_an_authorized_source", "the_trust_center_configures_the_zdd_interface"]
+notes = "Server and client with the two attributes and commands (§11.3.5); on a centralized network only APS-secured unicasts from the Trust Center are accepted, on a distributed one any APS-secured unicast, others get Default Response NOT_AUTHORIZED (§11.3.5.1); the facade persists both settings under Kind::DirectConfig, restores them on initialize(), exposes direct_interface_enabled() / anonymous_join_allowed() and restarts the Anonymous Join Countdown Timer on power-up and reconfiguration (§11.3.5.4.4); check_direct_aware() sends the Match_Desc_req of §6.2.3 for the client cluster on the Trust Center. Stopping the BLE advertisements when the interface is disabled is the host's, as is the local stimulus that restarts the countdown."

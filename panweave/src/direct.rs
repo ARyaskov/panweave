@@ -21,6 +21,7 @@ use panweave_direct::tunnel::{self, NpduMessage, SessionKind, TunnelError};
 use panweave_nwk::command::{CommissioningRequest, NwkCommandId};
 use panweave_nwk::frame::{FrameType as NwkFrameType, Header as NwkHeader};
 use panweave_nwk::tlv::{DeviceCapabilityExtension, GlobalTlvs};
+use panweave_runtime::EndpointError;
 use panweave_runtime::{AdoptParams, FormationParams, JoinMode, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::LinkKeyKind;
@@ -29,13 +30,14 @@ use panweave_types::{
     ChannelMask, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber,
     LogicalDeviceType,
 };
+use panweave_types::{ProfileId, ShortAddress};
 use panweave_zcl::cluster::Role;
-use panweave_zcl::clusters::identify;
+use panweave_zcl::clusters::{direct_configuration, identify};
 
 use crate::{Event, Node};
 
 /// Zigbee Direct state a [`Node`] keeps between characteristic writes.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DirectState {
     /// The operation whose completion is awaited.
     pending: Option<Domain>,
@@ -53,10 +55,46 @@ pub struct DirectState {
     pub past_network_keys: PastNetworkKeys<PAST_NETWORK_KEYS>,
     /// Open tunnels: the Trusted Link index and the ZVD behind it.
     pub tunnels: heapless::Vec<(u8, ExtendedAddress), 4>,
+    /// The Zigbee Direct interface is enabled (ZD 1.1 §11.3.5.4.3);
+    /// persistent.
+    pub interface_enabled: bool,
+    /// The Anonymous Join Timeout in seconds (§11.3.5.4.4; 0 never,
+    /// 0xFFFFFF always while the network is open); persistent.
+    pub anonymous_join_timeout: u32,
+    /// The Anonymous Join Countdown Timer: until when the anonymous
+    /// secret is accepted (restarted on power-up and reconfiguration).
+    pub anonymous_join_until: Option<panweave_types::time::Instant>,
+    /// Whether the Trust Center is Zigbee Direct aware (§6.2.3), once
+    /// checked with [`Node::check_direct_aware`].
+    pub trust_center_aware: Option<bool>,
+    /// The ZDP transaction of the awareness check in flight.
+    aware_seq: Option<panweave_types::TransactionSequence>,
+}
+
+impl Default for DirectState {
+    /// The interface enabled and the recommended Anonymous Join Timeout
+    /// of 3600 s (ZD 1.1 §11.3.5.3.2).
+    fn default() -> Self {
+        DirectState {
+            pending: None,
+            identify_endpoint: None,
+            admin_key: None,
+            past_network_keys: PastNetworkKeys::default(),
+            tunnels: heapless::Vec::new(),
+            interface_enabled: true,
+            anonymous_join_timeout: direct_configuration::ANONYMOUS_JOIN_DEFAULT,
+            anonymous_join_until: None,
+            trust_center_aware: None,
+            aware_seq: None,
+        }
+    }
 }
 
 /// Past network keys kept for Limited Authorization sessions.
 pub const PAST_NETWORK_KEYS: usize = 4;
+
+/// Format octet of the `Kind::DirectConfig` record.
+const DIRECT_CONFIG_FORMAT: u8 = 1;
 
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Keeps the network key a key switch retires (ZD §9.1) and
@@ -70,6 +108,154 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         };
         self.direct.past_network_keys.record(p, slot.key.clone());
         let _ = self.persist_direct_past_keys();
+    }
+
+    /// Adds the Zigbee Direct Configuration server (ZD 1.1 §11.3) to
+    /// `endpoint` with the current interface state and timeout; the
+    /// Trust Center configures it from there. Fails when the endpoint is
+    /// unknown or full.
+    pub fn enable_direct_configuration(&mut self, endpoint: Endpoint) -> Result<(), EndpointError> {
+        let centralized = !self.stack.config.distributed;
+        let c = direct_configuration::server(
+            self.direct.interface_enabled,
+            self.direct.anonymous_join_timeout,
+            centralized,
+        )
+        .map_err(|_| EndpointError)?;
+        let ep = self.stack.zcl.endpoint_mut(endpoint).ok_or(EndpointError)?;
+        ep.add_instance(c).map_err(|_| EndpointError)
+    }
+
+    /// Whether Zigbee Direct requests are processed (§11.3.5.4.3): the
+    /// host stops advertising and drops service requests when not.
+    pub fn direct_interface_enabled(&self) -> bool {
+        self.direct.interface_enabled
+    }
+
+    /// Whether a provisioning session with the Anonymous Well-Known
+    /// Secret may be established now (§11.3.5.4.4): only while the
+    /// network is open to new devices and the Anonymous Join Countdown
+    /// Timer has not expired.
+    pub fn anonymous_join_allowed(&self) -> bool {
+        if !self.stack.permit_joining_active() {
+            return false;
+        }
+        match self.direct.anonymous_join_timeout {
+            0 => false,
+            direct_configuration::ANONYMOUS_JOIN_ALWAYS => true,
+            _ => self
+                .direct
+                .anonymous_join_until
+                .is_some_and(|t| !self.stack.now().has_reached(t)),
+        }
+    }
+
+    /// (Re)starts the Anonymous Join Countdown Timer (power-up or a
+    /// local stimulus, §11.3.5.4.4).
+    pub fn restart_anonymous_join_countdown(&mut self) {
+        let now = self.stack.now();
+        self.direct.anonymous_join_until = match self.direct.anonymous_join_timeout {
+            0 | direct_configuration::ANONYMOUS_JOIN_ALWAYS => None,
+            secs => Some(now + panweave_types::time::Duration::from_secs(u64::from(secs))),
+        };
+    }
+
+    /// Applies a Trust Center's configuration (the stack events of the
+    /// Zigbee Direct Configuration server): persists it and restarts
+    /// the countdown.
+    pub(crate) fn direct_on_configured(&mut self, event: &StackEvent) {
+        match event {
+            StackEvent::DirectInterface { enabled, .. } => {
+                self.direct.interface_enabled = *enabled;
+                let _ = self.persist_direct_config();
+            }
+            StackEvent::DirectAnonymousJoinTimeout { seconds, .. } => {
+                self.direct.anonymous_join_timeout = *seconds;
+                self.restart_anonymous_join_countdown();
+                let _ = self.persist_direct_config();
+            }
+            _ => {}
+        }
+    }
+
+    /// Writes the interface configuration to storage.
+    pub fn persist_direct_config(&mut self) -> Result<(), StorageError> {
+        let t = self.direct.anonymous_join_timeout.to_le_bytes();
+        let buf = [
+            DIRECT_CONFIG_FORMAT,
+            u8::from(self.direct.interface_enabled),
+            t[0],
+            t[1],
+            t[2],
+        ];
+        self.stack
+            .storage
+            .store(Key::single(Kind::DirectConfig), &buf)
+    }
+
+    /// Restores the interface configuration (part of warm start) and
+    /// starts the Anonymous Join Countdown Timer as after a power-cycle.
+    pub fn restore_direct_config(&mut self) -> Result<(), StorageError> {
+        let mut buf = [0u8; 8];
+        if let Some(n) = self
+            .stack
+            .storage
+            .load(Key::single(Kind::DirectConfig), &mut buf)?
+            && n >= 5
+            && buf[0] == DIRECT_CONFIG_FORMAT
+        {
+            self.direct.interface_enabled = buf[1] & 0x01 != 0;
+            self.direct.anonymous_join_timeout = u32::from_le_bytes([buf[2], buf[3], buf[4], 0]);
+        }
+        self.restart_anonymous_join_countdown();
+        Ok(())
+    }
+
+    /// Checks whether the Trust Center is Zigbee Direct aware (§6.2.3):
+    /// a Match_Desc_req for the Zigbee Direct Configuration client
+    /// cluster on all its endpoints; the answer lands in
+    /// `DirectState::trust_center_aware`. Distributed networks are
+    /// aware by definition.
+    pub fn check_direct_aware(&mut self) -> bool {
+        if self.stack.config.distributed {
+            self.direct.trust_center_aware = Some(true);
+            return true;
+        }
+        let mut req = [0u8; 8];
+        req[..2].copy_from_slice(&ShortAddress::COORDINATOR.0.to_le_bytes());
+        req[2..4].copy_from_slice(&ProfileId::HOME_AUTOMATION.0.to_le_bytes());
+        req[4] = 0;
+        req[5] = 1;
+        req[6..8].copy_from_slice(&direct_configuration::ID.0.to_le_bytes());
+        match self.stack.zdo.request(
+            ShortAddress::COORDINATOR,
+            panweave_zdo::zdp::cluster::MATCH_DESC_REQ,
+            &req,
+        ) {
+            Ok(seq) => {
+                self.direct.aware_seq = Some(seq);
+                self.stack.flush();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The Match_Desc response of the awareness check.
+    pub(crate) fn direct_on_aware_answer(&mut self, event: &StackEvent) {
+        match event {
+            StackEvent::Zdp(z) if Some(z.seq) == self.direct.aware_seq => {
+                self.direct.aware_seq = None;
+                // Match_Desc_rsp: status, address, match length, endpoints.
+                let matched = z.data.first() == Some(&0) && z.data.get(3).is_some_and(|n| *n > 0);
+                self.direct.trust_center_aware = Some(matched);
+            }
+            StackEvent::ZdpTimeout { seq, .. } if Some(*seq) == self.direct.aware_seq => {
+                self.direct.aware_seq = None;
+                self.direct.trust_center_aware = Some(false);
+            }
+            _ => {}
+        }
     }
 
     /// Writes the past network keys to storage.

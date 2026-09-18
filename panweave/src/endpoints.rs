@@ -29,7 +29,8 @@ use panweave_zcl::clusters::{
     alarms, color_control, diagnostics, ias_zone, power_configuration, time,
 };
 use panweave_zcl::clusters::{
-    commissioning, door_lock, electrical_measurement, ias_ace, ias_wd, window_covering,
+    commissioning, direct_configuration, door_lock, electrical_measurement, ias_ace, ias_wd,
+    window_covering,
 };
 use panweave_zcl::clusters::{
     groups, identify, keep_alive, level, meter_identification, on_off, poll_control, power_profile,
@@ -141,6 +142,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     #[cfg(feature = "smart-energy")]
     panweave_smart_energy::cluster::METERING,
     rssi_location::ID,
+    direct_configuration::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -340,6 +342,9 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         flow::ID => Some(flow::client()),
         power_profile::ID => Some(power_profile::client()),
         rssi_location::ID => Some(rssi_location::client()),
+        // The server needs the ZDD's persisted state: see
+        // `Node::enable_direct_configuration`.
+        direct_configuration::ID => Some(direct_configuration::client()),
         #[cfg(feature = "smart-energy")]
         panweave_smart_energy::cluster::METERING => {
             panweave_smart_energy::endpoints::client(id).and_then(Result::ok)

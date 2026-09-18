@@ -17,6 +17,7 @@ use panweave_types::{
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
 use crate::clusters::appliance::{control as appliance_control, events_alerts, statistics};
 use crate::clusters::configuration::{barrier_control, device_temperature};
+use crate::clusters::direct_configuration;
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
@@ -416,6 +417,23 @@ pub enum ZclEvent {
         /// Power Profile ID.
         id: u8,
     },
+    /// The Zigbee Direct interface of the ZDD was switched by a
+    /// Configure Zigbee Direct Interface command (ZD 1.1 §11.3.5.4.3);
+    /// the setting is persistent.
+    DirectInterface {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Enabled.
+        enabled: bool,
+    },
+    /// The Anonymous Join Timeout was configured (ZD 1.1 §11.3.5.4.4):
+    /// the countdown restarts with `seconds`; persistent.
+    DirectAnonymousJoinTimeout {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The timeout.
+        seconds: u32,
+    },
     /// A Get Location Data asked the RSSI Location server on `endpoint`
     /// for a fresh calculation (§3.13.2.3.4); the application records
     /// the result with [`Zcl::rssi_location_measured`].
@@ -525,6 +543,9 @@ pub struct Zcl<const E: usize, const C: usize, const A: usize> {
     /// Response FAILURE under the network key (SE 1.4a §5.4.6). `None`
     /// accepts everything.
     link_key_policy: Option<LinkKeyPolicy>,
+    /// The Trust Center's network address on a centralized network
+    /// (the authorized source of Zigbee Direct configuration).
+    trust_center: Option<ShortAddress>,
 }
 
 /// A predicate naming the clusters that require APS link-key security
@@ -548,7 +569,15 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             now: Instant::from_millis(0),
             dropped: 0,
             link_key_policy: None,
+            trust_center: None,
         }
+    }
+
+    /// Names the Trust Center (`None` on a distributed network): the
+    /// only authorized source of Zigbee Direct Configuration commands
+    /// on a centralized one (ZD 1.1 §11.3.5.1).
+    pub fn set_trust_center(&mut self, trust_center: Option<ShortAddress>) {
+        self.trust_center = trust_center;
     }
 
     /// Installs the link-key policy: frames of clusters the predicate
@@ -1223,6 +1252,63 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             rssi_location::ID => {
                                 self.handle_rssi_location(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            direct_configuration::ID => {
+                                let from_tc = self.trust_center == Some(origin.src);
+                                let unicast = !origin.broadcast;
+                                let Some(c) = self.endpoints.get_mut(i).and_then(|e| {
+                                    e.cluster_mut(direct_configuration::ID, Role::Server)
+                                }) else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match direct_configuration::handle(
+                                    c,
+                                    cmd,
+                                    payload,
+                                    unicast,
+                                    origin.aps_secured,
+                                    from_tc,
+                                ) {
+                                    direct_configuration::Outcome::Interface {
+                                        response,
+                                        changed,
+                                    } => {
+                                        if changed {
+                                            self.push_event(ZclEvent::DirectInterface {
+                                                endpoint,
+                                                enabled: response.enabled,
+                                            });
+                                        }
+                                        let mut out = [0u8; 2];
+                                        if let Ok(n) = response.encode(&mut out) {
+                                            self.reply_cluster_specific(
+                                                &origin,
+                                                direct_configuration::CMD_CONFIGURE_INTERFACE_RESPONSE,
+                                                &out[..n],
+                                            );
+                                        }
+                                    }
+                                    direct_configuration::Outcome::Timeout { seconds, changed } => {
+                                        if changed {
+                                            self.push_event(ZclEvent::DirectAnonymousJoinTimeout {
+                                                endpoint,
+                                                seconds,
+                                            });
+                                        }
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    direct_configuration::Outcome::Default(ZclStatus::Success)
+                                        if unicast =>
+                                    {
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    direct_configuration::Outcome::Default(ZclStatus::Success) => {}
+                                    direct_configuration::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
                                 continue;
                             }
                             events_alerts::ID => {

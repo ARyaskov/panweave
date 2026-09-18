@@ -62,6 +62,9 @@ pub enum Kind {
     /// Saved startup attribute sets of a Commissioning server (ZCL8
     /// §13.2.2.3.2); `id` is the endpoint.
     StartupSets,
+    /// Zigbee Direct interface configuration (ZD 1.1 §11.3.5.4): the
+    /// interface state and the Anonymous Join Timeout.
+    DirectConfig,
 }
 
 /// A record key.

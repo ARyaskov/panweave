@@ -854,3 +854,158 @@ fn zvd_joins_a_distributed_network_through_the_tunnel() {
         Some(2)
     );
 }
+
+/// The Trust Center configures a joined ZDD through the Zigbee Direct
+/// Configuration cluster (ZD 1.1 §11.3): interface off and on, the
+/// Anonymous Join Timeout, both persistent; and the ZDD finds out that
+/// the Trust Center is Zigbee Direct aware (§6.2.3).
+#[test]
+fn the_trust_center_configures_the_zdd_interface() {
+    use panweave::Router;
+    use panweave::aps::{Destination, TxOptions};
+    use panweave::endpoints;
+    use panweave::types::{Endpoint, ProfileId};
+    use panweave::zcl::clusters::direct_configuration as dc;
+    use panweave::zcl::frame::{Direction, Header};
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    // A Zigbee Direct aware Trust Center: it carries the configuration
+    // client on an endpoint.
+    let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
+        .build::<SoftwareAes, _, _>(TestRng::seed(21), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    let (d, ep) = endpoints::device(
+        Endpoint(1),
+        panweave::types::DeviceId(0x0005),
+        &[],
+        &[dc::ID],
+        false,
+    )
+    .unwrap();
+    assert!(d.has_output(dc::ID));
+    coord.add_endpoint(d, ep).unwrap();
+    let c = w.add(coord);
+    let mut zdd = Router::new(ExtendedAddress(0x00DD_0000_0000_0007))
+        .build::<SoftwareAes, _, _>(TestRng::seed(22), MemoryStorage::new());
+    let (d, ep) = endpoints::on_off_light(Endpoint(3)).unwrap();
+    zdd.add_endpoint(d, ep).unwrap();
+    zdd.enable_direct_configuration(Endpoint(3)).unwrap();
+    assert!(zdd.direct_interface_enabled());
+    let z = w.add(zdd);
+    w.nodes[c]
+        .0
+        .stack
+        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    w.nodes[c].0.stack.permit_join_network(180).unwrap();
+    w.nodes[z].0.steer().unwrap();
+    assert!(w.run_until(Duration::from_secs(120), |w| {
+        w.nodes[z]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::Joined { .. })))
+    }));
+    w.run_until(Duration::from_secs(5), |_| false);
+    // The awareness check finds the client cluster on the Trust Center.
+    assert!(w.nodes[z].0.check_direct_aware());
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[z].0.direct.trust_center_aware.is_some()
+    }));
+    assert_eq!(w.nodes[z].0.direct.trust_center_aware, Some(true));
+    // An unsecured Configure Zigbee Direct Interface from the Trust
+    // Center is NOT_AUTHORIZED; the APS-secured one switches the
+    // interface off, persistently.
+    let zdd_short = w.nodes[z].0.stack.short_address();
+    let send = |w: &mut World, secured: bool, cmd: panweave::types::CommandId, payload: &[u8]| {
+        let seq = w.nodes[c].0.stack.zcl.next_seq();
+        let header = Header::cluster_specific(seq, cmd, Direction::ToServer);
+        w.nodes[c]
+            .0
+            .stack
+            .zcl
+            .send(
+                Destination::Short {
+                    address: zdd_short,
+                    endpoint: Endpoint(3),
+                },
+                ProfileId::HOME_AUTOMATION,
+                dc::ID,
+                Endpoint(1),
+                &header,
+                payload,
+                TxOptions {
+                    security: secured,
+                    ..TxOptions::ACKED
+                },
+            )
+            .unwrap();
+        w.nodes[c].0.stack.flush();
+        seq
+    };
+    w.nodes[c].2.clear();
+    w.nodes[z].2.clear();
+    let seq = send(&mut w, false, dc::CMD_CONFIGURE_INTERFACE, &[0]);
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[c].2.iter().any(|e| matches!(
+            e,
+            Event::Stack(StackEvent::ZclResponse(f))
+                if f.origin.header.seq == seq && f.payload.first() == Some(&dc::CMD_CONFIGURE_INTERFACE.0)
+                    && f.payload.get(1) == Some(&0x7e)
+        ))
+    }));
+    assert!(w.nodes[z].0.direct_interface_enabled());
+    let seq = send(&mut w, true, dc::CMD_CONFIGURE_INTERFACE, &[0]);
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[c].2.iter().any(|e| {
+            matches!(
+                e,
+                Event::Stack(StackEvent::ZclCommand(f))
+                    if f.origin.header.seq == seq
+                        && f.origin.header.command == dc::CMD_CONFIGURE_INTERFACE_RESPONSE
+                        && dc::InterfaceResponse::parse(&f.payload).is_ok_and(|r| !r.enabled)
+            )
+        })
+    }));
+    assert!(!w.nodes[z].0.direct_interface_enabled());
+    assert!(w.nodes[z].2.iter().any(|e| matches!(
+        e,
+        Event::Stack(StackEvent::DirectInterface { enabled: false, .. })
+    )));
+    // The Anonymous Join Timeout: 120 s, so anonymous provisioning is
+    // allowed for two minutes while the network is open.
+    let _ = send(
+        &mut w,
+        true,
+        dc::CMD_CONFIGURE_ANONYMOUS_JOIN_TIMEOUT,
+        &[120, 0, 0],
+    );
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[z].2.iter().any(|e| {
+            matches!(
+                e,
+                Event::Stack(StackEvent::DirectAnonymousJoinTimeout { seconds: 120, .. })
+            )
+        })
+    }));
+    assert!(w.nodes[z].0.anonymous_join_allowed());
+    w.run_until(Duration::from_secs(130), |_| false);
+    assert!(!w.nodes[z].0.anonymous_join_allowed());
+    // Both settings survive a restart; the countdown restarts.
+    let storage = w.nodes[z].0.stack.storage.clone();
+    let mut again = Router::new(ExtendedAddress(0x00DD_0000_0000_0007))
+        .build::<SoftwareAes, _, _>(TestRng::seed(23), storage);
+    again.restore_direct_config().unwrap();
+    assert!(!again.direct_interface_enabled());
+    assert_eq!(again.direct.anonymous_join_timeout, 120);
+    assert!(again.direct.anonymous_join_until.is_some());
+}

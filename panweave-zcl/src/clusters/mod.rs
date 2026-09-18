@@ -11,6 +11,7 @@ pub mod color_control;
 pub mod commissioning;
 pub mod configuration;
 pub mod diagnostics;
+pub mod direct_configuration;
 pub mod door_lock;
 pub mod electrical_measurement;
 pub mod groups;

@@ -670,6 +670,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.phase = Phase::Operating;
                         self.aps.aib.use_extended_pan_id = self.nwk.nib.extended_pan_id;
                         let _ = self.persist_link_keys();
+                        self.zcl.set_trust_center(
+                            (!self.aps.aib.is_distributed()).then_some(ShortAddress::COORDINATOR),
+                        );
                         self.push_event(StackEvent::NetworkFormed {
                             pan_id: self.nwk.nib.pan_id,
                             extended_pan_id: self.nwk.nib.extended_pan_id,
@@ -911,6 +914,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if !self.aps.aib.is_distributed() && AddrView(&self.nwk).short_of(tc).is_none() {
             let _ = self.nwk.address_map.record(tc, ShortAddress::COORDINATOR);
         }
+        self.zcl.set_trust_center(
+            (!self.aps.aib.is_distributed()).then_some(ShortAddress::COORDINATOR),
+        );
         // §2.4.3.4.2: a device that negotiated its link key obtains its
         // authentication token (passphrase) once, for later re-negotiation.
         let negotiated = self.aps.security.entry(tc).is_some_and(|e| {
@@ -2621,6 +2627,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
                 ZclEvent::LocationRecalculate { endpoint } => {
                     StackEvent::LocationRecalculate { endpoint }
+                }
+                ZclEvent::DirectInterface { endpoint, enabled } => {
+                    StackEvent::DirectInterface { endpoint, enabled }
+                }
+                ZclEvent::DirectAnonymousJoinTimeout { endpoint, seconds } => {
+                    StackEvent::DirectAnonymousJoinTimeout { endpoint, seconds }
                 }
                 ZclEvent::AnchorNode { endpoint, announce } => {
                     StackEvent::AnchorNode { endpoint, announce }

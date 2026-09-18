@@ -308,6 +308,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 self.push(t);
             }
             #[cfg(feature = "direct")]
+            {
+                self.direct_on_configured(&e);
+                self.direct_on_aware_answer(&e);
+            }
+            #[cfg(feature = "direct")]
             if let StackEvent::NetworkKeySwitched { previous, .. } = &e {
                 self.direct_on_key_switched(*previous);
             }
@@ -338,6 +343,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         let restored = self.stack.restore()?;
         #[cfg(feature = "direct")]
         self.restore_direct_past_keys()?;
+        #[cfg(feature = "direct")]
+        self.restore_direct_config()?;
         if restored == Restored::OnNetwork {
             self.bdb.set_on_network(true);
             if self.stack.config.role == LogicalDeviceType::EndDevice {
