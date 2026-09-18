@@ -26,6 +26,7 @@ pub mod measurement;
 pub mod meter_identification;
 pub mod on_off;
 pub mod ota;
+pub mod partition;
 pub mod poll_control;
 pub mod power_configuration;
 pub mod power_profile;

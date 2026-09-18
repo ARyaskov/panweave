@@ -212,6 +212,15 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Partition cluster 0x0016 (ZCL8 §9.6): `panweave_zcl::clusters::partition`
+  with the Table 9-29 attributes and their derived defaults
+  (`Params::defaults`), the TransferPartitionedFrame / MultipleACK /
+  Read- and WriteHandshakeParam codecs, and the sans-I/O `Sender`
+  (blocks in `NumberOfACKFrame` groups, resends of the blocks a
+  MultipleACK names, `NumberOfSendRetries` on `SenderTimeout`) and
+  `Receiver` (reassembly, MultipleACK on a complete group or at
+  `NACKTimeout`, abandonment at `ReceiverTimeout`); `endpoints::server`
+  / `client(0x0016)`.
 * Prepayment friendly credit periods (SE 1.4a D.7.2.2.1.13,
   D.7.2.2.1.17–D.7.2.2.1.18, D.9.2.3.2.3.2 and the glossary's delivery
   rule): `FriendlyCreditPeriod::evaluate` reads the Friendly Credit

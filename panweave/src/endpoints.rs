@@ -30,7 +30,7 @@ use panweave_zcl::clusters::{
 };
 use panweave_zcl::clusters::{
     commissioning, direct_configuration, door_lock, electrical_measurement, ias_ace, ias_wd,
-    window_covering,
+    partition, window_covering,
 };
 use panweave_zcl::clusters::{
     groups, identify, keep_alive, level, meter_identification, on_off, poll_control, power_profile,
@@ -91,6 +91,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     meter_identification::ID,
     power_profile::ID,
     rssi_location::ID,
+    partition::ID,
     #[cfg(feature = "smart-energy")]
     panweave_smart_energy::cluster::METERING,
 ];
@@ -143,6 +144,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     panweave_smart_energy::cluster::METERING,
     rssi_location::ID,
     direct_configuration::ID,
+    partition::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -266,6 +268,17 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
         rssi_location::ID => {
             rssi_location::server(ExtendedAddress(0), rssi_location::method::CENTRALIZED).ok()
         }
+        // Table 9-29 defaults for apsAckWaitDuration 1.6 s and a 10 ms
+        // interframe delay; a transfer of up to 0x0500 blocks each way.
+        partition::ID => partition::server(
+            &partition::Params::defaults(
+                panweave_types::Duration::from_millis(1600),
+                panweave_types::Duration::from_millis(10),
+            ),
+            0x0500,
+            0x0500,
+        )
+        .ok(),
         #[cfg(feature = "smart-energy")]
         panweave_smart_energy::cluster::METERING => {
             panweave_smart_energy::endpoints::server(id).and_then(Result::ok)
@@ -345,6 +358,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         // The server needs the ZDD's persisted state: see
         // `Node::enable_direct_configuration`.
         direct_configuration::ID => Some(direct_configuration::client()),
+        partition::ID => Some(partition::client()),
         #[cfg(feature = "smart-energy")]
         panweave_smart_energy::cluster::METERING => {
             panweave_smart_energy::endpoints::client(id).and_then(Result::ok)

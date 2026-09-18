@@ -152,6 +152,16 @@ pub const ALL: &[ClusterRequirements] = &[
         client_commands: cmds![0x00, 0x01, 0x02, 0x03],
     },
     ClusterRequirements {
+        id: ClusterId(0x0016),
+        section: "ZCL §9.6",
+        // Every Table 9-29 attribute and every command are mandatory.
+        server_attributes: attrs![
+            0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009
+        ],
+        server_commands: cmds![0x00, 0x01, 0x02],
+        client_commands: cmds![0x00, 0x01],
+    },
+    ClusterRequirements {
         id: ClusterId(0x001a),
         section: "ZCL §3.17",
         // TotalProfileNum .. ScheduleMode; every command the server
