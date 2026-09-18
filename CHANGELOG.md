@@ -212,6 +212,15 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Metering snapshot schedules (SE 1.4a D.3.3.3.1.5, D.3.4.5):
+  `SnapshotSchedules` stores the schedules of a Schedule Snapshot with
+  the Table D-50 confirmations, `next_snapshot_time` works the Table
+  D-65 bitmap out on a civil calendar (daily / weekly / monthly, at the
+  start or end of the unit or exactly `frequency` units apart), and the
+  `MeteringServer` driver answers Schedule Snapshot, takes each
+  scheduled snapshot when due and publishes it to the scheduling client
+  (`Snapshots::publish`); `MeteringClient::schedule_snapshot` and
+  `MeteringEvent::SnapshotsScheduled`.
 * Metering demand limiting and uncontrolled-flow detection (SE 1.4a
   D.3.2.2.7, D.3.3.3.1.15): `SupplyControl::demand_limiting`
   (`DemandLimiting`, `DEMAND_LIMIT_OFF`), `demand_measured` (an

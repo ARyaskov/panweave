@@ -1275,9 +1275,22 @@ impl<const N: usize> Snapshots<N> {
         });
         let total = matching.clone().count();
         let s = matching.clone().nth(usize::from(req.offset))?;
+        let total_found = u8::try_from(total).unwrap_or(u8::MAX);
+        Self::fragments(s, total_found, out);
+        Some(())
+    }
+
+    /// The Publish Snapshot fragments of snapshot `id` (D.3.4.5: a new
+    /// snapshot is published as it is created), `None` when unknown.
+    pub fn publish(&self, id: u32, out: &mut Vec<PublishSnapshot, 4>) -> Option<()> {
+        let s = self.snapshots.iter().find(|s| s.id == id)?;
+        Self::fragments(s, 1, out);
+        Some(())
+    }
+
+    fn fragments(s: &Snapshot, total_found: u8, out: &mut Vec<PublishSnapshot, 4>) {
         let chunks = s.payload.chunks(SNAPSHOT_FRAGMENT);
         let total_commands = u8::try_from(chunks.len().max(1)).unwrap_or(u8::MAX);
-        let total_found = u8::try_from(total).unwrap_or(u8::MAX);
         if s.payload.is_empty() {
             let _ = out.push(PublishSnapshot {
                 snapshot_id: s.id,
@@ -1289,7 +1302,7 @@ impl<const N: usize> Snapshots<N> {
                 payload_type: s.payload_type,
                 payload: Vec::new(),
             });
-            return Some(());
+            return;
         }
         for (i, chunk) in chunks.enumerate() {
             let _ = out.push(PublishSnapshot {
@@ -1303,7 +1316,6 @@ impl<const N: usize> Snapshots<N> {
                 payload: Vec::from_slice(chunk).unwrap_or_default(),
             });
         }
-        Some(())
     }
 
     /// The snapshots held.
@@ -1372,6 +1384,290 @@ pub enum SupplyOutcome {
     Unsupported,
     /// Not allowed in the current application (NOT_AUTHORIZED).
     NotAuthorized,
+}
+
+/// Snapshot Schedule bitmap fields (Table D-65).
+pub mod snapshot_schedule {
+    /// Frequency (bits 0-19).
+    pub const FREQUENCY_MASK: u32 = 0x000F_FFFF;
+    /// Frequency unit: day.
+    pub const UNIT_DAY: u32 = 0;
+    /// Frequency unit: week.
+    pub const UNIT_WEEK: u32 = 1;
+    /// Frequency unit: month.
+    pub const UNIT_MONTH: u32 = 2;
+    /// Wild-card: start of the unit.
+    pub const WILDCARD_START_OF: u32 = 0;
+    /// Wild-card: end of the unit.
+    pub const WILDCARD_END_OF: u32 = 1;
+    /// Wild-card not used.
+    pub const WILDCARD_NONE: u32 = 2;
+
+    /// Builds the bitmap.
+    pub const fn build(frequency: u32, unit: u32, wildcard: u32) -> u32 {
+        (frequency & FREQUENCY_MASK) | ((unit & 0x3) << 20) | ((wildcard & 0x3) << 22)
+    }
+
+    /// The frequency.
+    pub const fn frequency(schedule: u32) -> u32 {
+        schedule & FREQUENCY_MASK
+    }
+
+    /// The unit (bits 20-21).
+    pub const fn unit(schedule: u32) -> u32 {
+        (schedule >> 20) & 0x3
+    }
+
+    /// The wild-card (bits 22-23).
+    pub const fn wildcard(schedule: u32) -> u32 {
+        (schedule >> 22) & 0x3
+    }
+}
+
+/// The seconds of a day.
+const DAY: u32 = 86_400;
+
+/// Civil date arithmetic on UTCTime (seconds since 2000-01-01
+/// 00:00:00 UTC): days from the epoch to (year, month, day) and back
+/// (proleptic Gregorian, Howard Hinnant's algorithms).
+mod civil {
+    /// Days from 1970-01-01 to 2000-01-01.
+    const EPOCH_DAYS_1970: i64 = 10_957;
+
+    /// (year, month, day) of the day `days` after 2000-01-01.
+    pub fn from_days(days: i64) -> (i64, u32, u32) {
+        let z = days + EPOCH_DAYS_1970 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+        (if m <= 2 { y + 1 } else { y }, m, d)
+    }
+
+    /// Days after 2000-01-01 of (year, month, day).
+    pub fn to_days(y: i64, m: u32, d: u32) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y.rem_euclid(400);
+        let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
+        let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468 - EPOCH_DAYS_1970
+    }
+
+    /// Days in a month.
+    pub fn days_in_month(y: i64, m: u32) -> u32 {
+        match m {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            _ => {
+                if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+                    29
+                } else {
+                    28
+                }
+            }
+        }
+    }
+}
+
+/// When a snapshot schedule (Table D-65) fires next after `after`
+/// (exclusive), counted from `start`: every `frequency` days / weeks /
+/// months, at the start of the unit (00:00:00 of the day, of the
+/// Monday, of the first of the month), at its end (the last second of
+/// the day, of the Sunday, of the month) or exactly `frequency` units
+/// after the previous occurrence when the wild-card is unused. `None`
+/// for a zero frequency or a reserved field. Weeks start on Monday: an
+/// interpretation, Table D-65 names no day.
+pub fn next_snapshot_time(schedule: u32, start: u32, after: u32) -> Option<u32> {
+    use snapshot_schedule as s;
+    let freq = s::frequency(schedule);
+    let unit = s::unit(schedule);
+    let wildcard = s::wildcard(schedule);
+    if freq == 0 || unit > s::UNIT_MONTH || wildcard > s::WILDCARD_NONE {
+        return None;
+    }
+    let mut t = start;
+    // Bounded: a schedule never needs more steps than seconds elapsed
+    // in units, and the loop below is bounded by u32 time anyway.
+    for _ in 0..=100_000u32 {
+        if let Some(occurrence) = align(t, unit, wildcard)
+            && occurrence > after
+            && occurrence >= start
+        {
+            return Some(occurrence);
+        }
+        t = step(t, freq, unit)?;
+    }
+    None
+}
+
+/// The occurrence a period beginning at `t` stands for, per the
+/// wild-card.
+fn align(t: u32, unit: u32, wildcard: u32) -> Option<u32> {
+    use snapshot_schedule as s;
+    if wildcard == s::WILDCARD_NONE {
+        return Some(t);
+    }
+    let days = i64::from(t / DAY);
+    let (y, m, d) = civil::from_days(days);
+    let (first_day, last_day) = match unit {
+        s::UNIT_DAY => (days, days),
+        s::UNIT_WEEK => {
+            // 2000-01-01 was a Saturday: Monday is day 3 of the cycle.
+            let weekday = (days + 5).rem_euclid(7); // 0 = Monday
+            (days - weekday, days - weekday + 6)
+        }
+        _ => {
+            let first = civil::to_days(y, m, 1);
+            (first, first + i64::from(civil::days_in_month(y, m)) - 1)
+        }
+    };
+    let _ = d;
+    let secs = |day: i64, last: bool| -> Option<u32> {
+        let base = u32::try_from(day).ok()?.checked_mul(DAY)?;
+        if last {
+            base.checked_add(DAY - 1)
+        } else {
+            Some(base)
+        }
+    };
+    if wildcard == s::WILDCARD_START_OF {
+        secs(first_day, false)
+    } else {
+        secs(last_day, true)
+    }
+}
+
+/// `t` moved `freq` units forward (months keep the day of the month,
+/// clamped to the month's length).
+fn step(t: u32, freq: u32, unit: u32) -> Option<u32> {
+    use snapshot_schedule as s;
+    match unit {
+        s::UNIT_DAY => t.checked_add(freq.checked_mul(DAY)?),
+        s::UNIT_WEEK => t.checked_add(freq.checked_mul(7 * DAY)?),
+        _ => {
+            let days = i64::from(t / DAY);
+            let secs_of_day = t % DAY;
+            let (y, m, d) = civil::from_days(days);
+            let total = i64::from(m - 1) + i64::from(freq);
+            let y = y + total.div_euclid(12);
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let m = (total.rem_euclid(12) + 1) as u32;
+            let d = d.min(civil::days_in_month(y, m));
+            let day = u32::try_from(civil::to_days(y, m, d)).ok()?;
+            day.checked_mul(DAY)?.checked_add(secs_of_day)
+        }
+    }
+}
+
+/// A stored snapshot schedule with its next occurrence.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct StoredSchedule {
+    /// The schedule as requested.
+    pub schedule: SnapshotSchedule,
+    /// Issuer event id of the ScheduleSnapshot that set it.
+    pub issuer_event_id: u32,
+    /// When it fires next.
+    pub next: u32,
+}
+
+/// The snapshot schedules of a metering server (ScheduleSnapshot,
+/// D.3.3.3.1.5; D.3.4.5): at most `N`, identified by their Snapshot
+/// Schedule ID (1-254), each taking a snapshot of its payload type for
+/// its cause when due. The store should be persisted (D.3.3.3.1.5).
+#[derive(Clone, Debug, Default)]
+pub struct SnapshotSchedules<const N: usize> {
+    schedules: Vec<StoredSchedule, N>,
+}
+
+impl<const N: usize> SnapshotSchedules<N> {
+    /// An empty store.
+    pub const fn new() -> Self {
+        SnapshotSchedules {
+            schedules: Vec::new(),
+        }
+    }
+
+    /// The schedules.
+    pub fn schedules(&self) -> &[StoredSchedule] {
+        &self.schedules
+    }
+
+    /// Handles a ScheduleSnapshot (one fragment of it): every schedule
+    /// with a supported payload type and cause and a valid bitmap is
+    /// stored (replacing the one with the same id; the response lists
+    /// the confirmation per schedule (Table D-50). `now` starts the
+    /// schedule's clock: a start time in the past fires at its next
+    /// occurrence after now.
+    pub fn on_schedule_snapshot(
+        &mut self,
+        cmd: &ScheduleSnapshot,
+        type_supported: impl Fn(u8) -> bool,
+        supported_causes: u32,
+        now: u32,
+    ) -> ScheduleSnapshotResponse {
+        let mut response = ScheduleSnapshotResponse {
+            issuer_event_id: cmd.issuer_event_id,
+            confirmations: Vec::new(),
+        };
+        for s in &cmd.schedules {
+            let confirmation = if s.schedule_id == 0 || s.schedule_id == 0xFF {
+                schedule_confirmation::NOT_AVAILABLE
+            } else if !type_supported(s.payload_type) {
+                schedule_confirmation::TYPE_NOT_SUPPORTED
+            } else if s.cause & !supported_causes != 0 {
+                schedule_confirmation::CAUSE_NOT_SUPPORTED
+            } else {
+                match next_snapshot_time(s.schedule, s.start_time, now.saturating_sub(1)) {
+                    Some(next) => {
+                        self.schedules
+                            .retain(|e| e.schedule.schedule_id != s.schedule_id);
+                        let stored = StoredSchedule {
+                            schedule: *s,
+                            issuer_event_id: cmd.issuer_event_id,
+                            next,
+                        };
+                        if self.schedules.push(stored).is_ok() {
+                            schedule_confirmation::ACCEPTED
+                        } else {
+                            schedule_confirmation::INSUFFICIENT_SPACE
+                        }
+                    }
+                    None => schedule_confirmation::NOT_AVAILABLE,
+                }
+            };
+            let _ = response.confirmations.push((s.schedule_id, confirmation));
+        }
+        response
+    }
+
+    /// The next schedule due at `now`, advanced to its following
+    /// occurrence (a schedule whose next occurrence overflows is
+    /// dropped).
+    pub fn poll(&mut self, now: u32) -> Option<StoredSchedule> {
+        let i = self.schedules.iter().position(|s| s.next <= now)?;
+        let due = self.schedules[i];
+        match next_snapshot_time(due.schedule.schedule, due.schedule.start_time, now) {
+            Some(next) => self.schedules[i].next = next,
+            None => {
+                self.schedules.swap_remove(i);
+            }
+        }
+        Some(due)
+    }
+
+    /// When the earliest schedule fires.
+    pub fn next_deadline(&self) -> Option<u32> {
+        self.schedules.iter().map(|s| s.next).min()
+    }
 }
 
 /// The supply status required after meter events (SetSupplyStatus,
@@ -2557,6 +2853,131 @@ mod tests {
         assert_eq!(f.flow_measured(300, 71), None);
         assert_eq!(f.flow_measured(250, 72), Some(supply_status::OFF));
         assert_eq!(f.status, supply_status::OFF);
+    }
+
+    #[test]
+    fn snapshot_schedules_fire_by_the_calendar() {
+        use snapshot_schedule as ss;
+        // 2000-01-01 was a Saturday; 2024-02-29 exists.
+        assert_eq!(civil::from_days(0), (2000, 1, 1));
+        assert_eq!(civil::to_days(2024, 2, 29), 8825);
+        assert_eq!(civil::from_days(8825), (2024, 2, 29));
+        assert_eq!(civil::days_in_month(2100, 2), 28);
+        let day = 86_400;
+        // Every 2 days from t=10, no wild-card.
+        let s = ss::build(2, ss::UNIT_DAY, ss::WILDCARD_NONE);
+        assert_eq!(next_snapshot_time(s, 10, 0), Some(10));
+        assert_eq!(next_snapshot_time(s, 10, 10), Some(10 + 2 * day));
+        assert_eq!(next_snapshot_time(s, 10, 2 * day + 10), Some(10 + 4 * day));
+        // Start of every week (Monday 00:00): 2000-01-03 is the first
+        // Monday, day 2.
+        let s = ss::build(1, ss::UNIT_WEEK, ss::WILDCARD_START_OF);
+        assert_eq!(next_snapshot_time(s, 0, 0), Some(2 * day));
+        assert_eq!(next_snapshot_time(s, 0, 2 * day), Some(9 * day));
+        // End of every month: the last second of January 2000 (day 30),
+        // then of February (day 59: 2000 is a leap year).
+        let s = ss::build(1, ss::UNIT_MONTH, ss::WILDCARD_END_OF);
+        assert_eq!(next_snapshot_time(s, 0, 0), Some(31 * day - 1));
+        assert_eq!(next_snapshot_time(s, 0, 31 * day - 1), Some(60 * day - 1));
+        // Monthly on the 31st keeps the day where it exists and clamps
+        // otherwise: Jan 31 -> Feb 29 -> Mar 29.
+        let s = ss::build(1, ss::UNIT_MONTH, ss::WILDCARD_NONE);
+        let jan31 = 30 * day + 3600;
+        assert_eq!(next_snapshot_time(s, jan31, jan31), Some(59 * day + 3600));
+        assert_eq!(
+            next_snapshot_time(s, jan31, 59 * day + 3600),
+            Some(88 * day + 3600)
+        );
+        // Zero frequency or reserved fields: never.
+        assert_eq!(
+            next_snapshot_time(ss::build(0, ss::UNIT_DAY, 0), 0, 0),
+            None
+        );
+        assert_eq!(next_snapshot_time(ss::build(1, 3, 0), 0, 0), None);
+
+        // The store: confirmations, replacement and firing.
+        let mut store: SnapshotSchedules<2> = SnapshotSchedules::new();
+        let cmd = ScheduleSnapshot {
+            issuer_event_id: 77,
+            command_index: 0,
+            total_commands: 1,
+            schedules: Vec::from_slice(&[
+                SnapshotSchedule {
+                    schedule_id: 1,
+                    start_time: 100,
+                    schedule: ss::build(1, ss::UNIT_DAY, ss::WILDCARD_NONE),
+                    payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                    cause: snapshot_cause::GENERAL,
+                },
+                SnapshotSchedule {
+                    schedule_id: 2,
+                    start_time: 100,
+                    schedule: ss::build(1, ss::UNIT_DAY, ss::WILDCARD_NONE),
+                    payload_type: 0x77,
+                    cause: snapshot_cause::GENERAL,
+                },
+                SnapshotSchedule {
+                    schedule_id: 3,
+                    start_time: 100,
+                    schedule: ss::build(1, ss::UNIT_DAY, ss::WILDCARD_NONE),
+                    payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                    cause: snapshot_cause::END_OF_BILLING_PERIOD,
+                },
+                SnapshotSchedule {
+                    schedule_id: 4,
+                    start_time: 100,
+                    schedule: ss::build(0, ss::UNIT_DAY, ss::WILDCARD_NONE),
+                    payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                    cause: snapshot_cause::GENERAL,
+                },
+            ])
+            .unwrap(),
+        };
+        let r = store.on_schedule_snapshot(
+            &cmd,
+            |t| t == snapshot_type::TOU_DELIVERED_NO_BILLING,
+            snapshot_cause::GENERAL,
+            50,
+        );
+        assert_eq!(r.issuer_event_id, 77);
+        assert_eq!(
+            r.confirmations.as_slice(),
+            &[
+                (1, schedule_confirmation::ACCEPTED),
+                (2, schedule_confirmation::TYPE_NOT_SUPPORTED),
+                (3, schedule_confirmation::CAUSE_NOT_SUPPORTED),
+                (4, schedule_confirmation::NOT_AVAILABLE),
+            ]
+        );
+        assert_eq!(store.next_deadline(), Some(100));
+        assert_eq!(store.poll(99), None);
+        let due = store.poll(100).unwrap();
+        assert_eq!((due.schedule.schedule_id, due.issuer_event_id), (1, 77));
+        assert_eq!(store.next_deadline(), Some(100 + day));
+        // A second and third schedule: the store is full at two.
+        let mut more = cmd.clone();
+        more.schedules.clear();
+        for id in [5u8, 6] {
+            let _ = more.schedules.push(SnapshotSchedule {
+                schedule_id: id,
+                start_time: 0,
+                schedule: ss::build(1, ss::UNIT_WEEK, ss::WILDCARD_NONE),
+                payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                cause: snapshot_cause::GENERAL,
+            });
+        }
+        let r = store.on_schedule_snapshot(&more, |_| true, u32::MAX, 50);
+        assert_eq!(
+            r.confirmations.as_slice(),
+            &[
+                (5, schedule_confirmation::ACCEPTED),
+                (6, schedule_confirmation::INSUFFICIENT_SPACE),
+            ]
+        );
+        // Replacing schedule 1 keeps the count.
+        let r = store.on_schedule_snapshot(&cmd, |_| true, u32::MAX, 50);
+        assert_eq!(r.confirmations[0], (1, schedule_confirmation::ACCEPTED));
+        assert_eq!(store.schedules().len(), 2);
     }
 
     #[test]

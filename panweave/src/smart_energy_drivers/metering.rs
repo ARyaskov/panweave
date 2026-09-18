@@ -12,9 +12,10 @@ use panweave_smart_energy::clusters::metering::extended::{
     self as ext, ChangeSupply, ConfigureMirror, FastPoll, FastPollModeResponse, GetSampledData,
     GetSnapshot, LocalChangeSupply, MirrorRemoved, MirrorTable, PublishSnapshot,
     RequestFastPollMode, RequestMirrorResponse, ResetLoadLimitCounter, SampledDataResponse,
-    Sampler, SetSupplyStatus, SetUncontrolledFlowThreshold, Snapshot, SnapshotAssembler, Snapshots,
-    StartSampling, StartSamplingResponse, SupplyControl, SupplyEvent, SupplyOutcome,
-    SupplyStatusResponse, TakeSnapshot, TakeSnapshotResponse,
+    Sampler, ScheduleSnapshot, SetSupplyStatus, SetUncontrolledFlowThreshold, Snapshot,
+    SnapshotAssembler, SnapshotSchedules, Snapshots, StartSampling, StartSamplingResponse,
+    SupplyControl, SupplyEvent, SupplyOutcome, SupplyStatusResponse, TakeSnapshot,
+    TakeSnapshotResponse,
 };
 use panweave_smart_energy::clusters::metering::{
     self, GetProfile, GetProfileResponse, IntervalPeriod, MAX_PERIODS_DELIVERED, ProfileLog,
@@ -37,6 +38,8 @@ pub const PROFILE_INTERVALS: usize = 48;
 pub const SAMPLING_SESSIONS: usize = 4;
 /// Snapshots a server keeps.
 pub const SNAPSHOTS: usize = 4;
+/// Snapshot schedules a server keeps.
+pub const SNAPSHOT_SCHEDULES: usize = 4;
 
 /// What a [`MeteringServer`] reports.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,7 +63,15 @@ pub enum MeteringServerEvent {
         /// Sample type.
         sample_type: u8,
     },
-    /// A snapshot was taken on request.
+    /// A ScheduleSnapshot was answered; `accepted` schedules were set
+    /// up.
+    SnapshotsScheduled {
+        /// Issuer event id of the command.
+        issuer_event_id: u32,
+        /// Schedules accepted.
+        accepted: u8,
+    },
+    /// A snapshot was taken on request or by a schedule.
     SnapshotTaken {
         /// Snapshot id.
         snapshot_id: u32,
@@ -103,6 +114,8 @@ pub struct MeteringServer {
     pub sampler: Sampler<SAMPLING_SESSIONS>,
     /// Snapshots.
     pub snapshots: Snapshots<SNAPSHOTS>,
+    /// Snapshot schedules (ScheduleSnapshot, D.3.3.3.1.5).
+    pub schedules: SnapshotSchedules<SNAPSHOT_SCHEDULES>,
     /// Snapshot causes the meter supports (bitmask), payload type and
     /// the current snapshot payload the application keeps up to date.
     pub snapshot_causes: u32,
@@ -117,6 +130,9 @@ pub struct MeteringServer {
     /// The last client that changed the supply (for the scheduled
     /// status response).
     supply_client: Option<(ShortAddress, Endpoint)>,
+    /// The last client that scheduled snapshots: new snapshots are
+    /// published to it (D.3.4.5).
+    snapshot_client: Option<(ShortAddress, Endpoint)>,
 }
 
 impl MeteringServer {
@@ -129,12 +145,14 @@ impl MeteringServer {
             fast_poll: FastPoll::new(5, 30),
             sampler: Sampler::new(),
             snapshots: Snapshots::new(),
+            schedules: SnapshotSchedules::new(),
             snapshot_causes: 0,
             snapshot_payload_type: 0,
             snapshot_payload: Vec::new(),
             supply: SupplyControl::new(ext::supply_status::ON, false, false),
             clock: UtcClock::new(),
             supply_client: None,
+            snapshot_client: None,
         }
     }
 
@@ -191,6 +209,41 @@ impl MeteringServer {
             &self.snapshot_payload,
             now,
         )
+    }
+
+    /// Publishes snapshot `id` to the client that scheduled snapshots
+    /// (D.3.4.5), in fragments.
+    fn publish_snapshot<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        id: u32,
+    ) {
+        let Some((client, endpoint)) = self.snapshot_client else {
+            return;
+        };
+        let mut out: Vec<PublishSnapshot, 4> = Vec::new();
+        if self.snapshots.publish(id, &mut out).is_none() {
+            return;
+        }
+        for p in &out {
+            let mut buf = [0u8; 16 + ext::MAX_SNAPSHOT_PAYLOAD];
+            let mut w = panweave_codec::Writer::new(&mut buf);
+            if p.encode(&mut w).is_ok() {
+                let n = w.position();
+                send(
+                    stack,
+                    self.endpoint,
+                    Destination::Short {
+                        address: client,
+                        endpoint,
+                    },
+                    metering::ID,
+                    ext::CMD_PUBLISH_SNAPSHOT,
+                    Direction::ToClient,
+                    buf.get(..n).unwrap_or(&[]),
+                );
+            }
+        }
     }
 
     fn send_supply_status<C: BlockCipher, R: CryptoRng, S: Storage>(
@@ -363,6 +416,40 @@ impl MeteringServer {
                         cause: req.cause,
                     },
                 )
+            }
+            ext::CMD_SCHEDULE_SNAPSHOT => {
+                let Ok(cmd) = ScheduleSnapshot::parse(payload) else {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                };
+                let payload_type = self.snapshot_payload_type;
+                let r = self.schedules.on_schedule_snapshot(
+                    &cmd,
+                    |t| t == payload_type,
+                    self.snapshot_causes,
+                    now,
+                );
+                self.snapshot_client = Some((origin.src, origin.src_endpoint));
+                let mut buf = [0u8; 4 + 2 * ext::MAX_SCHEDULES];
+                let mut w = panweave_codec::Writer::new(&mut buf);
+                if r.encode(&mut w).is_ok() {
+                    let n = w.position();
+                    reply(
+                        stack,
+                        &origin,
+                        ext::CMD_SCHEDULE_SNAPSHOT_RESPONSE,
+                        buf.get(..n).unwrap_or(&[]),
+                    );
+                }
+                let accepted = r
+                    .confirmations
+                    .iter()
+                    .filter(|(_, c)| *c == ext::schedule_confirmation::ACCEPTED)
+                    .count();
+                Some(MeteringServerEvent::SnapshotsScheduled {
+                    issuer_event_id: cmd.issuer_event_id,
+                    accepted: u8::try_from(accepted).unwrap_or(u8::MAX),
+                })
             }
             ext::CMD_GET_SNAPSHOT => {
                 let Ok(req) = GetSnapshot::parse(payload) else {
@@ -604,6 +691,20 @@ impl MeteringServer {
         _now: Instant,
     ) -> Option<MeteringServerEvent> {
         let now = utc_now(stack, self.endpoint, &self.clock);
+        if let Some(due) = self.schedules.poll(now) {
+            // D.3.4.5: a scheduled snapshot is taken and published.
+            let id = self.snapshots.take(
+                due.schedule.cause,
+                due.schedule.payload_type,
+                &self.snapshot_payload,
+                now,
+            )?;
+            self.publish_snapshot(stack, id);
+            return Some(MeteringServerEvent::SnapshotTaken {
+                snapshot_id: id,
+                cause: due.schedule.cause,
+            });
+        }
         if let Some(status) = self.supply.poll_demand_limit(now) {
             self.write_supply_attributes(stack);
             return Some(MeteringServerEvent::SupplyChanged { status });
@@ -700,6 +801,8 @@ pub enum MeteringEvent {
     SamplingStarted(StartSamplingResponse),
     /// Sampled data arrived.
     SampledData(SampledDataResponse),
+    /// The meter answered Schedule Snapshot.
+    SnapshotsScheduled(ext::ScheduleSnapshotResponse),
     /// The meter answered Take Snapshot.
     SnapshotTaken(TakeSnapshotResponse),
     /// A complete snapshot was assembled from its Publish Snapshot
@@ -833,6 +936,26 @@ impl<const MIRRORS: usize> MeteringClient<MIRRORS> {
         self.request(stack, meter, ext::CMD_TAKE_SNAPSHOT, &cause.to_le_bytes())
     }
 
+    /// Schedule Snapshot (D.3.3.3.1.5).
+    pub fn schedule_snapshot<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        meter: Destination,
+        cmd: &ScheduleSnapshot,
+    ) -> bool {
+        let mut buf = [0u8; 6 + 13 * ext::MAX_SCHEDULES];
+        let mut w = panweave_codec::Writer::new(&mut buf);
+        cmd.encode(&mut w).is_ok() && {
+            let n = w.position();
+            self.request(
+                stack,
+                meter,
+                ext::CMD_SCHEDULE_SNAPSHOT,
+                buf.get(..n).unwrap_or(&[]),
+            )
+        }
+    }
+
     /// Get Snapshot.
     pub fn get_snapshot<C: BlockCipher, R: CryptoRng, S: Storage>(
         &self,
@@ -963,6 +1086,11 @@ impl<const MIRRORS: usize> MeteringClient<MIRRORS> {
                 let r = SampledDataResponse::parse(payload).ok();
                 ok(stack);
                 r.map(MeteringEvent::SampledData)
+            }
+            ext::CMD_SCHEDULE_SNAPSHOT_RESPONSE => {
+                let r = ext::ScheduleSnapshotResponse::parse(payload).ok();
+                ok(stack);
+                r.map(MeteringEvent::SnapshotsScheduled)
             }
             ext::CMD_TAKE_SNAPSHOT_RESPONSE => {
                 let r = TakeSnapshotResponse::parse(payload).ok();

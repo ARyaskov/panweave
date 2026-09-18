@@ -17,8 +17,9 @@ use panweave::runtime::{JoinMode, StackConfig, StackEvent};
 use panweave::smart_energy::cluster as c;
 use panweave::smart_energy::clusters::metering::extended::{
     ANY_CAUSE, ChangeSupply, DemandLimiting, GetSampledData, GetSnapshot, LocalChangeSupply,
-    RequestFastPollMode, SetSupplyStatus, SetUncontrolledFlowThreshold, StartSampling, SupplyEvent,
-    sample_type, snapshot_cause, snapshot_confirmation, snapshot_type, supply_control,
+    RequestFastPollMode, ScheduleSnapshot, SetSupplyStatus, SetUncontrolledFlowThreshold,
+    SnapshotSchedule, StartSampling, SupplyEvent, sample_type, schedule_confirmation,
+    snapshot_cause, snapshot_confirmation, snapshot_schedule, snapshot_type, supply_control,
     supply_status,
 };
 use panweave::smart_energy::clusters::metering::{
@@ -345,6 +346,89 @@ fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
         }
         other => panic!("{other:?}"),
     }
+    // A snapshot schedule (D.3.3.3.1.5): every day from a minute from
+    // now; the meter confirms, takes the snapshot when due and publishes
+    // it to the ESI (D.3.4.5).
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        let now = UTC + u32::try_from(stack.now().as_millis() / 1000).unwrap();
+        assert!(
+            app.driver.as_ref().unwrap().schedule_snapshot(
+                stack,
+                meter,
+                &ScheduleSnapshot {
+                    issuer_event_id: 0x60,
+                    command_index: 0,
+                    total_commands: 1,
+                    schedules: heapless::Vec::from_slice(&[
+                        SnapshotSchedule {
+                            schedule_id: 1,
+                            start_time: now + 60,
+                            schedule: snapshot_schedule::build(
+                                1,
+                                snapshot_schedule::UNIT_DAY,
+                                snapshot_schedule::WILDCARD_NONE
+                            ),
+                            payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                            cause: snapshot_cause::GENERAL,
+                        },
+                        SnapshotSchedule {
+                            schedule_id: 2,
+                            start_time: now + 60,
+                            schedule: snapshot_schedule::build(
+                                1,
+                                snapshot_schedule::UNIT_DAY,
+                                snapshot_schedule::WILDCARD_NONE
+                            ),
+                            payload_type: snapshot_type::TOU_DELIVERED_NO_BILLING,
+                            cause: snapshot_cause::CHANGE_OF_TARIFF,
+                        },
+                    ])
+                    .unwrap(),
+                }
+            )
+        );
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 7
+    }));
+    match &sim.app::<Esi>(e).unwrap().events[6] {
+        MeteringEvent::SnapshotsScheduled(r) => {
+            assert_eq!(r.issuer_event_id, 0x60);
+            assert_eq!(
+                r.confirmations.as_slice(),
+                &[
+                    (1, schedule_confirmation::ACCEPTED),
+                    (2, schedule_confirmation::CAUSE_NOT_SUPPORTED),
+                ]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(sim.run_until(Duration::from_secs(90), |x| {
+        x.app::<Esi>(e).unwrap().events.len() == 8
+    }));
+    match &sim.app::<Esi>(e).unwrap().events[7] {
+        MeteringEvent::Snapshot(s) => {
+            assert_ne!(s.id, snapshot_id);
+            assert_eq!(s.cause, snapshot_cause::GENERAL);
+            assert_eq!(s.payload.as_slice(), &[0x5A; 40]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        sim.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(
+                ev,
+                MeteringServerEvent::SnapshotTaken {
+                    cause: snapshot_cause::GENERAL,
+                    ..
+                }
+            ))
+    );
     // Change Supply now with an acknowledgement.
     {
         let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
@@ -362,9 +446,9 @@ fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
         ));
     }
     assert!(sim.run_until(Duration::from_secs(10), |x| {
-        x.app::<Esi>(e).unwrap().events.len() == 7
+        x.app::<Esi>(e).unwrap().events.len() == 9
     }));
-    match sim.app::<Esi>(e).unwrap().events[6] {
+    match sim.app::<Esi>(e).unwrap().events[8] {
         MeteringEvent::SupplyStatus(r) => {
             assert_eq!(r.issuer_event_id, 0x40);
             assert_eq!(r.status, supply_status::OFF_ARMED);
