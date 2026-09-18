@@ -1051,7 +1051,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             nwk,
             aps,
             zdo,
-            zcl: Zcl::new(),
+            zcl: {
+                let mut z = Zcl::new();
+                z.set_ieee(config.ieee);
+                z
+            },
             storage,
             config,
             now: Instant::from_millis(0),

@@ -34,6 +34,7 @@ pub mod rssi_location;
 pub mod scenes;
 pub mod time;
 pub mod touchlink;
+pub mod tunnels;
 pub mod window_covering;
 
 use crate::attribute::{Access, AttributeDef};

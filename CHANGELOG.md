@@ -212,6 +212,13 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Generic Tunnel 0x0600 and BACnet Protocol Tunnel 0x0601 (ZCL8 §9.2,
+  §9.3): `panweave_zcl::clusters::tunnels` with the Table 9-2
+  attributes, the Match Protocol Address / Response, Advertise Protocol
+  Address and Transfer NPDU codecs, the server builders and the
+  dispatcher answering a Match Protocol Address that equals
+  `ProtocolAddress` with the device's IEEE address (`Zcl::set_ieee`,
+  set by the runtime).
 * Partition cluster 0x0016 (ZCL8 §9.6): `panweave_zcl::clusters::partition`
   with the Table 9-29 attributes and their derived defaults
   (`Params::defaults`), the TransferPartitionedFrame / MultipleACK /

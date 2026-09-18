@@ -10,8 +10,8 @@ use panweave_aps::{Destination, TxOptions};
 use panweave_codec::{Decode, Encode, Writer};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ClusterId, CommandId, Endpoint, GroupAddress, ManufacturerCode, ProfileId, ShortAddress,
-    TransactionSequence,
+    ClusterId, CommandId, Endpoint, ExtendedAddress, GroupAddress, ManufacturerCode, ProfileId,
+    ShortAddress, TransactionSequence,
 };
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
@@ -19,6 +19,7 @@ use crate::clusters::appliance::{control as appliance_control, events_alerts, st
 use crate::clusters::configuration::{barrier_control, device_temperature};
 use crate::clusters::direct_configuration;
 use crate::clusters::groups::{self, GroupStore};
+use crate::clusters::tunnels;
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
     identify, level, on_off, poll_control, power_configuration, power_profile, rssi_location,
@@ -546,6 +547,9 @@ pub struct Zcl<const E: usize, const C: usize, const A: usize> {
     /// The Trust Center's network address on a centralized network
     /// (the authorized source of Zigbee Direct configuration).
     trust_center: Option<ShortAddress>,
+    /// This device's IEEE address (a Generic Tunnel server names it in
+    /// its Match Protocol Address Response).
+    ieee: ExtendedAddress,
 }
 
 /// A predicate naming the clusters that require APS link-key security
@@ -570,7 +574,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             dropped: 0,
             link_key_policy: None,
             trust_center: None,
+            ieee: ExtendedAddress::ZERO,
         }
+    }
+
+    /// Names this device's IEEE address (set by the runtime).
+    pub fn set_ieee(&mut self, ieee: ExtendedAddress) {
+        self.ieee = ieee;
     }
 
     /// Names the Trust Center (`None` on a distributed network): the
@@ -1252,6 +1262,34 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                             }
                             rssi_location::ID => {
                                 self.handle_rssi_location(i, &origin, cmd, payload);
+                                continue;
+                            }
+                            tunnels::GENERIC_TUNNEL
+                                if cmd == tunnels::CMD_MATCH_PROTOCOL_ADDRESS =>
+                            {
+                                // §9.2.2.3.3: answered only on a match,
+                                // silence otherwise (typically multicast).
+                                let ieee = self.ieee;
+                                let mut out = [0u8; 9 + tunnels::MAX_PROTOCOL_ADDRESS];
+                                let matched = self
+                                    .endpoints
+                                    .get(i)
+                                    .and_then(|e| e.cluster(tunnels::GENERIC_TUNNEL, Role::Server))
+                                    .and_then(|c| {
+                                        tunnels::handle_match(c, ieee, payload, &mut out).ok()
+                                    })
+                                    .flatten();
+                                match matched {
+                                    Some(n) => self.reply_cluster_specific(
+                                        &origin,
+                                        tunnels::CMD_MATCH_PROTOCOL_ADDRESS_RESPONSE,
+                                        out.get(..n).unwrap_or(&[]),
+                                    ),
+                                    None if !origin.broadcast => {
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    None => {}
+                                }
                                 continue;
                             }
                             direct_configuration::ID => {
