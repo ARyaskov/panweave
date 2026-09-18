@@ -212,6 +212,16 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Prepayment friendly credit periods (SE 1.4a D.7.2.2.1.13,
+  D.7.2.2.1.17–D.7.2.2.1.18, D.9.2.3.2.3.2 and the glossary's delivery
+  rule): `FriendlyCreditPeriod::evaluate` reads the Friendly Credit
+  calendar's day profiles around an instant (active, end, next start,
+  `RemainingFriendlyCreditTime`), `FriendlyCreditTracker` applies the
+  rule (a period entered with credit keeps the supply on, one entered
+  disconnected does not, the balance decides again at the end) and
+  raises the Friendly Credit In Use / Period End Warning alarm bits;
+  `panweave_smart_energy::civil` (UTCTime calendar arithmetic, shared
+  with the metering snapshot schedules).
 * Prepayment alarm codes and historical costs (SE 1.4a D.7.2.2.5,
   D.7.2.2.6): `prepayment::alarm_code` (the codes of Tables D-140 to
   D-142 with `mask_bit` / `enabled` mapping each to its alarm mask

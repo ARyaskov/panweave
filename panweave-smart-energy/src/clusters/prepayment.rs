@@ -456,6 +456,163 @@ pub mod historical_cost {
     }
 }
 
+/// A Friendly Credit period as the Friendly Credit calendar (a Calendar
+/// cluster instance of type 0x03 whose day profile entries carry the
+/// Friendly Credit Enable flag, D.9.2.3.2.3.2) defines it around an
+/// instant: whether one is active, when it ends and when the next one
+/// starts (`RemainingFriendlyCreditTime`, `NextFriendlyCreditPeriod`,
+/// D.7.2.2.1.17–D.7.2.2.1.18).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct FriendlyCreditPeriod {
+    /// A period is active now.
+    pub active: bool,
+    /// When the active period ends (UTC), if it does within the horizon.
+    pub ends_at: Option<u32>,
+    /// When the next period starts (UTC), if one does within the
+    /// horizon.
+    pub next_start: Option<u32>,
+}
+
+impl FriendlyCreditPeriod {
+    /// Days ahead the calendar is searched for the end of the active
+    /// period and the start of the next.
+    pub const HORIZON_DAYS: u32 = 14;
+
+    /// Evaluates `calendar` (the Friendly Credit calendar in force) at
+    /// `now`: the value of the day profile entry in force says whether
+    /// friendly credit is enabled; the next entries, over the following
+    /// days, give the end of the active period and the next start. Days
+    /// without a day profile count as disabled.
+    pub fn evaluate(calendar: &crate::clusters::calendar::Calendar, now: u32) -> Self {
+        use crate::civil::{DAY, date_of};
+        let Some((date, minute)) = date_of(now) else {
+            return Self::default();
+        };
+        let enabled_at = |date, minute: u16| -> bool {
+            calendar
+                .day_profile_on(date)
+                .and_then(|d| d.value_at(minute))
+                .is_some_and(|v| v != 0)
+        };
+        let active = enabled_at(date, minute);
+        let mut ends_at = None;
+        let mut next_start = None;
+        let day_start = now - now % DAY;
+        // Walk the entries after `now`, day by day, until both the end
+        // of the active period (a disabled entry) and the next start
+        // (an enabled entry after a disabled one) are known.
+        let mut state = active;
+        'days: for offset in 0..Self::HORIZON_DAYS {
+            let Some(base) = day_start.checked_add(offset * DAY) else {
+                break;
+            };
+            let Some((d, _)) = date_of(base) else {
+                break;
+            };
+            let profile = calendar.day_profile_on(d);
+            // A day without a profile is disabled throughout.
+            let entries: &[crate::clusters::calendar::ScheduleEntry] =
+                profile.map_or(&[], |p| p.entries.as_slice());
+            if entries.is_empty() || entries.first().is_some_and(|e| e.start_minute > 0) {
+                // Disabled from midnight until the first entry.
+                let at = base;
+                if at > now && state {
+                    state = false;
+                    ends_at.get_or_insert(at);
+                }
+            }
+            for e in entries {
+                let at = base.saturating_add(u32::from(e.start_minute) * 60);
+                if at <= now {
+                    continue;
+                }
+                let enabled = e.value != 0;
+                if enabled && !state {
+                    state = true;
+                    next_start.get_or_insert(at);
+                } else if !enabled && state {
+                    state = false;
+                    ends_at.get_or_insert(at);
+                }
+                if (ends_at.is_some() || !active) && next_start.is_some() {
+                    break 'days;
+                }
+            }
+        }
+        FriendlyCreditPeriod {
+            active,
+            ends_at,
+            next_start,
+        }
+    }
+
+    /// `RemainingFriendlyCreditTime` in minutes at `now` (0 when no
+    /// period is active or its end is not in sight).
+    pub fn remaining_minutes(&self, now: u32) -> u16 {
+        if !self.active {
+            return 0;
+        }
+        self.ends_at
+            .map(|e| u16::try_from(e.saturating_sub(now) / 60).unwrap_or(u16::MAX))
+            .unwrap_or(0)
+    }
+}
+
+/// The friendly credit delivery rule (the glossary's Friendly Credit
+/// Period notes): a consumer who enters a period with usable credit
+/// keeps the supply for its duration whatever the credit does; one whose
+/// supply was already interrupted stays disconnected; at the end the
+/// normal rules resume and an exhausted balance disconnects.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct FriendlyCreditTracker {
+    /// A period is under way.
+    pub in_period: bool,
+    /// The period was entered with usable credit: the supply stays.
+    pub covered: bool,
+}
+
+impl FriendlyCreditTracker {
+    /// Updates with whether a period is `active` now and whether the
+    /// credit is exhausted (`CreditStatus` Credit Exhausted); returns
+    /// whether the supply may stay on.
+    pub fn update(&mut self, active: bool, credit_exhausted: bool) -> bool {
+        if active && !self.in_period {
+            self.in_period = true;
+            self.covered = !credit_exhausted;
+        } else if !active && self.in_period {
+            self.in_period = false;
+            self.covered = false;
+        }
+        if self.in_period {
+            self.covered || !credit_exhausted
+        } else {
+            !credit_exhausted
+        }
+    }
+
+    /// Whether friendly credit is being used right now (the supply is on
+    /// only thanks to the period): the Friendly Credit In Use alarm.
+    pub const fn in_use(&self, credit_exhausted: bool) -> bool {
+        self.in_period && self.covered && credit_exhausted
+    }
+
+    /// The `PrepaymentAlarmStatus` bits the friendly credit state sets:
+    /// Friendly Credit In Use, and its End Warning when `remaining`
+    /// minutes are at or below `warning` (`FriendlyCreditWarning`).
+    pub const fn alarm_bits(&self, credit_exhausted: bool, remaining: u16, warning: u8) -> u16 {
+        if !self.in_use(credit_exhausted) {
+            return 0;
+        }
+        let mut bits = alarm_status::FRIENDLY_CREDIT_IN_USE;
+        if remaining <= warning as u16 {
+            bits |= alarm_status::FRIENDLY_CREDIT_PERIOD_END_WARNING;
+        }
+        bits
+    }
+}
+
 /// Snapshot cause bits (Table D-151).
 pub mod snapshot_cause {
     /// General.
@@ -1806,6 +1963,114 @@ mod tests {
         assert_eq!(hc::previous_week(6, false), None);
         assert_eq!(hc::previous_month(13, true), Some(AttributeId(0x055B)));
         assert_eq!(hc::previous_month(0, false), None);
+    }
+
+    #[test]
+    fn friendly_credit_periods_follow_the_calendar() {
+        use crate::civil::DAY;
+        use crate::clusters::calendar::{
+            Calendar, DayProfile, ScheduleEntry, SeasonEntry, calendar_type,
+        };
+        // A calendar with one week profile: every weekday enabled from
+        // 18:00 to 06:00 (day profile 1: 00:00 on, 06:00 off, 18:00
+        // on); Sundays (day profile 2) enabled all day.
+        let weekday = DayProfile {
+            day_id: 1,
+            total_entries: 3,
+            entries: Vec::from_slice(&[
+                ScheduleEntry {
+                    start_minute: 0,
+                    value: 1,
+                },
+                ScheduleEntry {
+                    start_minute: 6 * 60,
+                    value: 0,
+                },
+                ScheduleEntry {
+                    start_minute: 18 * 60,
+                    value: 1,
+                },
+            ])
+            .unwrap(),
+        };
+        let sunday = DayProfile {
+            day_id: 2,
+            total_entries: 1,
+            entries: Vec::from_slice(&[ScheduleEntry {
+                start_minute: 0,
+                value: 1,
+            }])
+            .unwrap(),
+        };
+        let calendar = Calendar {
+            provider_id: 1,
+            issuer_event_id: 1,
+            calendar_id: 9,
+            start_time: 0,
+            calendar_type: calendar_type::FRIENDLY_CREDIT,
+            time_reference: 0,
+            name: Vec::new(),
+            day_profiles: Vec::from_slice(&[weekday, sunday]).unwrap(),
+            week_profiles: Vec::from_slice(&[(1, [1, 1, 1, 1, 1, 1, 2])]).unwrap(),
+            seasons: Vec::from_slice(&[SeasonEntry {
+                start: crate::clusters::calendar::Date {
+                    year: 100,
+                    month: 1,
+                    day: 1,
+                    weekday: 6,
+                },
+                week_id: 1,
+            }])
+            .unwrap(),
+            special_days: Vec::new(),
+            special_days_event_id: 0,
+        };
+        // 2000-01-03 (Monday) 03:00: active until 06:00, next at 18:00.
+        let monday = 2 * DAY;
+        let p = FriendlyCreditPeriod::evaluate(&calendar, monday + 3 * 3600);
+        assert_eq!(
+            p,
+            FriendlyCreditPeriod {
+                active: true,
+                ends_at: Some(monday + 6 * 3600),
+                next_start: Some(monday + 18 * 3600),
+            }
+        );
+        assert_eq!(p.remaining_minutes(monday + 3 * 3600), 180);
+        // 12:00: off, next at 18:00.
+        let p = FriendlyCreditPeriod::evaluate(&calendar, monday + 12 * 3600);
+        assert_eq!((p.active, p.next_start), (false, Some(monday + 18 * 3600)));
+        assert_eq!(p.remaining_minutes(monday + 12 * 3600), 0);
+        // Saturday 20:00: on through Sunday until Monday 06:00.
+        let saturday = monday + 5 * DAY;
+        let p = FriendlyCreditPeriod::evaluate(&calendar, saturday + 20 * 3600);
+        assert!(p.active);
+        assert_eq!(p.ends_at, Some(monday + 7 * DAY + 6 * 3600));
+
+        // The delivery rule.
+        let mut t = FriendlyCreditTracker::default();
+        assert!(t.update(false, false));
+        assert!(!t.update(false, true), "no period, exhausted: off");
+        // Entering a period already disconnected: stays off.
+        assert!(!t.update(true, true));
+        assert!(!t.in_use(true));
+        assert!(t.update(true, false), "topped up meanwhile");
+        // Leaving and re-entering with credit: covered for the period.
+        assert!(t.update(false, false));
+        assert!(t.update(true, false));
+        assert!(t.update(true, true), "covered despite exhaustion");
+        assert!(t.in_use(true));
+        assert_eq!(
+            t.alarm_bits(true, 5, 10),
+            alarm_status::FRIENDLY_CREDIT_IN_USE | alarm_status::FRIENDLY_CREDIT_PERIOD_END_WARNING
+        );
+        assert_eq!(
+            t.alarm_bits(true, 30, 10),
+            alarm_status::FRIENDLY_CREDIT_IN_USE
+        );
+        assert_eq!(t.alarm_bits(false, 5, 10), 0);
+        // Period over with the balance still exhausted: off.
+        assert!(!t.update(false, true));
     }
 
     #[test]

@@ -23,6 +23,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod civil;
 pub mod clusters;
 pub mod commissioning;
 pub mod devices;
