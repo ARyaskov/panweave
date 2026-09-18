@@ -11,9 +11,10 @@ use panweave_security::cipher::BlockCipher;
 use panweave_smart_energy::clusters::metering::extended::{
     self as ext, ChangeSupply, ConfigureMirror, FastPoll, FastPollModeResponse, GetSampledData,
     GetSnapshot, LocalChangeSupply, MirrorRemoved, MirrorTable, PublishSnapshot,
-    RequestFastPollMode, RequestMirrorResponse, SampledDataResponse, Sampler, Snapshot,
-    SnapshotAssembler, Snapshots, StartSampling, StartSamplingResponse, SupplyControl,
-    SupplyOutcome, SupplyStatusResponse, TakeSnapshot, TakeSnapshotResponse,
+    RequestFastPollMode, RequestMirrorResponse, ResetLoadLimitCounter, SampledDataResponse,
+    Sampler, SetSupplyStatus, SetUncontrolledFlowThreshold, Snapshot, SnapshotAssembler, Snapshots,
+    StartSampling, StartSamplingResponse, SupplyControl, SupplyEvent, SupplyOutcome,
+    SupplyStatusResponse, TakeSnapshot, TakeSnapshotResponse,
 };
 use panweave_smart_energy::clusters::metering::{
     self, GetProfile, GetProfileResponse, IntervalPeriod, MAX_PERIODS_DELIVERED, ProfileLog,
@@ -75,6 +76,12 @@ pub enum MeteringServerEvent {
         /// Implementation time.
         at: u32,
     },
+    /// SetSupplyStatus changed the status required after meter events
+    /// (`MeteringServer::supply.policy`).
+    SupplyPolicyChanged,
+    /// SetUncontrolledFlowThreshold changed the uncontrolled-flow
+    /// detection configuration (`MeteringServer::supply.uncontrolled_flow`).
+    UncontrolledFlowConfigured,
     /// A client read a profile block.
     ProfileRequested {
         /// The client.
@@ -422,6 +429,44 @@ impl MeteringServer {
                     }
                 }
             }
+            ext::CMD_SET_SUPPLY_STATUS => {
+                let Ok(cmd) = SetSupplyStatus::parse(payload) else {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                };
+                if self.supply.set_supply_status(&cmd) {
+                    self.write_supply_attributes(stack);
+                    default_response(stack, &origin, ZclStatus::Success);
+                    Some(MeteringServerEvent::SupplyPolicyChanged)
+                } else {
+                    default_response(stack, &origin, ZclStatus::InvalidValue);
+                    None
+                }
+            }
+            ext::CMD_SET_UNCONTROLLED_FLOW_THRESHOLD => {
+                let Ok(cmd) = SetUncontrolledFlowThreshold::parse(payload) else {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                };
+                if self.supply.set_uncontrolled_flow(&cmd) {
+                    self.write_supply_attributes(stack);
+                    default_response(stack, &origin, ZclStatus::Success);
+                    Some(MeteringServerEvent::UncontrolledFlowConfigured)
+                } else {
+                    default_response(stack, &origin, ZclStatus::InvalidValue);
+                    None
+                }
+            }
+            ext::CMD_RESET_LOAD_LIMIT_COUNTER => {
+                if ResetLoadLimitCounter::parse(payload).is_err() {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                }
+                self.supply.reset_load_limit_counter();
+                self.write_supply_attributes(stack);
+                default_response(stack, &origin, ZclStatus::Success);
+                None
+            }
             ext::CMD_LOCAL_CHANGE_SUPPLY => {
                 let Ok(cmd) = LocalChangeSupply::parse(payload) else {
                     default_response(stack, &origin, ZclStatus::MalformedCommand);
@@ -449,6 +494,51 @@ impl MeteringServer {
                 None
             }
         }
+    }
+
+    /// A meter event (tamper, depletion, uncontrolled flow, load
+    /// limit): the supply takes the status SetSupplyStatus required and
+    /// the Supply Limit attributes follow.
+    pub fn supply_event<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        event: SupplyEvent,
+    ) -> Option<MeteringServerEvent> {
+        let changed = self.supply.on_event(event);
+        self.write_supply_attributes(stack);
+        changed.map(|status| MeteringServerEvent::SupplyChanged { status })
+    }
+
+    /// Mirrors the supply policy, counter and uncontrolled-flow
+    /// configuration into the Supply Limit / Supply Control attributes
+    /// the endpoint carries.
+    fn write_supply_attributes<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+    ) {
+        use metering::{supply_control as sc, supply_limit as sl};
+        let Some(c) =
+            stack
+                .zcl
+                .cluster_mut(self.endpoint, metering::ID, panweave_zcl::Role::Server)
+        else {
+            return;
+        };
+        let p = self.supply.policy;
+        c.set_u8(sl::LOAD_LIMIT_SUPPLY_STATE.id, p.load_limit);
+        c.set_u8(sl::SUPPLY_TAMPER_STATE.id, p.tamper);
+        c.set_u8(sl::SUPPLY_DEPLETION_STATE.id, p.depletion);
+        c.set_u8(sl::SUPPLY_UNCONTROLLED_FLOW_STATE.id, p.uncontrolled_flow);
+        c.set_u8(sl::LOAD_LIMIT_COUNTER.id, self.supply.load_limit_counter);
+        if let Some(f) = self.supply.uncontrolled_flow {
+            c.set_u16(sc::UNCONTROLLED_FLOW_THRESHOLD.id, f.threshold);
+            c.set_u8(sc::UNCONTROLLED_FLOW_THRESHOLD_UNIT_OF_MEASURE.id, f.unit);
+            c.set_u16(sc::UNCONTROLLED_FLOW_MULTIPLIER.id, f.multiplier);
+            c.set_u16(sc::UNCONTROLLED_FLOW_DIVISOR.id, f.divisor);
+            c.set_u8(sc::FLOW_STABILISATION_PERIOD.id, f.stabilisation_period);
+            c.set_u16(sc::FLOW_MEASUREMENT_PERIOD.id, f.measurement_period);
+        }
+        c.set_u8(sc::PROPOSED_CHANGE_SUPPLY_STATUS.id, self.supply.status);
     }
 
     /// Applies a scheduled supply change whose time came, sending the
@@ -705,6 +795,50 @@ impl<const MIRRORS: usize> MeteringClient<MIRRORS> {
         let mut buf = [0u8; 18];
         let mut w = panweave_codec::Writer::new(&mut buf);
         cmd.encode(&mut w).is_ok() && self.request(stack, meter, ext::CMD_CHANGE_SUPPLY, &buf)
+    }
+
+    /// Set Supply Status.
+    pub fn set_supply_status<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        meter: Destination,
+        cmd: &SetSupplyStatus,
+    ) -> bool {
+        let mut buf = [0u8; 8];
+        let mut w = panweave_codec::Writer::new(&mut buf);
+        cmd.encode(&mut w).is_ok() && self.request(stack, meter, ext::CMD_SET_SUPPLY_STATUS, &buf)
+    }
+
+    /// Set Uncontrolled Flow Threshold.
+    pub fn set_uncontrolled_flow_threshold<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        meter: Destination,
+        cmd: &SetUncontrolledFlowThreshold,
+    ) -> bool {
+        let mut buf = [0u8; 18];
+        let mut w = panweave_codec::Writer::new(&mut buf);
+        cmd.encode(&mut w).is_ok()
+            && self.request(stack, meter, ext::CMD_SET_UNCONTROLLED_FLOW_THRESHOLD, &buf)
+    }
+
+    /// Reset Load Limit Counter.
+    pub fn reset_load_limit_counter<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        meter: Destination,
+        provider_id: u32,
+        issuer_event_id: u32,
+    ) -> bool {
+        let mut buf = [0u8; 8];
+        let mut w = panweave_codec::Writer::new(&mut buf);
+        ResetLoadLimitCounter {
+            provider_id,
+            issuer_event_id,
+        }
+        .encode(&mut w)
+        .is_ok()
+            && self.request(stack, meter, ext::CMD_RESET_LOAD_LIMIT_COUNTER, &buf)
     }
 
     /// Local Change Supply.

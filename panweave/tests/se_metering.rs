@@ -16,9 +16,9 @@ use panweave::mac::service::MacServiceConfig;
 use panweave::runtime::{JoinMode, StackConfig, StackEvent};
 use panweave::smart_energy::cluster as c;
 use panweave::smart_energy::clusters::metering::extended::{
-    ANY_CAUSE, ChangeSupply, GetSampledData, GetSnapshot, RequestFastPollMode, StartSampling,
-    sample_type, snapshot_cause, snapshot_confirmation, snapshot_type, supply_control,
-    supply_status,
+    ANY_CAUSE, ChangeSupply, GetSampledData, GetSnapshot, RequestFastPollMode, SetSupplyStatus,
+    SetUncontrolledFlowThreshold, StartSampling, SupplyEvent, sample_type, snapshot_cause,
+    snapshot_confirmation, snapshot_type, supply_control, supply_status,
 };
 use panweave::smart_energy::clusters::metering::{GetProfile, IntervalPeriod, ProfileStatus};
 use panweave::smart_energy::devices;
@@ -392,6 +392,91 @@ fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
                 }
             )
         })
+    }));
+    // Set Supply Status makes a tamper disconnect the supply, Set
+    // Uncontrolled Flow Threshold configures flow detection, and a
+    // Reset Load Limit Counter clears the counter.
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        let d = app.driver.as_ref().unwrap();
+        assert!(d.set_supply_status(
+            stack,
+            meter,
+            &SetSupplyStatus {
+                issuer_event_id: 0x50,
+                tamper: supply_status::OFF,
+                depletion: supply_status::UNCHANGED,
+                uncontrolled_flow: supply_status::OFF_ARMED,
+                load_limit: supply_status::OFF_ARMED,
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Meter>(m)
+            .unwrap()
+            .events
+            .contains(&MeteringServerEvent::SupplyPolicyChanged)
+    }));
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        let d = app.driver.as_ref().unwrap();
+        assert!(d.set_uncontrolled_flow_threshold(
+            stack,
+            meter,
+            &SetUncontrolledFlowThreshold {
+                provider_id: 7,
+                issuer_event_id: 0x51,
+                threshold: 250,
+                unit: 0x01,
+                multiplier: 1,
+                divisor: 10,
+                stabilisation_period: 20,
+                measurement_period: 30,
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Meter>(m)
+            .unwrap()
+            .events
+            .contains(&MeteringServerEvent::UncontrolledFlowConfigured)
+    }));
+    {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        let d = app.driver.as_mut().unwrap();
+        assert_eq!(d.supply.policy.tamper, supply_status::OFF);
+        assert_eq!(d.supply.uncontrolled_flow.unwrap().threshold, 250);
+        // The demand limit is exceeded twice, then a tamper: the supply
+        // arms, then disconnects.
+        assert_eq!(
+            d.supply_event(stack, SupplyEvent::LoadLimit),
+            Some(MeteringServerEvent::SupplyChanged {
+                status: supply_status::OFF_ARMED
+            })
+        );
+        assert_eq!(d.supply_event(stack, SupplyEvent::LoadLimit), None);
+        assert_eq!(d.supply.load_limit_counter, 2);
+        assert_eq!(
+            d.supply_event(stack, SupplyEvent::Tamper),
+            Some(MeteringServerEvent::SupplyChanged {
+                status: supply_status::OFF
+            })
+        );
+    }
+    {
+        let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        let d = app.driver.as_ref().unwrap();
+        assert!(d.reset_load_limit_counter(stack, meter, 7, 0x52));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Meter>(m)
+            .unwrap()
+            .driver
+            .as_ref()
+            .unwrap()
+            .supply
+            .load_limit_counter
+            == 0
     }));
     // The meter asks the ESI for a mirror and gets the first endpoint.
     {

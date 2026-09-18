@@ -1,9 +1,12 @@
 //! Metering cluster (SE 1.4a Annex D.3): the mandatory server
 //! attributes of the Reading Information, Meter Status and Formatting
-//! sets plus the common Historical Consumption attributes, the
-//! formatting helpers, and the Get Profile / Get Profile Response
-//! commands. Mirroring, snapshots, sampling, supply control and the
-//! notification scheme are not implemented.
+//! sets plus the common Historical Consumption attributes, the TOU,
+//! Load Profile Configuration, Supply Limit, Block Information,
+//! Alarms, Meter Billing, Supply Control and Alternative Historical
+//! Consumption attribute identifiers, the formatting helpers, and the
+//! Get Profile / Get Profile Response commands. Mirroring, snapshots,
+//! sampling, supply control and the notification scheme are in
+//! [`extended`].
 
 use heapless::Vec;
 use panweave_codec::{CodecError, Reader, Writer};
@@ -100,6 +103,250 @@ pub const PREVIOUS_DAY_CONSUMPTION_DELIVERED: AttributeDef =
 /// `PreviousDayConsumptionReceived` (uint24).
 pub const PREVIOUS_DAY_CONSUMPTION_RECEIVED: AttributeDef =
     AttributeDef::new(0x0404, DataType::Uint(3), Access::RO);
+
+/// TOU Information attribute set (Table D-14, 0x01xx): the per-tier
+/// summations.
+pub mod tou {
+    use panweave_types::AttributeId;
+
+    /// Tiers of the set (1–48).
+    pub const TIERS: u8 = 48;
+
+    /// `CurrentTierNSummationDelivered` (uint48) for tier `n` (1–48).
+    pub const fn summation_delivered(tier: u8) -> AttributeId {
+        AttributeId(0x0100 + 2 * (tier.saturating_sub(1) as u16))
+    }
+
+    /// `CurrentTierNSummationReceived` (uint48) for tier `n` (1–48).
+    pub const fn summation_received(tier: u8) -> AttributeId {
+        AttributeId(0x0101 + 2 * (tier.saturating_sub(1) as u16))
+    }
+
+    /// The tier of a TOU summation identifier (`None` outside the set).
+    pub const fn tier_of(id: AttributeId) -> Option<u8> {
+        if id.0 < 0x0100 || id.0 >= 0x0100 + 2 * (TIERS as u16) {
+            return None;
+        }
+        // Bounded above by TIERS.
+        #[allow(clippy::cast_possible_truncation)]
+        Some(((id.0 - 0x0100) / 2 + 1) as u8)
+    }
+
+    /// `CPP1SummationDelivered` (uint48).
+    pub const CPP1_SUMMATION_DELIVERED: AttributeId = AttributeId(0x01FC);
+    /// `CPP2SummationDelivered` (uint48).
+    pub const CPP2_SUMMATION_DELIVERED: AttributeId = AttributeId(0x01FE);
+}
+
+/// Load Profile Configuration attribute set (Table D-30, 0x05xx).
+pub mod load_profile {
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `MaxNumberOfPeriodsDelivered` (uint8, default 24).
+    pub const MAX_NUMBER_OF_PERIODS_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0500, DataType::Uint(1), Access::RO);
+}
+
+/// Supply Limit attribute set (Table D-31, 0x06xx).
+pub mod supply_limit {
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `CurrentDemandDelivered` (uint24).
+    pub const CURRENT_DEMAND_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0600, DataType::Uint(3), Access::RO);
+    /// `DemandLimit` (uint24).
+    pub const DEMAND_LIMIT: AttributeDef = AttributeDef::new(0x0601, DataType::Uint(3), Access::RO);
+    /// `DemandIntegrationPeriod` (uint8 minutes, 1–255).
+    pub const DEMAND_INTEGRATION_PERIOD: AttributeDef =
+        AttributeDef::new(0x0602, DataType::Uint(1), Access::RO);
+    /// `NumberOfDemandSubintervals` (uint8, 1–255).
+    pub const NUMBER_OF_DEMAND_SUBINTERVALS: AttributeDef =
+        AttributeDef::new(0x0603, DataType::Uint(1), Access::RO);
+    /// `DemandLimitArmDuration` (uint16 seconds, default 60).
+    pub const DEMAND_LIMIT_ARM_DURATION: AttributeDef =
+        AttributeDef::new(0x0604, DataType::Uint(2), Access::RO);
+    /// `LoadLimitSupplyState` (enum8, Table D-68).
+    pub const LOAD_LIMIT_SUPPLY_STATE: AttributeDef =
+        AttributeDef::new(0x0605, DataType::Enum8, Access::RO);
+    /// `LoadLimitCounter` (uint8).
+    pub const LOAD_LIMIT_COUNTER: AttributeDef =
+        AttributeDef::new(0x0606, DataType::Uint(1), Access::RO);
+    /// `SupplyTamperState` (enum8, Table D-68).
+    pub const SUPPLY_TAMPER_STATE: AttributeDef =
+        AttributeDef::new(0x0607, DataType::Enum8, Access::RO);
+    /// `SupplyDepletionState` (enum8, Table D-68).
+    pub const SUPPLY_DEPLETION_STATE: AttributeDef =
+        AttributeDef::new(0x0608, DataType::Enum8, Access::RO);
+    /// `SupplyUncontrolledFlowState` (enum8, Table D-68).
+    pub const SUPPLY_UNCONTROLLED_FLOW_STATE: AttributeDef =
+        AttributeDef::new(0x0609, DataType::Enum8, Access::RO);
+}
+
+/// Block Information attribute sets (Tables D-32 / D-43, 0x07xx
+/// delivered, 0x09xx received): `CurrentTierTBlockBSummation`.
+pub mod block {
+    use panweave_types::AttributeId;
+
+    /// Tiers of the set (0 = no tier, 1–15).
+    pub const TIERS: u8 = 15;
+    /// Blocks per tier (1–16).
+    pub const BLOCKS: u8 = 16;
+
+    const fn id(base: u16, tier: u8, block: u8) -> AttributeId {
+        AttributeId(base + ((tier & 0x0f) as u16) * 0x10 + (block.saturating_sub(1) & 0x0f) as u16)
+    }
+
+    /// `CurrentTierTBlockBSummationDelivered` (uint48): `tier` 0 (no
+    /// tier) to 15, `block` 1–16.
+    pub const fn summation_delivered(tier: u8, block: u8) -> AttributeId {
+        id(0x0700, tier, block)
+    }
+
+    /// `CurrentTierTBlockBSummationReceived` (uint48).
+    pub const fn summation_received(tier: u8, block: u8) -> AttributeId {
+        id(0x0900, tier, block)
+    }
+
+    /// The (tier, block) of a block summation identifier of either
+    /// set.
+    pub const fn tier_block_of(id: AttributeId) -> Option<(u8, u8)> {
+        let set = id.0 & 0xff00;
+        if set != 0x0700 && set != 0x0900 {
+            return None;
+        }
+        // Both are four-bit fields.
+        #[allow(clippy::cast_possible_truncation)]
+        Some((((id.0 >> 4) & 0x0f) as u8, ((id.0 & 0x0f) + 1) as u8))
+    }
+}
+
+/// Alarms attribute set (Table D-33, 0x08xx): the alarm masks.
+pub mod alarm {
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `GenericAlarmMask` (map16).
+    pub const GENERIC_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0800, DataType::Bitmap(2), Access::RW);
+    /// `ElectricityAlarmMask` (map32).
+    pub const ELECTRICITY_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0801, DataType::Bitmap(4), Access::RW);
+    /// `GenericFlowPressureAlarmMask` (map16).
+    pub const GENERIC_FLOW_PRESSURE_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0802, DataType::Bitmap(2), Access::RW);
+    /// `WaterSpecificAlarmMask` (map16).
+    pub const WATER_SPECIFIC_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0803, DataType::Bitmap(2), Access::RW);
+    /// `HeatAndCoolingSpecificAlarmMask` (map16).
+    pub const HEAT_AND_COOLING_SPECIFIC_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0804, DataType::Bitmap(2), Access::RW);
+    /// `GasSpecificAlarmMask` (map16).
+    pub const GAS_SPECIFIC_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0805, DataType::Bitmap(2), Access::RW);
+    /// `ExtendedGenericAlarmMask` (map48).
+    pub const EXTENDED_GENERIC_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0806, DataType::Bitmap(6), Access::RW);
+    /// `ManufacturerAlarmMask` (map16).
+    pub const MANUFACTURER_ALARM_MASK: AttributeDef =
+        AttributeDef::new(0x0807, DataType::Bitmap(2), Access::RW);
+}
+
+/// Meter Billing attribute set (Table D-44, 0x0Axx).
+pub mod billing {
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `BillToDateDelivered` (uint32).
+    pub const BILL_TO_DATE_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0A00, DataType::Uint(4), Access::RO);
+    /// `BillToDateTimeStampDelivered` (UTC).
+    pub const BILL_TO_DATE_TIME_STAMP_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0A01, DataType::UtcTime, Access::RO);
+    /// `ProjectedBillDelivered` (uint32).
+    pub const PROJECTED_BILL_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0A02, DataType::Uint(4), Access::RO);
+    /// `ProjectedBillTimeStampDelivered` (UTC).
+    pub const PROJECTED_BILL_TIME_STAMP_DELIVERED: AttributeDef =
+        AttributeDef::new(0x0A03, DataType::UtcTime, Access::RO);
+    /// `BillDeliveredTrailingDigit` (uint8: bits 4–7 the decimals).
+    pub const BILL_DELIVERED_TRAILING_DIGIT: AttributeDef =
+        AttributeDef::new(0x0A04, DataType::Uint(1), Access::RO);
+    /// `BillToDateReceived` (uint32).
+    pub const BILL_TO_DATE_RECEIVED: AttributeDef =
+        AttributeDef::new(0x0A10, DataType::Uint(4), Access::RO);
+    /// `BillToDateTimeStampReceived` (UTC).
+    pub const BILL_TO_DATE_TIME_STAMP_RECEIVED: AttributeDef =
+        AttributeDef::new(0x0A11, DataType::UtcTime, Access::RO);
+    /// `ProjectedBillReceived` (uint32).
+    pub const PROJECTED_BILL_RECEIVED: AttributeDef =
+        AttributeDef::new(0x0A12, DataType::Uint(4), Access::RO);
+    /// `ProjectedBillTimeStampReceived` (UTC).
+    pub const PROJECTED_BILL_TIME_STAMP_RECEIVED: AttributeDef =
+        AttributeDef::new(0x0A13, DataType::UtcTime, Access::RO);
+    /// `BillReceivedTrailingDigit` (uint8).
+    pub const BILL_RECEIVED_TRAILING_DIGIT: AttributeDef =
+        AttributeDef::new(0x0A14, DataType::Uint(1), Access::RO);
+}
+
+/// Supply Control attribute set (Table D-45, 0x0Bxx).
+pub mod supply_control {
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `ProposedChangeSupplyImplementationTime` (UTC).
+    pub const PROPOSED_CHANGE_SUPPLY_IMPLEMENTATION_TIME: AttributeDef =
+        AttributeDef::new(0x0B00, DataType::UtcTime, Access::RO);
+    /// `ProposedChangeSupplyStatus` (enum8, Table D-56).
+    pub const PROPOSED_CHANGE_SUPPLY_STATUS: AttributeDef =
+        AttributeDef::new(0x0B01, DataType::Enum8, Access::RO);
+    /// `UncontrolledFlowThreshold` (uint16; 0 = unused).
+    pub const UNCONTROLLED_FLOW_THRESHOLD: AttributeDef =
+        AttributeDef::new(0x0B10, DataType::Uint(2), Access::RO);
+    /// `UncontrolledFlowThresholdUnitOfMeasure` (enum8, Table D-26).
+    pub const UNCONTROLLED_FLOW_THRESHOLD_UNIT_OF_MEASURE: AttributeDef =
+        AttributeDef::new(0x0B11, DataType::Enum8, Access::RO);
+    /// `UncontrolledFlowMultiplier` (uint16, default 1).
+    pub const UNCONTROLLED_FLOW_MULTIPLIER: AttributeDef =
+        AttributeDef::new(0x0B12, DataType::Uint(2), Access::RO);
+    /// `UncontrolledFlowDivisor` (uint16, default 1).
+    pub const UNCONTROLLED_FLOW_DIVISOR: AttributeDef =
+        AttributeDef::new(0x0B13, DataType::Uint(2), Access::RO);
+    /// `FlowStabilisationPeriod` (uint8, tenths of a second).
+    pub const FLOW_STABILISATION_PERIOD: AttributeDef =
+        AttributeDef::new(0x0B14, DataType::Uint(1), Access::RO);
+    /// `FlowMeasurementPeriod` (uint16 seconds).
+    pub const FLOW_MEASUREMENT_PERIOD: AttributeDef =
+        AttributeDef::new(0x0B15, DataType::Uint(2), Access::RO);
+}
+
+/// Alternative Historical Consumption attribute set (Table D-46,
+/// 0x0Cxx): the Historical Consumption attributes (0x04xx) measured
+/// against the alternative (e.g. non-reconciled) source.
+pub mod alternative {
+    use panweave_types::AttributeId;
+
+    /// The alternative counterpart of a Historical Consumption
+    /// attribute (`None` for an identifier outside 0x04xx).
+    pub const fn of(historical: AttributeId) -> Option<AttributeId> {
+        if historical.0 & 0xff00 != 0x0400 {
+            return None;
+        }
+        Some(AttributeId(historical.0 + 0x0800))
+    }
+
+    /// `AlternativeInstantaneousDemand` (int24).
+    pub const INSTANTANEOUS_DEMAND: AttributeId = AttributeId(0x0C00);
+    /// `CurrentDayAlternativeConsumptionDelivered` (uint24).
+    pub const CURRENT_DAY_CONSUMPTION_DELIVERED: AttributeId = AttributeId(0x0C01);
+    /// `CurrentDayAlternativeConsumptionReceived` (uint24).
+    pub const CURRENT_DAY_CONSUMPTION_RECEIVED: AttributeId = AttributeId(0x0C02);
+    /// `PreviousDayAlternativeConsumptionDelivered` (uint24).
+    pub const PREVIOUS_DAY_CONSUMPTION_DELIVERED: AttributeId = AttributeId(0x0C03);
+    /// `PreviousDayAlternativeConsumptionReceived` (uint24).
+    pub const PREVIOUS_DAY_CONSUMPTION_RECEIVED: AttributeId = AttributeId(0x0C04);
+}
 
 /// The attributes every Metering server carries (Tables D-11, D-24,
 /// D-25 mandatory rows).
@@ -640,6 +887,39 @@ impl<const N: usize> ProfileLog<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use panweave_types::AttributeId;
+
+    #[test]
+    fn attribute_set_identifiers_follow_the_tables() {
+        assert_eq!(tou::summation_delivered(1), AttributeId(0x0100));
+        assert_eq!(tou::summation_received(1), AttributeId(0x0101));
+        assert_eq!(tou::summation_delivered(15), AttributeId(0x011C));
+        assert_eq!(tou::summation_received(48), AttributeId(0x015F));
+        assert_eq!(tou::tier_of(AttributeId(0x011D)), Some(15));
+        assert_eq!(tou::tier_of(AttributeId(0x0160)), None);
+        assert_eq!(block::summation_delivered(0, 1), AttributeId(0x0700));
+        assert_eq!(block::summation_delivered(0, 16), AttributeId(0x070F));
+        assert_eq!(block::summation_delivered(1, 1), AttributeId(0x0710));
+        assert_eq!(block::summation_delivered(1, 2), AttributeId(0x0711));
+        assert_eq!(block::summation_received(15, 16), AttributeId(0x09FF));
+        assert_eq!(block::tier_block_of(AttributeId(0x0711)), Some((1, 2)));
+        assert_eq!(block::tier_block_of(AttributeId(0x0800)), None);
+        assert_eq!(
+            alternative::of(INSTANTANEOUS_DEMAND.id),
+            Some(alternative::INSTANTANEOUS_DEMAND)
+        );
+        assert_eq!(alternative::of(STATUS.id), None);
+        assert_eq!(supply_limit::LOAD_LIMIT_COUNTER.id, AttributeId(0x0606));
+        assert_eq!(
+            supply_control::FLOW_MEASUREMENT_PERIOD.id,
+            AttributeId(0x0B15)
+        );
+        assert_eq!(
+            billing::BILL_RECEIVED_TRAILING_DIGIT.id,
+            AttributeId(0x0A14)
+        );
+        assert_eq!(alarm::MANUFACTURER_ALARM_MASK.id, AttributeId(0x0807));
+    }
 
     #[test]
     fn profile_log_answers_get_profile() {

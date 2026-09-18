@@ -212,6 +212,19 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Metering attribute sets (SE 1.4a Annex D.3.2.2): `metering::{tou,
+  load_profile, supply_limit, block, alarm, billing, supply_control,
+  alternative}` give the TOU tier and block summation identifiers (as
+  functions of tier / block), the Supply Limit, Alarms, Meter Billing and
+  Supply Control attribute definitions and the alternative historical
+  counterparts. `SupplyControl` applies SetSupplyStatus (the status
+  required after tamper / depletion / uncontrolled-flow / load-limit
+  events, newer issuer event ids only), SetUncontrolledFlowThreshold and
+  ResetLoadLimitCounter, and answers meter events (`SupplyEvent`) with
+  the required status while counting load-limit events; the facade
+  `MeteringServer` handles the three commands (mirroring the policy into
+  the Supply Limit / Supply Control attributes when the endpoint carries
+  them) and exposes `supply_event`; `MeteringClient` sends them.
 * `SeCommissioning` leaves the network when Key Establishment ends with
   UNKNOWN_ISSUER (SE 1.4a §5.4.7.1) instead of retrying.
 * Smart Energy key refresh policies (SE 1.4a §5.4.4, §5.4.5):

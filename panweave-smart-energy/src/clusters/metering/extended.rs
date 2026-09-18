@@ -1374,6 +1374,67 @@ pub enum SupplyOutcome {
     NotAuthorized,
 }
 
+/// The supply status required after meter events (SetSupplyStatus,
+/// D.3.3.3.1.14; the Supply Limit state attributes). Each is a Table
+/// D-68 value or [`supply_status::UNCHANGED`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct SupplyPolicy {
+    /// After a tamper event (`SupplyTamperState`).
+    pub tamper: u8,
+    /// After battery depletion (`SupplyDepletionState`).
+    pub depletion: u8,
+    /// After an uncontrolled flow (`SupplyUncontrolledFlowState`).
+    pub uncontrolled_flow: u8,
+    /// In the load-limit state (`LoadLimitSupplyState`).
+    pub load_limit: u8,
+}
+
+impl Default for SupplyPolicy {
+    fn default() -> Self {
+        SupplyPolicy {
+            tamper: supply_status::UNCHANGED,
+            depletion: supply_status::UNCHANGED,
+            uncontrolled_flow: supply_status::UNCHANGED,
+            load_limit: supply_status::UNCHANGED,
+        }
+    }
+}
+
+/// The uncontrolled-flow detection configuration
+/// (SetUncontrolledFlowThreshold, D.3.3.3.1.15; the Supply Control
+/// attributes 0x0B10–0x0B15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct UncontrolledFlow {
+    /// Threshold (0: the feature is unused).
+    pub threshold: u16,
+    /// Unit of measure (Table D-26, binary form).
+    pub unit: u8,
+    /// Multiplier (never 0).
+    pub multiplier: u16,
+    /// Divisor (never 0).
+    pub divisor: u16,
+    /// Stabilisation period, tenths of a second.
+    pub stabilisation_period: u8,
+    /// Measurement period, seconds.
+    pub measurement_period: u16,
+}
+
+/// A meter event the supply policy answers (D.3.2.2.7.6–D.3.2.2.7.10).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SupplyEvent {
+    /// A tamper was detected.
+    Tamper,
+    /// The battery is depleted.
+    Depletion,
+    /// An uncontrolled flow was detected.
+    UncontrolledFlow,
+    /// The demand limit was exceeded (the load-limit state).
+    LoadLimit,
+}
+
 /// Supply (contactor / valve) control of a metering server.
 #[derive(Clone, Copy, Debug)]
 pub struct SupplyControl {
@@ -1383,6 +1444,14 @@ pub struct SupplyControl {
     pub capable: bool,
     /// Whether a remote or local RESTORE (ON) is allowed.
     pub restore_allowed: bool,
+    /// The status required after meter events.
+    pub policy: SupplyPolicy,
+    /// Issuer event id of the last SetSupplyStatus applied.
+    pub policy_event_id: Option<u32>,
+    /// Times the demand limit was exceeded (`LoadLimitCounter`).
+    pub load_limit_counter: u8,
+    /// Uncontrolled-flow detection, when configured.
+    pub uncontrolled_flow: Option<UncontrolledFlow>,
     pending: Option<ChangeSupply>,
 }
 
@@ -1393,8 +1462,87 @@ impl SupplyControl {
             status,
             capable,
             restore_allowed,
+            policy: SupplyPolicy {
+                tamper: supply_status::UNCHANGED,
+                depletion: supply_status::UNCHANGED,
+                uncontrolled_flow: supply_status::UNCHANGED,
+                load_limit: supply_status::UNCHANGED,
+            },
+            policy_event_id: None,
+            load_limit_counter: 0,
+            uncontrolled_flow: None,
             pending: None,
         }
+    }
+
+    /// Applies a SetSupplyStatus (D.3.3.3.1.14): a command older than
+    /// the last applied one (by issuer event id) or with a value
+    /// outside Table D-68 is refused.
+    pub fn set_supply_status(&mut self, cmd: &SetSupplyStatus) -> bool {
+        let valid = |v: u8| v <= supply_status::UNCHANGED;
+        if !(valid(cmd.tamper)
+            && valid(cmd.depletion)
+            && valid(cmd.uncontrolled_flow)
+            && valid(cmd.load_limit))
+        {
+            return false;
+        }
+        if self
+            .policy_event_id
+            .is_some_and(|last| cmd.issuer_event_id <= last)
+        {
+            return false;
+        }
+        self.policy = SupplyPolicy {
+            tamper: cmd.tamper,
+            depletion: cmd.depletion,
+            uncontrolled_flow: cmd.uncontrolled_flow,
+            load_limit: cmd.load_limit,
+        };
+        self.policy_event_id = Some(cmd.issuer_event_id);
+        true
+    }
+
+    /// Applies a SetUncontrolledFlowThreshold (D.3.3.3.1.15): a zero
+    /// multiplier or divisor is refused.
+    pub fn set_uncontrolled_flow(&mut self, cmd: &SetUncontrolledFlowThreshold) -> bool {
+        if cmd.multiplier == 0 || cmd.divisor == 0 {
+            return false;
+        }
+        self.uncontrolled_flow = Some(UncontrolledFlow {
+            threshold: cmd.threshold,
+            unit: cmd.unit,
+            multiplier: cmd.multiplier,
+            divisor: cmd.divisor,
+            stabilisation_period: cmd.stabilisation_period,
+            measurement_period: cmd.measurement_period,
+        });
+        true
+    }
+
+    /// ResetLoadLimitCounter (D.3.3.3.1.11).
+    pub fn reset_load_limit_counter(&mut self) {
+        self.load_limit_counter = 0;
+    }
+
+    /// A meter event: the supply takes the status the policy requires
+    /// (nothing for UNCHANGED, or without a contactor); a load-limit
+    /// event also counts. Returns the new status when it changed.
+    pub fn on_event(&mut self, event: SupplyEvent) -> Option<u8> {
+        let required = match event {
+            SupplyEvent::Tamper => self.policy.tamper,
+            SupplyEvent::Depletion => self.policy.depletion,
+            SupplyEvent::UncontrolledFlow => self.policy.uncontrolled_flow,
+            SupplyEvent::LoadLimit => {
+                self.load_limit_counter = self.load_limit_counter.saturating_add(1);
+                self.policy.load_limit
+            }
+        };
+        if required == supply_status::UNCHANGED || !self.capable || required == self.status {
+            return None;
+        }
+        self.status = required;
+        Some(required)
     }
 
     /// `ProposedChangeSupplyImplementationTime` (0 when none).
@@ -2088,6 +2236,63 @@ mod tests {
                 .confirmation,
             snapshot_confirmation::CAUSE_NOT_SUPPORTED
         );
+    }
+
+    #[test]
+    fn supply_policy_answers_meter_events() {
+        let mut s = SupplyControl::new(supply_status::ON, true, true);
+        // Nothing configured: events change nothing but the counter.
+        assert_eq!(s.on_event(SupplyEvent::LoadLimit), None);
+        assert_eq!(s.load_limit_counter, 1);
+        let cmd = SetSupplyStatus {
+            issuer_event_id: 5,
+            tamper: supply_status::OFF,
+            depletion: supply_status::UNCHANGED,
+            uncontrolled_flow: supply_status::OFF_ARMED,
+            load_limit: supply_status::OFF_ARMED,
+        };
+        assert!(s.set_supply_status(&cmd));
+        assert!(!s.set_supply_status(&cmd), "not newer");
+        assert!(!s.set_supply_status(&SetSupplyStatus {
+            issuer_event_id: 6,
+            tamper: 0x04,
+            ..cmd
+        }));
+        assert_eq!(s.on_event(SupplyEvent::Depletion), None);
+        assert_eq!(
+            s.on_event(SupplyEvent::LoadLimit),
+            Some(supply_status::OFF_ARMED)
+        );
+        assert_eq!(s.load_limit_counter, 2);
+        assert_eq!(s.on_event(SupplyEvent::Tamper), Some(supply_status::OFF));
+        assert_eq!(s.on_event(SupplyEvent::Tamper), None);
+        s.reset_load_limit_counter();
+        assert_eq!(s.load_limit_counter, 0);
+        assert!(!s.set_uncontrolled_flow(&SetUncontrolledFlowThreshold {
+            provider_id: 1,
+            issuer_event_id: 1,
+            threshold: 100,
+            unit: 0x01,
+            multiplier: 1,
+            divisor: 0,
+            stabilisation_period: 10,
+            measurement_period: 60,
+        }));
+        assert!(s.set_uncontrolled_flow(&SetUncontrolledFlowThreshold {
+            provider_id: 1,
+            issuer_event_id: 1,
+            threshold: 100,
+            unit: 0x01,
+            multiplier: 1,
+            divisor: 10,
+            stabilisation_period: 10,
+            measurement_period: 60,
+        }));
+        assert_eq!(s.uncontrolled_flow.unwrap().divisor, 10);
+        // Without a contactor the policy cannot act.
+        let mut s = SupplyControl::new(supply_status::ON, false, false);
+        assert!(s.set_supply_status(&cmd));
+        assert_eq!(s.on_event(SupplyEvent::Tamper), None);
     }
 
     #[test]
