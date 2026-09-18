@@ -1,0 +1,32 @@
+[package]
+name = "panweave-size-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Bare-metal Cortex-M4F binary that links a full Panweave router to measure the stack's ROM and RAM footprint"
+
+[dependencies]
+panweave = { path = "../../panweave", default-features = false, features = ["crypto-software"] }
+panweave-runtime = { path = "../../panweave-runtime", default-features = false }
+panweave-testkit = { path = "../../panweave-testkit", default-features = false }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "1"
+
+[features]
+default = []
+direct = ["panweave/direct"]
+smart-energy = ["panweave/smart-energy"]
+dlk = ["panweave/dlk"]
+green-power = ["panweave-runtime/green-power"]
+small-tables = ["panweave/small-tables"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

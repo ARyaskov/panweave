@@ -1047,8 +1047,33 @@ Keep a Changelog; versions follow SemVer.
   `Node` (stack + commissioning machine) with the BDB initialization
   procedure, ready-made endpoints, the `two_nodes` example and an
   end-to-end facade test.
+* `docs/footprint.md`: the ROM / RAM budget of a router on a Cortex-M4F
+  with a size probe (`examples/size-probe`, a bare-metal binary linking
+  the facade `Node`), `scripts/elf_size.py` to read it (totals and the
+  `PANWEAVE_SIZES` component table without binutils) and a `footprint`
+  CI job printing both profiles; the `small-tables` feature of
+  `panweave-runtime` / `panweave` (8 clusters × 24 attributes per
+  endpoint instead of 12 × 36, tested in CI) with the dimensions named
+  by `ENDPOINTS`, `ENDPOINT_CLUSTERS`, `CLUSTER_ATTRIBUTES` and the
+  aliases `StackEndpoint`, `StackCluster`.
 
 ### Changed
+
+* ZCL attribute storage keeps a value of up to eight octets and its
+  factory default inline in the entry and draws strings, composites and
+  keys from a 384-octet pool per cluster (`ATTRIBUTE_POOL`, five wide
+  attributes); an `Attribute` is 80 bytes instead of 216, a default
+  router `Node` 141 KiB of RAM on a Cortex-M4F instead of 226 KiB.
+  `AttributeTable` hands out `AttrRef` / `AttrMut` views (`get`,
+  `get_mut`, `at`, `at_mut`, `iter`) in place of `&Attribute` /
+  `&mut Attribute`; `add_reported` replaces `Attribute::new` +
+  `with_default_reporting` + `add_attribute(Attribute)`, and the
+  reporting state is `AttrRef::reporting: Option<&ReportState>`. The
+  `Debug` output of a table lists its attributes (secrets redacted)
+  rather than the raw pool.
+* `panweave_smart_energy::endpoints` builders are generic over the
+  attribute capacity (`server::<A>`, `metering_server::<A>`, …) so they
+  follow the stack's profile.
 
 * Client cluster instances built from a server definition answer
   Discover Commands Received / Generated for their own side
