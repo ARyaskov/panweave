@@ -9,8 +9,8 @@
 //! declared.
 
 use heapless::Vec;
-use panweave_device_library::DeviceType;
-use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
+use panweave_device_library::{DeviceType, Side};
+use panweave_types::{AttributeId, ClusterId, CommandId, DeviceId, Endpoint, ProfileId};
 use panweave_zcl::clusters::configuration::{
     ballast, barrier_control, dehumidification, device_temperature, pump, shade,
     switch_configuration, thermostat_ui,
@@ -27,6 +27,7 @@ use panweave_zcl::clusters::{
 };
 use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
 use panweave_zcl::layer::EndpointInstance;
+use panweave_zcl::requirements::requirements;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
 use panweave_zdo::descriptor::SimpleDescriptor;
 
@@ -472,6 +473,128 @@ pub fn temperature_sensor(endpoint: Endpoint) -> Option<Built> {
     device(endpoint, DeviceId(0x0302), &[], &[], false)
 }
 
+/// Why an endpoint composition does not meet its device type's or its
+/// clusters' requirements (DTL §2.3, ZCL "M/O" columns).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Deficiency {
+    /// The descriptor's device identifier is not in the Device Type
+    /// Library; only the clusters' requirements were checked.
+    UnknownDeviceType(DeviceId),
+    /// A mandatory cluster of the device type is not in the descriptor.
+    MissingCluster {
+        /// Cluster.
+        cluster: ClusterId,
+        /// Side.
+        side: Side,
+    },
+    /// The descriptor declares a cluster the endpoint has no instance of
+    /// (it would answer `UNSUPPORTED_CLUSTER`).
+    NoInstance {
+        /// Cluster.
+        cluster: ClusterId,
+        /// Side.
+        side: Side,
+    },
+    /// A server instance lacks a mandatory attribute.
+    MissingAttribute {
+        /// Cluster.
+        cluster: ClusterId,
+        /// Attribute.
+        attribute: AttributeId,
+    },
+    /// An instance does not receive a mandatory cluster-specific command.
+    MissingCommand {
+        /// Cluster.
+        cluster: ClusterId,
+        /// Side.
+        side: Side,
+        /// Command.
+        command: CommandId,
+    },
+}
+
+/// Deficiencies reported by [`validate`].
+pub type Deficiencies = Vec<Deficiency, 32>;
+
+/// Validates an endpoint composition: the descriptor's cluster lists
+/// against the device type's mandatory clusters, and every declared
+/// cluster against its instance's mandatory attributes and received
+/// commands ([`panweave_zcl::requirements`]). The Basic server is exempt
+/// from the instance check (the stack adds it). Clusters without known
+/// requirements only need an instance. At most 32 deficiencies are kept.
+pub fn validate(desc: &SimpleDescriptor, ep: &EndpointInstance<12, 36>) -> Deficiencies {
+    let mut out = Deficiencies::new();
+    match DeviceType::lookup(desc.device) {
+        Some(dt) => {
+            let mut missing = [(ClusterId(0), Side::Server); 32];
+            let n = dt.missing(&desc.input_clusters, &desc.output_clusters, &mut missing);
+            for (cluster, side) in missing.iter().take(n) {
+                let _ = out.push(Deficiency::MissingCluster {
+                    cluster: *cluster,
+                    side: *side,
+                });
+            }
+        }
+        None => {
+            let _ = out.push(Deficiency::UnknownDeviceType(desc.device));
+        }
+    }
+    for cluster in &desc.input_clusters {
+        let Some(inst) = ep.cluster(*cluster, Role::Server) else {
+            if *cluster != ClusterId(0x0000) {
+                let _ = out.push(Deficiency::NoInstance {
+                    cluster: *cluster,
+                    side: Side::Server,
+                });
+            }
+            continue;
+        };
+        let Some(req) = requirements(*cluster) else {
+            continue;
+        };
+        for attribute in req.server_attributes {
+            if inst.attributes.get(*attribute, None).is_none() {
+                let _ = out.push(Deficiency::MissingAttribute {
+                    cluster: *cluster,
+                    attribute: *attribute,
+                });
+            }
+        }
+        check_commands(&mut out, *cluster, Side::Server, inst, req.server_commands);
+    }
+    for cluster in &desc.output_clusters {
+        let Some(inst) = ep.cluster(*cluster, Role::Client) else {
+            let _ = out.push(Deficiency::NoInstance {
+                cluster: *cluster,
+                side: Side::Client,
+            });
+            continue;
+        };
+        if let Some(req) = requirements(*cluster) {
+            check_commands(&mut out, *cluster, Side::Client, inst, req.client_commands);
+        }
+    }
+    out
+}
+
+fn check_commands(
+    out: &mut Deficiencies,
+    cluster: ClusterId,
+    side: Side,
+    inst: &ClusterInstance<36>,
+    required: &[CommandId],
+) {
+    for command in required {
+        if !inst.def.received.contains(command) {
+            let _ = out.push(Deficiency::MissingCommand {
+                cluster,
+                side,
+                command: *command,
+            });
+        }
+    }
+}
+
 /// Definition of a cluster instance for custom endpoints.
 pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<36> {
     ClusterInstance::new(def, role)
@@ -533,5 +656,74 @@ mod tests {
         assert!(d.has_output(poll_control::ID));
         assert!(ep.cluster(keep_alive::ID, Role::Server).is_some());
         assert!(device(Endpoint(1), DeviceId(0xEEEE), &[], &[], false).is_none());
+    }
+
+    #[test]
+    fn every_buildable_device_type_validates() {
+        for dt in &panweave_device_library::DEVICES {
+            if !unsupported_clusters(dt).is_empty() {
+                continue;
+            }
+            let (d, ep) = device(Endpoint(1), dt.id, &[], &[], false).unwrap();
+            let found = validate(&d, &ep);
+            assert!(found.is_empty(), "{} ({:?}): {:?}", dt.name, dt.id, found);
+        }
+    }
+
+    #[test]
+    fn validation_reports_deficiencies() {
+        // A light whose descriptor forgot Groups and whose On/Off server
+        // lost its OnOff attribute and Toggle command.
+        let (mut d, mut ep) = on_off_light(Endpoint(1)).unwrap();
+        d.input_clusters.retain(|c| *c != groups::ID);
+        ep.clusters.retain(|c| c.def.id != on_off::ID);
+        let def = ClusterDef {
+            received: &[CommandId(0x00), CommandId(0x01)],
+            ..on_off::DEF
+        };
+        ep.add_instance(ClusterInstance::new(def, Role::Server))
+            .unwrap();
+        let found = validate(&d, &ep);
+        assert!(found.contains(&Deficiency::MissingCluster {
+            cluster: groups::ID,
+            side: Side::Server
+        }));
+        assert!(found.contains(&Deficiency::MissingAttribute {
+            cluster: on_off::ID,
+            attribute: on_off::ON_OFF.id
+        }));
+        assert!(found.contains(&Deficiency::MissingCommand {
+            cluster: on_off::ID,
+            side: Side::Server,
+            command: CommandId(0x02)
+        }));
+        assert_eq!(found.len(), 3);
+        // A declared cluster without an instance, and a client lacking a
+        // mandatory response.
+        let (mut d, mut ep) = on_off_light_switch(Endpoint(2)).unwrap();
+        d.input_clusters.push(level::ID).unwrap();
+        let inst = ep.cluster_mut(identify::ID, Role::Client).unwrap();
+        inst.def = ClusterDef {
+            received: &[],
+            ..inst.def
+        };
+        let found = validate(&d, &ep);
+        assert!(found.contains(&Deficiency::NoInstance {
+            cluster: level::ID,
+            side: Side::Server
+        }));
+        assert!(found.contains(&Deficiency::MissingCommand {
+            cluster: identify::ID,
+            side: Side::Client,
+            command: CommandId(0x00)
+        }));
+        assert_eq!(found.len(), 2);
+        // An unknown device type: clusters are still checked.
+        let (mut d, ep) = on_off_light(Endpoint(3)).unwrap();
+        d.device = DeviceId(0xEEEE);
+        assert_eq!(
+            validate(&d, &ep).as_slice(),
+            &[Deficiency::UnknownDeviceType(DeviceId(0xEEEE))]
+        );
     }
 }

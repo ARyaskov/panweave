@@ -60,6 +60,7 @@ conventions every crate follows.
 | `panweave-bdb` | BDB 3.1 commissioning state machines. | yes |
 | `panweave-storage` | Storage traits, transactional record model, frame-counter reservation strategy, in-memory and file backends. | yes (backends may need `std`) |
 | `panweave-runtime` | Glue: drives MAC→NWK→APS→ZDO/ZCL, endpoints, timers, event queues, application API for the three roles, sleepy end-device polling. | yes |
+| `panweave::endpoints` (facade) | Device Type Library builders (`device`, `on_off_light`, …) and `validate`, which checks a descriptor / endpoint pair against the device type's mandatory clusters and the clusters' mandatory attributes and commands (`panweave_zcl::requirements`). | yes |
 | `panweave-green-power` | GPDF codec, GP security, proxy/sink tables, GP cluster. Optional. | yes |
 | `panweave-direct` | Zigbee Direct security sessions, commissioning/tunnel services over an abstract BLE transport. Optional. | yes |
 | `panweave-smart-energy` | SE clusters, CBKE, SE commissioning/security policy. Optional. | yes |

@@ -212,6 +212,13 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Endpoint validation (DTL §2.3, ZCL "M/O" columns):
+  `panweave_zcl::requirements` lists the unconditionally mandatory
+  server attributes and received commands of every implemented cluster;
+  `panweave::endpoints::validate` checks a simple descriptor and its
+  endpoint instance against the device type's mandatory clusters and
+  those requirements, reporting `Deficiency::{UnknownDeviceType,
+  MissingCluster, NoInstance, MissingAttribute, MissingCommand}`.
 * GPD Application Description and Compact Attribute Reporting (GP
   1.1.2 §A.4.2.1.6, §A.4.2.3.6): `description::{ApplicationDescription,
   ReportDescriptor, DataPoint, AttributeRecord, Descriptions,

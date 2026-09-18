@@ -9,13 +9,13 @@ Panweave is an independent implementation; this table records the maintainers' o
 | Document | Total | Implemented | Partial | Not implemented | N/A | HW validation | Clarification |
 |---|---|---|---|---|---|---|---|
 | BDB3.1 | 27 | 26 | 0 | 0 | 1 | 0 | 0 |
-| DTL2 | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
+| DTL2 | 3 | 1 | 2 | 0 | 0 | 0 | 0 |
 | ZD1.1 | 11 | 5 | 5 | 1 | 0 | 0 | 0 |
 | GP1.1.2 | 9 | 6 | 3 | 0 | 0 | 0 | 0 |
 | SE1.4a | 18 | 11 | 6 | 0 | 0 | 1 | 0 |
 | ZCL8 | 46 | 42 | 1 | 3 | 0 | 0 | 0 |
 | R23.2 | 133 | 128 | 2 | 1 | 2 | 0 | 0 |
-| **All** | 247 | 218 | 20 | 5 | 3 | 1 | 0 |
+| **All** | 247 | 219 | 19 | 5 | 3 | 1 | 0 |
 
 ## BDB3.1 — PRO Base Device Behavior Specification v3.1
 
@@ -55,7 +55,7 @@ Panweave is an independent implementation; this table records the maintainers' o
 |---|---|---|---|---|---|---|---|
 | PW-DTL-GEN-001 | §1.9–§1.13 | mandatory | partially-implemented | `panweave-device-library` | Device definition conventions: attribute lists, permitted transmission modes, device class, groups/scenes clarifications, cluster usage restrictions, transmission handling | `classification_and_finding_binding_roles` | Device classes (Simple / Dynamic / Node) and the cluster classification used for finding & binding are modelled; attribute lists, permitted transmission modes and the groups / scenes clarifications are documentation only. |
 | PW-DTL-DEV-001 | §4–§40 | mandatory | partially-implemented | `panweave-device-library` | Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others) | `light_and_switch_endpoints` | All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. The facade instantiates every general, measurement, lighting, HVAC, closure and IAS cluster a device type lists (endpoint builders for the lights, switches, sensors, thermostat, window covering, door lock, ballast, on/off sensor, IAS devices and the Trust Center utility endpoint); device types needing the appliance, power profile, metering or partition clusters (Home Gateway, Smart Plug, White Goods, Meter Interface) still report them through unsupported_clusters. |
-| PW-DTL-VAL-001 | §1.4, per-device cluster requirements | mandatory | partially-implemented | `panweave-device-library` | Validation of endpoint composition against device type requirements (required clusters, attributes, commands) | `missing_clusters_are_reported` | DeviceType::missing / conforms validate the mandatory cluster lists of a simple descriptor; required attributes and commands are not checked. |
+| PW-DTL-VAL-001 | §1.4, per-device cluster requirements | mandatory | implemented | `panweave::endpoints` | Validation of endpoint composition against device type requirements (required clusters, attributes, commands) | `missing_clusters_are_reported`, `every_buildable_device_type_validates`, `validation_reports_deficiencies` | DeviceType::missing / conforms validate the mandatory cluster lists of a simple descriptor; panweave::endpoints::validate additionally checks that every declared cluster has an instance and that server instances carry the unconditionally mandatory attributes and both sides receive the mandatory cluster-specific commands of panweave_zcl::requirements (ZCL rev 8 M/O columns, conditional M* items excluded). Every buildable device type of the library passes. |
 
 ## ZD1.1 — Zigbee Direct Specification, Revision 1.1
 
