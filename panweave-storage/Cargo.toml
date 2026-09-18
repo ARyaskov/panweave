@@ -15,10 +15,13 @@ std = ["alloc", "panweave-types/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "heapless/serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt"]
+# A log-structured store on any `embedded-storage` NOR flash.
+nor-flash = ["dep:embedded-storage"]
 
 [dependencies]
 panweave-types = { workspace = true }
 heapless = { workspace = true }
+embedded-storage = { version = "0.3.1", optional = true }
 serde = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 

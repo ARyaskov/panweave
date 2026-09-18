@@ -26,6 +26,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace
       - run: cargo test --doc --workspace
+      - run: cargo test -p panweave-storage --features nor-flash,std
       - run: cargo run --quiet -p xtask -- conformance --check
       - run: cargo run --quiet -p xtask -- codegen --check
       - name: no_std builds
@@ -33,6 +34,7 @@ jobs:
           for crate in panweave-types panweave-codec panweave-mac panweave-security panweave-nwk panweave-aps panweave-zdo panweave-zcl panweave-storage panweave-runtime panweave-bdb panweave-device-library panweave-green-power panweave-direct panweave-smart-energy panweave; do
             cargo build -p "$crate" --no-default-features --target thumbv7em-none-eabihf
           done
+          cargo build -p panweave-storage --no-default-features --features nor-flash --target thumbv7em-none-eabihf
 
   feature-matrix:
     name: feature matrix
@@ -93,6 +95,28 @@ jobs:
         run: |
           cargo build --release --features small-tables,green-power,dlk,direct,smart-energy
           python3 ../../scripts/elf_size.py target/thumbv7em-none-eabihf/release/panweave-size-probe --components
+
+  esp32c6:
+    name: ESP32-C6 firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          targets: riscv32imac-unknown-none-elf
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/esp32c6-super-mini
+      - name: build the four firmware images
+        working-directory: examples/esp32c6-super-mini
+        run: |
+          cargo build --release --bins
+          cargo clippy --release --bins -- -D warnings
+          for b in on_off_light coordinator switch temperature_sensor; do
+            python3 ../../scripts/elf_size.py target/riscv32imac-unknown-none-elf/release/$b
+          done
 
   fuzz-build:
     name: fuzz targets build

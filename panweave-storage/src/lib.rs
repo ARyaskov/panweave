@@ -26,6 +26,9 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+#[cfg(feature = "nor-flash")]
+pub mod nor_flash;
+
 use heapless::Vec;
 
 /// Record kinds.
@@ -68,6 +71,52 @@ pub enum Kind {
     /// The Admin key a ZVD provisioned into a ZDD (ZD 1.1 §6.3.2.1);
     /// kept until a factory reset.
     DirectAdminKey,
+}
+
+impl Kind {
+    /// The on-medium code of a kind (stable across releases: a stored
+    /// record must decode after an upgrade).
+    pub const fn code(self) -> u8 {
+        match self {
+            Kind::NwkFrameCounter => 1,
+            Kind::NetworkKeys => 2,
+            Kind::Nib => 3,
+            Kind::Children => 4,
+            Kind::LinkKey => 5,
+            Kind::ApsFrameCounter => 6,
+            Kind::Aib => 7,
+            Kind::Bindings => 8,
+            Kind::Groups => 9,
+            Kind::Application => 10,
+            Kind::GreenPower => 11,
+            Kind::DirectPastKeys => 12,
+            Kind::StartupSets => 13,
+            Kind::DirectConfig => 14,
+            Kind::DirectAdminKey => 15,
+        }
+    }
+
+    /// The kind with a given [`Kind::code`].
+    pub const fn from_code(code: u8) -> Option<Kind> {
+        Some(match code {
+            1 => Kind::NwkFrameCounter,
+            2 => Kind::NetworkKeys,
+            3 => Kind::Nib,
+            4 => Kind::Children,
+            5 => Kind::LinkKey,
+            6 => Kind::ApsFrameCounter,
+            7 => Kind::Aib,
+            8 => Kind::Bindings,
+            9 => Kind::Groups,
+            10 => Kind::Application,
+            11 => Kind::GreenPower,
+            12 => Kind::DirectPastKeys,
+            13 => Kind::StartupSets,
+            14 => Kind::DirectConfig,
+            15 => Kind::DirectAdminKey,
+            _ => return None,
+        })
+    }
 }
 
 /// A record key.
