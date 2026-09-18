@@ -2408,6 +2408,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZclEvent::PowerProfileScheduled { endpoint, id } => {
                     StackEvent::PowerProfileScheduled { endpoint, id }
                 }
+                ZclEvent::LocationRecalculate { endpoint } => {
+                    StackEvent::LocationRecalculate { endpoint }
+                }
+                ZclEvent::AnchorNode { endpoint, announce } => {
+                    StackEvent::AnchorNode { endpoint, announce }
+                }
                 ZclEvent::FastPoll { fast, interval, .. } => {
                     // Poll Control server: switch the MAC poll rate.
                     self.fast_poll_mode = fast.then_some(interval);

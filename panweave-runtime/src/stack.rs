@@ -632,6 +632,20 @@ pub enum StackEvent {
         /// Power Profile ID.
         id: u8,
     },
+    /// A Get Location Data asked the RSSI Location server on `endpoint`
+    /// for a fresh calculation (ZCL8 §3.13.2.3.4).
+    LocationRecalculate {
+        /// Endpoint.
+        endpoint: Endpoint,
+    },
+    /// An anchor node announced its position to the RSSI Location
+    /// server on `endpoint` (ZCL8 §3.13.2.3.7).
+    AnchorNode {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The announcement.
+        announce: panweave_zcl::clusters::rssi_location::AnchorNodeAnnounce,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

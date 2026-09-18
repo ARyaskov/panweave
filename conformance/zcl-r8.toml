@@ -253,10 +253,10 @@ id = "PW-ZCL-GEN-014"
 section = "§3.13"
 summary = "RSSI Location cluster"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters"
-tests = []
-notes = "Not implemented; metadata entry only (TODO(PW-ZCL-RSSI-LOCATION))."
+status = "implemented"
+module = "panweave-zcl::clusters::rssi_location"
+tests = ["codecs_round_trip", "server_answers_and_schedules", "location_requests_are_answered_and_repeated", "pings_rssi_reports_and_anchors"]
+notes = "Location Information (LocationType bit fields, LocationMethod, LocationAge, QualityMeasure, NumberOfDevices) and Location Settings (Coordinate1-3, Power, PathLossExponent, ReportingPeriod, CalculationPeriod, NumberRSSIMeasurements) attributes; codecs for the seven received and eight generated commands including the conditional fields of the location data (Coordinate 3 for 3-D, the calculation fields for measured locations, the compact form). Server behaviour in the dispatcher: Set Absolute Location and Set Device Configuration update the attributes (the latter refused with FAILURE for an absolute location, §3.13.2.3.2 names no status); Get Device Configuration and Get Location Data are answered for the device's own IEEE address (the instance state) and NOT_FOUND for others, a broadcast asking for absolute locations from a measured device is not answered, Number Responses > 1 sends the follow-ups as Location Data / Compact Location Data Notifications every ReportingPeriod (1 s when 0), unicast to the requester or broadcast; Send Pings blasts NumberRSSIMeasurements RSSI Pings CalculationPeriod apart; RSSI Responses are collected per neighbour and reported to the bound central device as Report RSSI Measurements after CalculationPeriod; ReportingPeriod > 0 sends periodic Location Data Notifications to the bound clients; Anchor Node Announce and a recalculate request reach the application. Not done: the recommended broadcast radius 1 for pings and notifications (the ZCL layer has no per-frame radius; TODO(PW-ZCL-RSSI-RADIUS)) and locations of third devices (Get Location Data for another address answers NOT_FOUND). The client side is codecs only (the application performs the localization algorithm)."
 [[requirement]]
 id = "PW-ZCL-GEN-015"
 section = "§3.14"

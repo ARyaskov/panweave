@@ -10,7 +10,9 @@
 
 use heapless::Vec;
 use panweave_device_library::{DeviceType, Side};
-use panweave_types::{AttributeId, ClusterId, CommandId, DeviceId, Endpoint, ProfileId};
+use panweave_types::{
+    AttributeId, ClusterId, CommandId, DeviceId, Endpoint, ExtendedAddress, ProfileId,
+};
 use panweave_zcl::clusters::appliance::{
     control as appliance_control, events_alerts, identification as appliance_identification,
     statistics as appliance_statistics,
@@ -31,7 +33,7 @@ use panweave_zcl::clusters::{
 };
 use panweave_zcl::clusters::{
     groups, identify, keep_alive, level, meter_identification, on_off, poll_control, power_profile,
-    scenes,
+    rssi_location, scenes,
 };
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::requirements::requirements;
@@ -87,6 +89,7 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     appliance_statistics::ID,
     meter_identification::ID,
     power_profile::ID,
+    rssi_location::ID,
     #[cfg(feature = "smart-energy")]
     panweave_smart_energy::cluster::METERING,
 ];
@@ -137,6 +140,7 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     power_profile::ID,
     #[cfg(feature = "smart-energy")]
     panweave_smart_energy::cluster::METERING,
+    rssi_location::ID,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -255,6 +259,11 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
         pressure::ID => pressure::server(-32767, 32767).ok(),
         flow::ID => flow::server(0, 0xfffe).ok(),
         power_profile::ID => power_profile::server(1, true, true).ok(),
+        // The device's IEEE address is set by the application through
+        // the instance state before use (`rssi_location::State::ieee`).
+        rssi_location::ID => {
+            rssi_location::server(ExtendedAddress(0), rssi_location::method::CENTRALIZED).ok()
+        }
         #[cfg(feature = "smart-energy")]
         panweave_smart_energy::cluster::METERING => {
             panweave_smart_energy::endpoints::server(id).and_then(Result::ok)
@@ -330,6 +339,7 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         pressure::ID => Some(pressure::client()),
         flow::ID => Some(flow::client()),
         power_profile::ID => Some(power_profile::client()),
+        rssi_location::ID => Some(rssi_location::client()),
         #[cfg(feature = "smart-energy")]
         panweave_smart_energy::cluster::METERING => {
             panweave_smart_energy::endpoints::client(id).and_then(Result::ok)

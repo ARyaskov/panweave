@@ -129,6 +129,17 @@ pub const ALL: &[ClusterRequirements] = &[
         client_commands: cmds![],
     },
     ClusterRequirements {
+        id: ClusterId(0x000b),
+        section: "ZCL §3.13",
+        // LocationType, LocationMethod, Coordinate1, Coordinate2, Power,
+        // PathLossExponent, NumberRSSIMeasurements; Set Absolute
+        // Location .. Get Location Data; Device Configuration Response
+        // .. RSSI Ping.
+        server_attributes: attrs![0x0000, 0x0001, 0x0010, 0x0011, 0x0013, 0x0014, 0x0017],
+        server_commands: cmds![0x00, 0x01, 0x02, 0x03],
+        client_commands: cmds![0x00, 0x01, 0x02, 0x03, 0x04],
+    },
+    ClusterRequirements {
         id: ClusterId(0x0015),
         section: "ZCL §13.2",
         // Startup Parameters and Join Parameters mandatory attributes;

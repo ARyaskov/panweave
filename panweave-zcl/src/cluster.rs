@@ -120,6 +120,9 @@ pub enum ClusterState {
     ApplianceLogs(crate::clusters::appliance::statistics::LogQueue),
     /// Power Profile server state: the profiles (§3.17).
     PowerProfile(crate::clusters::power_profile::Profiles),
+    /// RSSI Location server state: repeated responses, ping blasts
+    /// and collected RSSI responses (§3.13).
+    RssiLocation(crate::clusters::rssi_location::State),
 }
 
 /// A cluster instance.
@@ -283,6 +286,21 @@ impl<const A: usize> ClusterInstance<A> {
             ClusterState::ApplianceLogs(_) => ClusterState::ApplianceLogs(
                 crate::clusters::appliance::statistics::LogQueue::default(),
             ),
+            ClusterState::RssiLocation(s) => {
+                // The identity is kept; pending work is dropped.
+                ClusterState::RssiLocation(crate::clusters::rssi_location::State {
+                    pending_responses: 0,
+                    requester: None,
+                    pending_pings: 0,
+                    collected: heapless::Vec::new(),
+                    report_at: None,
+                    next_response: None,
+                    next_ping: None,
+                    next_report: None,
+                    calculated_at: None,
+                    ..s
+                })
+            }
             ClusterState::PowerProfile(p) => {
                 // The profile slots are kept; forecasts, schedules and
                 // constraints are wiped.

@@ -212,6 +212,22 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* RSSI Location cluster (ZCL8 §3.13): `clusters::rssi_location` with
+  the Location Information and Location Settings attributes, codecs
+  for every command (absolute location, device configuration and its
+  response, Get Location Data, location data response / notification /
+  compact notification, RSSI response, Send Pings, anchor announce,
+  RSSI ping / request, Report RSSI Measurements, Request Own Location)
+  and a server the dispatcher runs: Set Absolute Location / Set Device
+  Configuration applied (the latter refused for an absolute location),
+  Get Device Configuration and Get Location Data answered for the
+  device's own address (NOT_FOUND otherwise, silent when only absolute
+  locations are wanted), repeated responses as (compact) notifications
+  every ReportingPeriod, ping blasts on Send Pings, RSSI Responses
+  collected and reported after CalculationPeriod, the periodic
+  notification, `ZclEvent::{LocationRecalculate, AnchorNode}` (also
+  `StackEvent`) and `Zcl::{rssi_location_measured,
+  rssi_location_absolute, rssi_request, rssi_request_own_location}`.
 * Power Profile cluster (ZCL8 §3.17): `clusters::power_profile` with
   the five attributes, codecs for every command (energy phases, profile
   records, prices, schedules, constraints, the extended price request)

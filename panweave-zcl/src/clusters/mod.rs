@@ -28,6 +28,7 @@ pub mod ota;
 pub mod poll_control;
 pub mod power_configuration;
 pub mod power_profile;
+pub mod rssi_location;
 pub mod scenes;
 pub mod time;
 pub mod touchlink;

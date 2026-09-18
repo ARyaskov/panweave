@@ -20,8 +20,8 @@ use crate::clusters::configuration::{barrier_control, device_temperature};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
-    identify, level, on_off, poll_control, power_configuration, power_profile, scenes, time,
-    window_covering,
+    identify, level, on_off, poll_control, power_configuration, power_profile, rssi_location,
+    scenes, time, window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -415,6 +415,21 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// Power Profile ID.
         id: u8,
+    },
+    /// A Get Location Data asked the RSSI Location server on `endpoint`
+    /// for a fresh calculation (§3.13.2.3.4); the application records
+    /// the result with [`Zcl::rssi_location_measured`].
+    LocationRecalculate {
+        /// Endpoint.
+        endpoint: Endpoint,
+    },
+    /// An anchor node announced its position to the RSSI Location
+    /// server on `endpoint` (§3.13.2.3.7).
+    AnchorNode {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The announcement.
+        announce: rssi_location::AnchorNodeAnnounce,
     },
 }
 
@@ -1206,6 +1221,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_power_profile(i, &origin, cmd, payload);
                                 continue;
                             }
+                            rssi_location::ID => {
+                                self.handle_rssi_location(i, &origin, cmd, payload);
+                                continue;
+                            }
                             events_alerts::ID => {
                                 let Some(c) = self
                                     .endpoints
@@ -1822,6 +1841,243 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 let _ = self.default_response(origin, status);
             }
         }
+    }
+
+    /// RSSI Location server commands (§3.13.2.3).
+    fn handle_rssi_location(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let now = self.now;
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(rssi_location::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        let src = (origin.src, origin.src_endpoint);
+        let mut out = [0u8; 24];
+        match rssi_location::handle(c, cmd, payload, src, now) {
+            rssi_location::Outcome::Updated | rssi_location::Outcome::Collected => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            rssi_location::Outcome::Configuration(cfg) => {
+                if let Ok(n) = rssi_location::encode_configuration_response(cfg.as_ref(), &mut out)
+                {
+                    self.reply_cluster_specific(
+                        origin,
+                        rssi_location::CMD_DEVICE_CONFIGURATION_RESPONSE,
+                        &out[..n],
+                    );
+                }
+            }
+            rssi_location::Outcome::Location {
+                location,
+                recalculate,
+            } => {
+                if recalculate {
+                    self.push_event(ZclEvent::LocationRecalculate { endpoint });
+                }
+                if let Ok(n) = rssi_location::encode_location_response(location.as_ref(), &mut out)
+                {
+                    self.reply_cluster_specific(
+                        origin,
+                        rssi_location::CMD_LOCATION_DATA_RESPONSE,
+                        &out[..n],
+                    );
+                }
+            }
+            rssi_location::Outcome::Silent => {}
+            rssi_location::Outcome::Anchor(announce) => {
+                self.push_event(ZclEvent::AnchorNode { endpoint, announce });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            rssi_location::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// RSSI Location timer work: repeated location responses, ping
+    /// blasts, RSSI reports and the periodic notification (§3.13).
+    fn service_rssi_location(&mut self, ep_index: usize, now: Instant) {
+        loop {
+            let Some(ep) = self.endpoints.get_mut(ep_index) else {
+                return;
+            };
+            let (endpoint, profile) = (ep.endpoint, ep.profile);
+            let Some(c) = ep.cluster_mut(rssi_location::ID, Role::Server) else {
+                return;
+            };
+            let Some(due) = rssi_location::tick(c, now) else {
+                return;
+            };
+            let location = rssi_location::location(c, now);
+            let mut out = [0u8; 80];
+            let (command, destination, n) = match due {
+                rssi_location::Due::Response {
+                    compact,
+                    broadcast,
+                    requester,
+                } => {
+                    let Ok(n) = location.encode(compact, &mut out) else {
+                        continue;
+                    };
+                    let command = if compact {
+                        rssi_location::CMD_COMPACT_LOCATION_DATA_NOTIFICATION
+                    } else {
+                        rssi_location::CMD_LOCATION_DATA_NOTIFICATION
+                    };
+                    let destination = match requester {
+                        Some((address, ep)) if !broadcast => Destination::Short {
+                            address,
+                            endpoint: ep,
+                        },
+                        _ => Destination::Short {
+                            address: ShortAddress::BROADCAST_RX_ON,
+                            endpoint: Endpoint::BROADCAST,
+                        },
+                    };
+                    (command, destination, n)
+                }
+                rssi_location::Due::Ping => {
+                    out[0] = location.location_type.to_raw();
+                    (
+                        rssi_location::CMD_RSSI_PING,
+                        Destination::Short {
+                            address: ShortAddress::BROADCAST_RX_ON,
+                            endpoint: Endpoint::BROADCAST,
+                        },
+                        1,
+                    )
+                }
+                rssi_location::Due::Report(report) => {
+                    let Ok(n) = report.encode(&mut out) else {
+                        continue;
+                    };
+                    (
+                        rssi_location::CMD_REPORT_RSSI_MEASUREMENTS,
+                        Destination::Bound,
+                        n,
+                    )
+                }
+                rssi_location::Due::Periodic => {
+                    let Ok(n) = location.encode(false, &mut out) else {
+                        continue;
+                    };
+                    (
+                        rssi_location::CMD_LOCATION_DATA_NOTIFICATION,
+                        Destination::Bound,
+                        n,
+                    )
+                }
+            };
+            let seq = self.next_seq();
+            let header = Header::cluster_specific(seq, command, Direction::ToClient)
+                .disable_default_response(true);
+            let unicast =
+                matches!(destination, Destination::Short { address, .. } if address.is_unicast());
+            if let Ok(frame) = Self::build(&header, &out[..n]) {
+                self.push_action(ZclAction::Send {
+                    destination,
+                    profile,
+                    cluster: rssi_location::ID,
+                    src_endpoint: endpoint,
+                    frame,
+                    options: TxOptions {
+                        ack: unicast,
+                        ..TxOptions::ACKED
+                    },
+                });
+            }
+        }
+    }
+
+    /// Records a calculated location on the RSSI Location server of
+    /// `endpoint` (§3.13.2.2): coordinates 1 and 2, coordinate 3 for a
+    /// three-dimensional location, the confidence and the number of
+    /// devices used; `LocationAge` restarts.
+    pub fn rssi_location_measured(
+        &mut self,
+        endpoint: Endpoint,
+        coordinates: (i16, i16, Option<i16>),
+        quality: u8,
+        devices: u8,
+    ) -> Result<(), ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, rssi_location::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        rssi_location::set_measured(c, coordinates, quality, devices, now);
+        Ok(())
+    }
+
+    /// Sets the known absolute location of the RSSI Location server on
+    /// `endpoint` (as a Set Absolute Location would).
+    pub fn rssi_location_absolute(
+        &mut self,
+        endpoint: Endpoint,
+        location: &rssi_location::AbsoluteLocation,
+    ) -> Result<(), ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, rssi_location::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        rssi_location::set_absolute(c, location, now);
+        Ok(())
+    }
+
+    /// Asks the one-hop neighbours for the RSSI they hear from this
+    /// device (RSSI Request broadcast, §3.13.2.4.6); their RSSI
+    /// Responses are collected and reported after `CalculationPeriod`.
+    pub fn rssi_request(&mut self, endpoint: Endpoint) -> Result<(), ZclError> {
+        let profile = self.endpoint(endpoint).ok_or(ZclError::NotFound)?.profile;
+        self.cluster(endpoint, rssi_location::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let seq = self.next_seq();
+        let header =
+            Header::cluster_specific(seq, rssi_location::CMD_RSSI_REQUEST, Direction::ToClient)
+                .disable_default_response(true);
+        let frame = Self::build(&header, &[])?;
+        self.push_action(ZclAction::Send {
+            destination: Destination::Short {
+                address: ShortAddress::BROADCAST_RX_ON,
+                endpoint: Endpoint::BROADCAST,
+            },
+            profile,
+            cluster: rssi_location::ID,
+            src_endpoint: endpoint,
+            frame,
+            options: TxOptions {
+                ack: false,
+                ..TxOptions::ACKED
+            },
+        });
+        Ok(())
+    }
+
+    /// Asks the central device (bound) for this device's location
+    /// (Request Own Location, §3.13.2.4.8); it answers with Set
+    /// Absolute Location.
+    pub fn rssi_request_own_location(&mut self, endpoint: Endpoint) -> Result<(), ZclError> {
+        let ieee = self
+            .cluster(endpoint, rssi_location::ID, Role::Server)
+            .and_then(rssi_location::state)
+            .map(|s| s.ieee)
+            .ok_or(ZclError::NotFound)?;
+        let mut out = [0u8; 8];
+        let n = rssi_location::encode_address(ieee, &mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            rssi_location::ID,
+            rssi_location::CMD_REQUEST_OWN_LOCATION,
+            &out[..n],
+        )
     }
 
     /// The Power Profile server's profiles on `endpoint`, mutably.
@@ -3168,6 +3424,13 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         }
     }
 
+    /// Runs the RSSI Location timers of every endpoint.
+    fn service_rssi_location_timers(&mut self, now: Instant) {
+        for i in 0..self.endpoints.len() {
+            self.service_rssi_location(i, now);
+        }
+    }
+
     /// Starts (or stops, with 0) identification on an endpoint's Identify
     /// server; used by finding & binding targets (BDB 3.1 §11.1).
     pub fn set_identify_time(&mut self, endpoint: Endpoint, seconds: u16) -> Result<(), ZclError> {
@@ -3185,6 +3448,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     pub fn poll_timers(&mut self, now: Instant) {
         self.now = now;
         self.service_cluster_timers(now);
+        self.service_rssi_location_timers(now);
         let n_eps = self.endpoints.len();
         for i in 0..n_eps {
             let n_clusters = self.endpoints.get(i).map_or(0, |e| e.clusters.len());
