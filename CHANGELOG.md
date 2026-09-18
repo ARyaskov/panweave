@@ -212,6 +212,16 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* The ZVD's tunnel client (ZD 1.1 §8): `panweave_direct::zvd::TunnelClient`,
+  a sans-I/O machine over the host's BLE scan / connect / session /
+  tunnel primitives that discovers a ZDD of the ZVD's network by its
+  advertisement (§8.3.1), reconnects to known ZDDs, retries discovery at
+  least once and moves to another ZDD when a session fails (§8.3.3),
+  and sends the Network Commissioning Request the situation calls for
+  (initial join, secure rejoin, or a Trust Center rejoin after a key
+  rotation, adopting the address of an address-conflict response);
+  `zvd::random_eui64` (locally administered, §8.5) and
+  `zvd::random_short_address` (R23.2 §3.6.1.8).
 * Zigbee Direct legacy-network support (ZD 1.1 §10, ADR-0017 decision
   8): `panweave_direct::legacy` (APS frame shape, the well-known-key
   probe, the ephemeral authorization session with its §10.1 filter,

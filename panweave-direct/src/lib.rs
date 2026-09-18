@@ -31,3 +31,4 @@ pub mod secure;
 pub mod session;
 pub mod tlv;
 pub mod tunnel;
+pub mod zvd;
