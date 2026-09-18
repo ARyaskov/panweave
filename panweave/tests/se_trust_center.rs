@@ -27,7 +27,14 @@ use panweave::smart_energy_endpoints as se;
 use panweave::storage::MemoryStorage;
 use panweave::testkit::TestRng;
 use panweave::types::time::{Duration, Instant};
-use panweave::types::{Endpoint, ExtendedAddress, InstallCode, Key128, LogicalDeviceType};
+use panweave::types::{
+    Endpoint, ExtendedAddress, InstallCode, Key128, LogicalDeviceType, ShortAddress,
+};
+use panweave::zcl::clusters::basic;
+use panweave::zcl::frame::{Direction, Header};
+use panweave::zcl::global::command;
+use panweave_aps::{Destination, TxOptions};
+use panweave_codec::Writer;
 use panweave_security::cipher::SoftwareAes;
 use panweave_sim::{App, OnOffApp, SimStack, Simulator};
 
@@ -126,6 +133,11 @@ impl App for Esi {
             self.events.push(e);
         }
         if let Some(e) = self.tc.on_event(stack, event) {
+            // A retired key in use: the Trust Center initiates Key
+            // Establishment (§5.4.5).
+            if let SeTrustCenterEvent::Renegotiate { ieee, short } = e {
+                let _ = self.cbke.start(stack, short, ieee);
+            }
             self.events.push(e);
         }
     }
@@ -299,6 +311,130 @@ fn the_trust_center_provisions_opens_authenticates_and_prunes() {
         Some(backup[0].hashed_key.clone()),
         sim.stack(e).aps.security.swap_out_key(IHD_IEEE)
     );
+    // §5.4.5: with a two-minute lifetime the display's key is retired;
+    // its next secured frame is dropped unacknowledged and the Trust
+    // Center negotiates a fresh key with it.
+    sim.stack_and_app::<Esi>(e).unwrap().1.tc.link_key_lifetime = Some(Duration::from_mins(2));
+    assert!(sim.run_until(Duration::from_mins(3), |x| {
+        x.app::<Esi>(e)
+            .unwrap()
+            .events
+            .contains(&SeTrustCenterEvent::KeyRetired(IHD_IEEE))
+    }));
+    assert!(sim.stack(e).aps.is_key_stale(IHD_IEEE));
+    assert_eq!(
+        sim.app::<Esi>(e)
+            .unwrap()
+            .tc
+            .registry
+            .get(IHD_IEEE)
+            .unwrap()
+            .key,
+        KeyState::Stale
+    );
+    let authenticated_before = sim
+        .app::<Esi>(e)
+        .unwrap()
+        .events
+        .iter()
+        .filter(|ev| **ev == SeTrustCenterEvent::Authenticated(IHD_IEEE))
+        .count();
+    {
+        // The display reads the ESI's Basic cluster under its link key.
+        let stack = sim.stack(i);
+        let seq = stack.zcl.next_seq();
+        let header = Header::global(seq, command::READ_ATTRIBUTES, Direction::ToServer);
+        let mut payload = [0u8; 2];
+        let mut w = Writer::new(&mut payload);
+        panweave::zcl::global::write_attribute_ids(&mut w, &[basic::ZCL_VERSION.id]).unwrap();
+        stack
+            .zcl
+            .send(
+                Destination::Short {
+                    address: ShortAddress::COORDINATOR,
+                    endpoint: EP,
+                },
+                panweave::smart_energy::PROFILE_ID,
+                basic::ID,
+                EP,
+                &header,
+                &payload,
+                TxOptions {
+                    security: true,
+                    ..TxOptions::ACKED
+                },
+            )
+            .unwrap();
+        stack.flush();
+    }
+    assert!(
+        sim.run_until(Duration::from_secs(90), |x| {
+            let ev = &x.app::<Esi>(e).unwrap().events;
+            ev.iter()
+                .filter(|ev| **ev == SeTrustCenterEvent::Authenticated(IHD_IEEE))
+                .count()
+                > authenticated_before
+        }),
+        "{:?}",
+        sim.app::<Esi>(e).unwrap().events
+    );
+    assert!(
+        sim.app::<Esi>(e).unwrap().events.iter().any(
+            |ev| matches!(ev, SeTrustCenterEvent::Renegotiate { ieee, .. } if *ieee == IHD_IEEE)
+        )
+    );
+    assert!(sim.stack(e).aps.stats.stale_key_dropped >= 1);
+    assert!(!sim.stack(e).aps.is_key_stale(IHD_IEEE));
+    assert_eq!(
+        sim.app::<Esi>(e)
+            .unwrap()
+            .tc
+            .registry
+            .get(IHD_IEEE)
+            .unwrap()
+            .key,
+        KeyState::Cbke
+    );
+    sim.stack_and_app::<Esi>(e).unwrap().1.tc.link_key_lifetime = None;
+    // §5.4.4: the periodic network key update broadcasts a new key and
+    // switches to it after nwkNetworkBroadcastDeliveryTime; the display
+    // follows.
+    let old_seq = sim
+        .stack_ref(e)
+        .nwk
+        .security
+        .keys
+        .active()
+        .unwrap()
+        .sequence;
+    sim.stack_and_app::<Esi>(e).unwrap().1.tc.network_key_period = Some(Duration::from_mins(1));
+    assert!(sim.run_until(Duration::from_mins(2), |x| {
+        x.app::<Esi>(e)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(ev, SeTrustCenterEvent::NetworkKeyUpdated(_)))
+    }));
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.stack_ref(i).nwk.security.keys.active().unwrap().sequence != old_seq
+    }));
+    assert_eq!(
+        sim.stack_ref(i)
+            .nwk
+            .security
+            .keys
+            .active()
+            .unwrap()
+            .sequence,
+        sim.stack_ref(e)
+            .nwk
+            .security
+            .keys
+            .active()
+            .unwrap()
+            .sequence
+    );
+    sim.stack_and_app::<Esi>(e).unwrap().1.tc.network_key_period = None;
     // The load control device joins but never establishes a key: after
     // the grace period the Trust Center removes it.
     let mut lcfg = StackConfig::new(LogicalDeviceType::Router, LCD_IEEE);

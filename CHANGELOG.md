@@ -212,6 +212,16 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Smart Energy key refresh policies (SE 1.4a §5.4.4, §5.4.5):
+  `Aps::{mark_key_stale, clear_key_stale, is_key_stale}` retire a link
+  key from data traffic (secured data frames dropped without an
+  acknowledgement and reported as `ApsEvent::StaleKeyUsed` /
+  `StackEvent::StaleLinkKeyUsed`, APS commands still processed);
+  `Stack::random_key` and `Stack::short_of`; `SeTrustCenter` gains
+  `link_key_lifetime` (keys retired on expiry, `KeyRetired`, a stale key
+  in use answered with `Renegotiate` for the application's
+  `CbkeDriver::start`) and `network_key_period` (a random network key
+  broadcast and switched periodically, `NetworkKeyUpdated`).
 * `panweave::endpoints::validate_for` accepts a sleepy device without
   the Groups and Scenes servers (DTL §1.11.1).
 * RSSI Location cluster (ZCL8 §3.13): `clusters::rssi_location` with

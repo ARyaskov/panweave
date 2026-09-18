@@ -646,6 +646,14 @@ pub enum StackEvent {
         /// The announcement.
         announce: panweave_zcl::clusters::rssi_location::AnchorNodeAnnounce,
     },
+    /// A data frame secured with `ieee`'s retired link key was
+    /// discarded without an acknowledgement
+    /// (`Stack::aps.mark_key_stale`, SE 1.4a §5.4.5): negotiate a new
+    /// key with the device.
+    StaleLinkKeyUsed {
+        /// The device.
+        ieee: ExtendedAddress,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

@@ -4,8 +4,10 @@
 //! §5.4.1.2 broadcast rule (never 255, at most 254 s, repeated every
 //! 240 s and on every device announce), the registry follows the joins,
 //! Key Establishment results and leaves, devices that never establish a
-//! key are removed after the §5.5.5.5 grace period, and the Table 5-10
-//! backup is available at any time.
+//! key are removed after the §5.5.5.5 grace period, the §5.4.4 / §5.4.5
+//! refresh policies run on request (a periodic network key update, link
+//! keys retired after a lifetime and renegotiated when a stale key is
+//! used), and the Table 5-10 backup is available at any time.
 
 use heapless::Vec;
 use panweave_runtime::{Stack, StackEvent};
@@ -13,11 +15,13 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_smart_energy::commissioning::TRUST_CENTER_REMOVAL_AFTER;
 use panweave_smart_energy::security::{
-    BackupRecord, PermitJoinSchedule, Registered, Registration, Registry, RegistryError,
+    BackupRecord, KeyState, PermitJoinSchedule, Registered, Registration, Registry, RegistryError,
 };
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
-use panweave_types::{CryptoRng, ExtendedAddress, InstallCode, Key128};
+use panweave_types::{
+    CryptoRng, ExtendedAddress, InstallCode, Key128, KeySequenceNumber, ShortAddress,
+};
 
 use crate::cbke::CbkeOutcome;
 
@@ -35,12 +39,38 @@ pub enum SeTrustCenterEvent {
     Removed(ExtendedAddress),
     /// Permit joining was (re)broadcast for `seconds`.
     PermitJoin(u8),
+    /// A device's link key reached its lifetime and was marked stale
+    /// (§5.4.5): its secured data is discarded until it establishes a
+    /// new key.
+    KeyRetired(ExtendedAddress),
+    /// A device sent data under its retired link key (the frame was
+    /// dropped without an acknowledgement): initiate Key Establishment
+    /// with it (§5.4.5), for example `CbkeDriver::start(stack, short,
+    /// ieee)`.
+    Renegotiate {
+        /// The device.
+        ieee: ExtendedAddress,
+        /// Its network address.
+        short: ShortAddress,
+    },
+    /// The periodic network key update started with this sequence
+    /// number (§5.4.4); the switch follows after
+    /// nwkNetworkBroadcastDeliveryTime.
+    NetworkKeyUpdated(KeySequenceNumber),
 }
 
 /// The driver, tracking up to `N` devices.
 pub struct SeTrustCenter<const N: usize = 16> {
     /// The device registry.
     pub registry: Registry<N>,
+    /// Link keys older than this are retired (§5.4.5); `None` keeps
+    /// them indefinitely.
+    pub link_key_lifetime: Option<Duration>,
+    /// The network key is updated this often (§5.4.4); `None` leaves it
+    /// to the application.
+    pub network_key_period: Option<Duration>,
+    network_key_at: Option<Instant>,
+    network_key_retry_at: Option<Instant>,
     /// Grace period after a join without Key Establishment before the
     /// device is removed (§5.5.5.5 item 6).
     pub removal_after: Duration,
@@ -58,6 +88,10 @@ impl<const N: usize> SeTrustCenter<N> {
     pub const fn new() -> Self {
         SeTrustCenter {
             registry: Registry::new(),
+            link_key_lifetime: None,
+            network_key_period: None,
+            network_key_at: None,
+            network_key_retry_at: None,
             removal_after: TRUST_CENTER_REMOVAL_AFTER,
             permit: None,
         }
@@ -116,7 +150,7 @@ impl<const N: usize> SeTrustCenter<N> {
     /// its hash for the backup.
     pub fn on_key_establishment<C: BlockCipher, R: CryptoRng, S: Storage>(
         &mut self,
-        stack: &Stack<C, R, S>,
+        stack: &mut Stack<C, R, S>,
         outcome: &CbkeOutcome,
         suites: u16,
     ) -> Option<SeTrustCenterEvent> {
@@ -126,6 +160,7 @@ impl<const N: usize> SeTrustCenter<N> {
         let key = stack.aps.security.entry(*partner)?.key.clone();
         self.registry
             .on_key_established::<C>(*partner, &key, suites, stack.now());
+        stack.aps.clear_key_stale(*partner);
         Some(SeTrustCenterEvent::Authenticated(*partner))
     }
 
@@ -133,10 +168,11 @@ impl<const N: usize> SeTrustCenter<N> {
     /// dropped until it establishes a new one.
     pub fn retire_key<C: BlockCipher, R: CryptoRng, S: Storage>(
         &mut self,
-        stack: &Stack<C, R, S>,
+        stack: &mut Stack<C, R, S>,
         ieee: ExtendedAddress,
     ) {
         self.registry.mark_stale(ieee, stack.now());
+        stack.aps.mark_key_stale(ieee);
     }
 
     /// De-registers a device (§5.4.2.2.2): it is told to leave and its
@@ -172,6 +208,16 @@ impl<const N: usize> SeTrustCenter<N> {
     ) -> Option<SeTrustCenterEvent> {
         let now = stack.now();
         match event {
+            StackEvent::StaleLinkKeyUsed { ieee } => {
+                // The APS layer dropped a data frame under a retired
+                // key: negotiate a new one (§5.4.5).
+                let stale = self
+                    .registry
+                    .get(*ieee)
+                    .is_some_and(|d| d.key == KeyState::Stale);
+                let short = stack.short_of(*ieee)?;
+                stale.then_some(SeTrustCenterEvent::Renegotiate { ieee: *ieee, short })
+            }
             StackEvent::DeviceAuthorized { ieee, .. } => {
                 self.registry.get(*ieee)?;
                 self.registry.on_joined(*ieee, now);
@@ -204,6 +250,37 @@ impl<const N: usize> SeTrustCenter<N> {
                 return Self::broadcast(stack, Some(s));
             }
         }
+        let expired = self
+            .link_key_lifetime
+            .and_then(|lifetime| self.registry.expired_keys(now, lifetime).next());
+        if let Some(ieee) = expired {
+            self.registry.mark_stale(ieee, now);
+            stack.aps.mark_key_stale(ieee);
+            return Some(SeTrustCenterEvent::KeyRetired(ieee));
+        }
+        if let Some(period) = self.network_key_period {
+            let since = *self.network_key_at.get_or_insert(now);
+            let due = self
+                .network_key_retry_at
+                .is_some_and(|t| now.has_reached(t))
+                || now.saturating_duration_since(since).as_millis() >= period.as_millis();
+            if due {
+                let key = stack.random_key();
+                match stack.update_network_key(key) {
+                    Ok(sequence) => {
+                        self.network_key_at = Some(now);
+                        self.network_key_retry_at = None;
+                        stack.flush();
+                        return Some(SeTrustCenterEvent::NetworkKeyUpdated(sequence));
+                    }
+                    // Not operating or an update in progress: try again
+                    // in a minute.
+                    Err(_) => {
+                        self.network_key_retry_at = Some(now + Duration::from_mins(1));
+                    }
+                }
+            }
+        }
         let overdue: Vec<ExtendedAddress, 4> = self
             .registry
             .overdue(now, self.removal_after)
@@ -233,6 +310,16 @@ impl<const N: usize> SeTrustCenter<N> {
             .filter(|d| d.status == Registration::Joined)
             .filter_map(|d| d.joined_at)
             .map(|j| j + self.removal_after)
+            .min_by_key(|t| t.as_millis());
+        let expiry = self
+            .link_key_lifetime
+            .and_then(|l| self.registry.next_key_expiry(l));
+        let key_update = self
+            .network_key_period
+            .map(|p| self.network_key_at.unwrap_or(now) + p);
+        let overdue = [overdue, expiry, key_update, self.network_key_retry_at]
+            .into_iter()
+            .flatten()
             .min_by_key(|t| t.as_millis());
         match (permit, overdue) {
             (Some(a), Some(b)) => Some(if a.as_millis() < b.as_millis() { a } else { b }),

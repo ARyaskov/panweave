@@ -26,10 +26,10 @@ id = "PW-SE-SEC-002"
 section = "§5.4.4, §5.4.5"
 summary = "Network key and link key update policies; key retirement"
 level = "mandatory"
-status = "partially-implemented"
-module = "panweave-smart-energy::security"
-tests = ["registry_applies_key_usage_policies"]
-notes = "Network key update with the nwkNetworkBroadcastDeliveryTime wait before the switch is the R23 runtime's (§5.4.4). The link key retirement rule of §5.4.5 is in Registry: a stale key drops data frames without an APS ACK and triggers renegotiation, commands still pass, and the stale mark clears on a new CBKE key; SeTrustCenter::retire_key applies it. Periodic link-key refresh scheduling is left to the application (TODO(PW-SE-TC-RUNTIME))."
+status = "implemented"
+module = "panweave-smart-energy::security,panweave::smart_energy_drivers::trust_center,panweave-aps"
+tests = ["registry_applies_key_usage_policies", "the_trust_center_provisions_opens_authenticates_and_prunes"]
+notes = "Network key update (§5.4.4): the R23 runtime's Stack::update_network_key broadcasts the new key and switches after nwkNetworkBroadcastDeliveryTime; SeTrustCenter::network_key_period runs it periodically with a random key (NetworkKeyUpdated, retried a minute later while another update is in progress). Link key retirement (§5.4.5): SeTrustCenter::link_key_lifetime marks a device's CBKE key stale when it reaches the lifetime (KeyRetired; retire_key does it on demand); the APS layer (Aps::mark_key_stale) then drops data frames secured with that key without an acknowledgement and keeps processing APS commands under it, the stack reports StaleLinkKeyUsed and the driver asks the application to initiate Key Establishment (Renegotiate; the simulator test has the ESI run CbkeDriver::start), a success clearing the stale mark. Retired keys stay installed so a sleepy device can still fetch the network key with them. The lifetime and period are the application's policy (the specification leaves them to the Trust Center)."
 [[requirement]]
 id = "PW-SE-SEC-003"
 section = "§5.4.6"

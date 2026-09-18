@@ -110,6 +110,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         AddrView(&self.nwk).ieee_of(short)
     }
 
+    /// The network address known for `ieee` (neighbour table or
+    /// address map).
+    pub fn short_of(&self, ieee: ExtendedAddress) -> Option<ShortAddress> {
+        AddrView(&self.nwk).short_of(ieee)
+    }
+
     /// Runs the keep-alive timers.
     pub(crate) fn poll_keep_alive(&mut self, now: Instant) {
         if self.keep_alive.stage == Stage::Off || self.phase != Phase::Operating {

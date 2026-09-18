@@ -334,6 +334,16 @@ impl<
             self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
             return None;
         }
+        // A stale link key secures no data (SE 1.4a §5.4.5): dropped,
+        // unacknowledged, and reported so a new key gets negotiated.
+        if sec.status == SecurityStatus::LinkKey
+            && let Some(partner) = sec.partner
+            && self.stale_keys.contains(&partner)
+        {
+            self.stats.stale_key_dropped = self.stats.stale_key_dropped.saturating_add(1);
+            self.push_event(ApsEvent::StaleKeyUsed { partner });
+            return None;
+        }
         let (Some(src_endpoint), Some(cluster), Some(profile)) =
             (header.src_endpoint, header.cluster, header.profile)
         else {

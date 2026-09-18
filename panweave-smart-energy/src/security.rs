@@ -212,6 +212,9 @@ pub struct Registered {
     pub suites: u16,
     /// Hash of the current CBKE Trust Center link key, for backup.
     pub key_hash: Option<Key128>,
+    /// When the current CBKE key was established (unknown for a
+    /// restored record: the restore instant).
+    pub key_at: Option<Instant>,
 }
 
 /// Trust Center registration list (§5.4.1.1) applying the §5.4.7
@@ -270,6 +273,7 @@ impl<const N: usize> Registry<N> {
                 updated_at: now,
                 suites: 0,
                 key_hash: None,
+                key_at: None,
             })
             .map_err(|_| RegistryError::Full)?;
         Ok(key)
@@ -288,6 +292,7 @@ impl<const N: usize> Registry<N> {
                 updated_at: now,
                 suites: 0,
                 key_hash: Some(record.hashed_key.clone()),
+                key_at: Some(now),
             })
             .map_err(|_| RegistryError::Full)
     }
@@ -342,7 +347,33 @@ impl<const N: usize> Registry<N> {
             d.suites = suites;
             d.joined_at = None;
             d.updated_at = now;
+            d.key_at = Some(now);
         }
+    }
+
+    /// Authenticated devices whose CBKE key is older than `lifetime`
+    /// (§5.4.5: the Trust Center's own retirement policy).
+    pub fn expired_keys(
+        &self,
+        now: Instant,
+        lifetime: Duration,
+    ) -> impl Iterator<Item = ExtendedAddress> + '_ {
+        self.devices.iter().filter_map(move |d| {
+            let at = d.key_at?;
+            (d.key == KeyState::Cbke
+                && now.saturating_duration_since(at).as_millis() >= lifetime.as_millis())
+            .then_some(d.ieee)
+        })
+    }
+
+    /// When the first CBKE key reaches `lifetime`.
+    pub fn next_key_expiry(&self, lifetime: Duration) -> Option<Instant> {
+        self.devices
+            .iter()
+            .filter(|d| d.key == KeyState::Cbke)
+            .filter_map(|d| d.key_at)
+            .map(|at| at + lifetime)
+            .min_by_key(|t| t.as_millis())
     }
 
     /// The Trust Center retires the device's link key (§5.4.5).

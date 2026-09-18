@@ -450,6 +450,14 @@ pub enum ApsEvent {
         /// The partner.
         partner: ExtendedAddress,
     },
+    /// A data frame secured with `partner`'s link key arrived while
+    /// that key is marked stale ([`Aps::mark_key_stale`]): it was
+    /// discarded without an acknowledgement and a new key should be
+    /// negotiated (SE 1.4a §5.4.5).
+    StaleKeyUsed {
+        /// The partner.
+        partner: ExtendedAddress,
+    },
 }
 
 /// Diagnostic counters (never contain secrets).
@@ -478,6 +486,8 @@ pub struct ApsStats {
     pub actions_dropped: u32,
     /// Broadcast data frames received.
     pub rx_bcast: u32,
+    /// Data frames dropped for using a stale link key.
+    pub stale_key_dropped: u32,
     /// Unicast data frames received.
     pub rx_ucast: u32,
     /// Broadcast data frames sent.
@@ -536,6 +546,10 @@ pub struct Aps<
     pub(crate) requests: Vec<tx::RequestState, PENDING_TX>,
     pub(crate) reassembly: Option<rx::Reassembly>,
     pub(crate) loopback: Option<Loopback>,
+    /// Partners whose link key is retired from data traffic (SE 1.4a
+    /// §5.4.5): their secured data frames are dropped without an
+    /// acknowledgement, their APS commands still processed.
+    pub(crate) stale_keys: Vec<ExtendedAddress, 8>,
     pub(crate) next_request: u16,
     pub(crate) next_handle: u16,
 }
@@ -569,9 +583,32 @@ impl<
             requests: Vec::new(),
             reassembly: None,
             loopback: None,
+            stale_keys: Vec::new(),
             next_request: 1,
             next_handle: 1,
         }
+    }
+
+    /// Retires `partner`'s link key from data traffic (SE 1.4a §5.4.5):
+    /// its APS-secured data frames are discarded without an
+    /// acknowledgement and reported as [`ApsEvent::StaleKeyUsed`];
+    /// APS commands under the key are still processed and the key is
+    /// still used to send commands. At most eight partners are tracked.
+    pub fn mark_key_stale(&mut self, partner: ExtendedAddress) -> bool {
+        if self.stale_keys.contains(&partner) {
+            return true;
+        }
+        self.stale_keys.push(partner).is_ok()
+    }
+
+    /// Clears the stale mark of `partner` (a new key was established).
+    pub fn clear_key_stale(&mut self, partner: ExtendedAddress) {
+        self.stale_keys.retain(|p| *p != partner);
+    }
+
+    /// Whether `partner`'s link key is retired from data traffic.
+    pub fn is_key_stale(&self, partner: ExtendedAddress) -> bool {
+        self.stale_keys.contains(&partner)
     }
 
     /// Next action for the runtime.

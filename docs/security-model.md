@@ -89,6 +89,14 @@ follow `docs/specification-map.md`.
 * Key attributes (provisional / unverified / verified) gate what a link key
   may protect (§4.7.3, BDB §7.2).
 * `Debug` on key material and secured frames prints `[REDACTED]`.
+* A link key can be retired from data traffic without being deleted
+  (`Aps::mark_key_stale`, SE 1.4a §5.4.5): data frames secured with it are
+  dropped without an APS acknowledgement and reported
+  (`StackEvent::StaleLinkKeyUsed`) so that a new key is negotiated, while
+  APS commands under it are still processed — a sleepy device may need the
+  old key to obtain the network key during a rejoin. The Smart Energy
+  Trust Center driver retires keys after a configurable lifetime and
+  clears the mark when Key Establishment succeeds.
 
 ## Trust Center policy (R23.2 §4.7.1, BDB §5.6)
 

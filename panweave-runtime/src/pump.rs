@@ -1780,6 +1780,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ApsEvent::FrameCounterUnverified { partner } => {
                     self.issue_challenge(partner);
                 }
+                ApsEvent::StaleKeyUsed { partner } => {
+                    self.push_event(StackEvent::StaleLinkKeyUsed { ieee: partner });
+                }
                 ApsEvent::TrustCenterSwapped { old, new } => {
                     // The new Trust Center answers at the coordinator
                     // address; the old identity is forgotten.

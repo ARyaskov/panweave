@@ -181,6 +181,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .map_err(|_| NwkStatus::InvalidRequest)
     }
 
+    /// A fresh random 128-bit key from the stack's RNG (for network key
+    /// updates and application link keys).
+    pub fn random_key(&mut self) -> Key128 {
+        let mut bytes = [0u8; 16];
+        self.nwk.rng().fill_bytes(&mut bytes);
+        Key128::from_bytes(bytes)
+    }
+
     /// Trust Center network key update (§4.6.3.4.1): `key` becomes the
     /// alternate network key with the next sequence number, is broadcast
     /// to all rx-on devices under the current key (sleepy children get
