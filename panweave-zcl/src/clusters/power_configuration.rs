@@ -271,7 +271,7 @@ pub fn mains_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Alarms to raise after a battery reading, as `(code, alarm-state bit)`.

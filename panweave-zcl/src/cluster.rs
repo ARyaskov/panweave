@@ -40,6 +40,21 @@ pub struct ClusterDef {
     pub generated: &'static [CommandId],
 }
 
+impl ClusterDef {
+    /// The other side's view: a definition written for the server
+    /// (received = client → server, generated = server → client)
+    /// becomes the client's, so that Discover Commands Received /
+    /// Generated answer for the instantiated role.
+    pub const fn mirrored(self) -> Self {
+        ClusterDef {
+            id: self.id,
+            revision: self.revision,
+            received: self.generated,
+            generated: self.received,
+        }
+    }
+}
+
 /// Outcome of processing a global command.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GlobalOutcome {
@@ -103,6 +118,8 @@ pub enum ClusterState {
     ApplianceAlerts(crate::clusters::appliance::events_alerts::Alerts),
     /// Appliance Statistics server state: the log queue (§15.5).
     ApplianceLogs(crate::clusters::appliance::statistics::LogQueue),
+    /// Power Profile server state: the profiles (§3.17).
+    PowerProfile(crate::clusters::power_profile::Profiles),
 }
 
 /// A cluster instance.
@@ -266,6 +283,28 @@ impl<const A: usize> ClusterInstance<A> {
             ClusterState::ApplianceLogs(_) => ClusterState::ApplianceLogs(
                 crate::clusters::appliance::statistics::LogQueue::default(),
             ),
+            ClusterState::PowerProfile(p) => {
+                // The profile slots are kept; forecasts, schedules and
+                // constraints are wiped.
+                let mut wiped = crate::clusters::power_profile::Profiles::default();
+                for e in &p.entries {
+                    let _ = wiped.entries.push(crate::clusters::power_profile::Entry {
+                        phases: heapless::Vec::new(),
+                        record: crate::clusters::power_profile::ProfileRecord {
+                            energy_phase: crate::clusters::power_profile::NO_PHASE,
+                            state: crate::clusters::power_profile::state::IDLE,
+                            ..e.record
+                        },
+                        schedule: heapless::Vec::new(),
+                        constraints: crate::clusters::power_profile::Constraints {
+                            id: e.record.id,
+                            start_after: 0,
+                            stop_before: crate::clusters::power_profile::NO_STOP,
+                        },
+                    });
+                }
+                ClusterState::PowerProfile(wiped)
+            }
             ClusterState::None => ClusterState::None,
         };
     }
@@ -1020,6 +1059,53 @@ mod reporting_status_tests {
     use super::*;
     use crate::attribute::Access;
     use crate::types::DataType;
+
+    #[test]
+    fn a_client_discovers_the_commands_of_its_own_side() {
+        use crate::frame::{Direction, Header};
+        use crate::global::{DiscoverCommands, command};
+        use panweave_codec::Encode;
+        use panweave_types::{CommandId, TransactionSequence};
+
+        let def = ClusterDef {
+            id: ClusterId(0x0006),
+            revision: 1,
+            received: &[CommandId(0x00), CommandId(0x01), CommandId(0x02)],
+            generated: &[CommandId(0x40)],
+        };
+        let mirrored = def.mirrored();
+        assert_eq!(mirrored.received, def.generated);
+        assert_eq!(mirrored.generated, def.received);
+        let mut client: ClusterInstance<4> = ClusterInstance::new(mirrored, Role::Client);
+        let mut req = [0u8; 2];
+        let req_len = DiscoverCommands {
+            start: CommandId(0),
+            max: 8,
+        }
+        .encode_to_slice(&mut req)
+        .unwrap();
+        let req = &req[..req_len];
+        let mut buf = [0u8; 16];
+        let mut w = Writer::new(&mut buf);
+        let header = Header::global(
+            TransactionSequence(1),
+            command::DISCOVER_COMMANDS_RECEIVED,
+            Direction::ToClient,
+        );
+        let outcome = client.handle_global(&header, req, &mut w, Instant::ZERO);
+        assert!(matches!(outcome, GlobalOutcome::Response(_)));
+        let n = w.position();
+        assert_eq!(&buf[..n], &[1, 0x40]);
+        let mut w = Writer::new(&mut buf);
+        let header = Header::global(
+            TransactionSequence(2),
+            command::DISCOVER_COMMANDS_GENERATED,
+            Direction::ToClient,
+        );
+        let _ = client.handle_global(&header, req, &mut w, Instant::ZERO);
+        let n = w.position();
+        assert_eq!(&buf[..n], &[1, 0x00, 0x01, 0x02]);
+    }
 
     #[test]
     fn multi_frame_reports_carry_attribute_reporting_status() {

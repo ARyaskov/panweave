@@ -18,7 +18,7 @@ use panweave_codec::{Decode, Encode};
 use panweave_types::time::Instant;
 use panweave_types::{ClusterId, CommandId, Endpoint, ProfileId, ShortAddress};
 use panweave_zcl::clusters::appliance::{control, events_alerts, identification, statistics};
-use panweave_zcl::clusters::{basic, identify};
+use panweave_zcl::clusters::{basic, identify, power_profile};
 use panweave_zcl::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use panweave_zcl::global::{DefaultResponse, command};
 use panweave_zcl::layer::{EndpointInstance, Zcl, ZclAction, ZclEvent, ZclIndication};
@@ -50,6 +50,8 @@ fn washing_machine() -> Node {
     .unwrap();
     ep.add_instance(events_alerts::server()).unwrap();
     ep.add_instance(statistics::server().unwrap()).unwrap();
+    ep.add_instance(power_profile::server(1, true, true).unwrap())
+        .unwrap();
     zcl.add_endpoint(ep).unwrap();
     zcl.poll_timers(T0);
     zcl
@@ -282,4 +284,182 @@ fn alerts_events_and_logs_are_notified_and_served() {
         identification::basic(c).unwrap().product_type,
         identification::product_type::WASHING_MACHINE
     );
+}
+
+#[test]
+fn power_profile_is_forecast_scheduled_and_priced() {
+    let mut zcl = washing_machine();
+    let phases = [
+        power_profile::EnergyPhase {
+            id: 1,
+            macro_phase: 1,
+            expected_duration: 20,
+            peak_power: 2000,
+            energy: 660,
+            max_activation_delay: power_profile::FIRST_PHASE_DELAY,
+        },
+        power_profile::EnergyPhase {
+            id: 2,
+            macro_phase: 2,
+            expected_duration: 40,
+            peak_power: 500,
+            energy: 330,
+            max_activation_delay: 30,
+        },
+    ];
+    // The forecast is notified to the bound clients.
+    zcl.power_profile_set(EP, 1, &phases).unwrap();
+    let (h, p) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(h.command, power_profile::CMD_POWER_PROFILE_NOTIFICATION);
+    let profile = power_profile::PowerProfile::parse(&p).unwrap();
+    assert_eq!((profile.total_profiles, profile.id), (1, 1));
+    assert_eq!(profile.phases.as_slice(), &phases);
+    // A client asks for all profiles and their state.
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_POWER_PROFILE_REQUEST,
+        &[0],
+    );
+    let (h, p) = reply.unwrap();
+    assert_eq!(h.command, power_profile::CMD_POWER_PROFILE_RESPONSE);
+    assert_eq!(power_profile::PowerProfile::parse(&p).unwrap(), profile);
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_POWER_PROFILE_STATE_REQUEST,
+        &[],
+    );
+    let (h, p) = reply.unwrap();
+    assert_eq!(h.command, power_profile::CMD_POWER_PROFILE_STATE_RESPONSE);
+    let recs = power_profile::parse_records(&p).unwrap();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].state, power_profile::state::PROGRAMMED);
+    assert!(recs[0].remote_control);
+    // The scheduler schedules the start in 90 minutes: the profile
+    // waits to start, the schedule state is notified and reported.
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_ENERGY_PHASES_SCHEDULE_NOTIFICATION,
+        &[1, 1, 1, 90, 0],
+    );
+    assert_eq!(default_status(reply), ZclStatus::Success);
+    let (h, p) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(
+        h.command,
+        power_profile::CMD_ENERGY_PHASES_SCHEDULE_STATE_NOTIFICATION
+    );
+    let s = power_profile::Schedule::parse(&p).unwrap();
+    assert_eq!(s.phases[0].scheduled_time, 90);
+    assert!(matches!(
+        zcl.next_event(),
+        Some(ZclEvent::PowerProfileScheduled {
+            endpoint: EP,
+            id: 1
+        })
+    ));
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_ENERGY_PHASES_SCHEDULE_STATE_REQUEST,
+        &[1],
+    );
+    let (h, p) = reply.unwrap();
+    assert_eq!(
+        h.command,
+        power_profile::CMD_ENERGY_PHASES_SCHEDULE_STATE_RESPONSE
+    );
+    assert_eq!(power_profile::Schedule::parse(&p).unwrap(), s);
+    // The appliance runs phase 1: a state notification goes out.
+    assert!(
+        zcl.power_profile_state(EP, 1, 1, power_profile::state::RUNNING)
+            .unwrap()
+    );
+    let (h, p) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(
+        h.command,
+        power_profile::CMD_POWER_PROFILE_STATE_NOTIFICATION
+    );
+    let recs = power_profile::parse_records(&p).unwrap();
+    assert_eq!(
+        (recs[0].energy_phase, recs[0].state),
+        (1, power_profile::state::RUNNING)
+    );
+    // Constraints are notified and answered.
+    let c = power_profile::Constraints {
+        id: 1,
+        start_after: 15,
+        stop_before: 240,
+    };
+    zcl.power_profile_constraints(EP, c).unwrap();
+    let (h, _) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(
+        h.command,
+        power_profile::CMD_SCHEDULE_CONSTRAINTS_NOTIFICATION
+    );
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_SCHEDULE_CONSTRAINTS_REQUEST,
+        &[1],
+    );
+    let (h, p) = reply.unwrap();
+    assert_eq!(h.command, power_profile::CMD_SCHEDULE_CONSTRAINTS_RESPONSE);
+    assert_eq!(power_profile::Constraints::parse(&p).unwrap(), c);
+    // Prices: asked from the scheduler, delivered to the application.
+    zcl.power_profile_get_price(EP, 1).unwrap();
+    let (h, p) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(h.command, power_profile::CMD_GET_POWER_PROFILE_PRICE);
+    assert_eq!(p, [1]);
+    let price = power_profile::Price {
+        id: 1,
+        currency: 978,
+        price: 115,
+        trailing_digit: 2,
+    };
+    let mut buf = [0u8; 8];
+    let n = price.encode(&mut buf).unwrap();
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_GET_POWER_PROFILE_PRICE_RESPONSE,
+        &buf[..n],
+    );
+    assert_eq!(default_status(reply), ZclStatus::Success);
+    assert!(matches!(
+        zcl.next_event(),
+        Some(ZclEvent::PowerProfilePrice { price: p, extended: false, .. }) if p == price
+    ));
+    zcl.power_profile_get_price_extended(
+        EP,
+        power_profile::PriceExtendedRequest {
+            id: 1,
+            as_scheduled: true,
+            start_time: Some(60),
+        },
+    )
+    .unwrap();
+    let (h, p) = bound_send(&mut zcl, power_profile::ID);
+    assert_eq!(
+        h.command,
+        power_profile::CMD_GET_POWER_PROFILE_PRICE_EXTENDED
+    );
+    assert_eq!(p, [0x03, 1, 60, 0]);
+    // Unknown profiles are NOT_FOUND; remote control off refuses schedules.
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_POWER_PROFILE_REQUEST,
+        &[2],
+    );
+    assert_eq!(default_status(reply), ZclStatus::NotFound);
+    zcl.power_profile_set_remote(EP, false).unwrap();
+    let (reply, _) = command(
+        &mut zcl,
+        power_profile::ID,
+        power_profile::CMD_ENERGY_PHASES_SCHEDULE_NOTIFICATION,
+        &[1, 1, 1, 90, 0],
+    );
+    assert_eq!(default_status(reply), ZclStatus::NotAuthorized);
 }

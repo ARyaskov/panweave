@@ -17,10 +17,10 @@ id = "PW-DTL-DEV-001"
 section = "§4–§40"
 summary = "Device types with device id and mandatory/optional server and client clusters (switches, outputs, scene selector, configuration tool, remote control, combined interface, range extender, mains outlet, door lock and controller, consumption awareness, home gateway, smart plug, white goods, meter interface, lights, light switches, sensors, thermostats, window covering, IAS devices and others)"
 level = "mandatory"
-status = "partially-implemented"
+status = "implemented"
 module = "panweave-device-library"
-tests = ["light_and_switch_endpoints"]
-notes = "All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. The facade instantiates every general, measurement, lighting, HVAC, closure, IAS and appliance-management cluster a device type lists, plus Meter Identification (endpoint builders for the lights, switches, sensors, thermostat, window covering, door lock, ballast, on/off sensor, IAS devices and the Trust Center utility endpoint); device types needing the Power Profile or Metering clusters (Home Gateway, Smart Plug, White Goods, Meter Interface, Consumption Awareness) still report them through unsupported_clusters."
+tests = ["light_and_switch_endpoints", "appliance_and_energy_device_types", "every_buildable_device_type_validates"]
+notes = "All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. The facade instantiates every cluster a device type lists (endpoint builders for the lights, switches, sensors, thermostat, window covering, door lock, ballast, on/off sensor, IAS devices, White Goods and the Trust Center utility endpoint; Home Gateway, Smart Plug, Meter Interface and Consumption Awareness need the smart-energy feature for the Metering cluster of panweave-smart-energy and report it through unsupported_clusters without it). Every buildable device type passes endpoints::validate."
 [[requirement]]
 id = "PW-DTL-VAL-001"
 section = "§1.4, per-device cluster requirements"

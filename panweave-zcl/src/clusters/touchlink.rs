@@ -99,7 +99,7 @@ pub fn server<const A: usize>() -> ClusterInstance<A> {
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// ZigBee Information field (Figure 13-9 / 13-21).

@@ -321,7 +321,7 @@ pub mod control {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's signal state.
@@ -537,7 +537,7 @@ pub mod identification {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's `BasicIdentification`.
@@ -701,7 +701,7 @@ pub mod events_alerts {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's current alerts.
@@ -931,7 +931,7 @@ pub mod statistics {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's log queue.

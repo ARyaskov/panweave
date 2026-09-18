@@ -513,7 +513,7 @@ pub fn server<const A: usize>(
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 const fn u8v(v: u8) -> Value<'static> {

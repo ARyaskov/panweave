@@ -196,7 +196,7 @@ pub fn server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, Zc
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Builds a Level Control for Lighting server (§3.19): the level range

@@ -181,7 +181,7 @@ pub fn server<const A: usize>(max_duration: u16) -> Result<ClusterInstance<A>, Z
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Whether a warning is active (the timer runs).

@@ -425,7 +425,7 @@ pub fn server<const A: usize>(
 
 /// Builds a client instance of `kind`.
 pub fn client<const A: usize>(kind: Kind) -> ClusterInstance<A> {
-    ClusterInstance::new(kind.def(), Role::Client)
+    ClusterInstance::new(kind.def().mirrored(), Role::Client)
 }
 
 /// The kind of a server instance.

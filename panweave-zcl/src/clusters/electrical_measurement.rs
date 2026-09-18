@@ -577,7 +577,7 @@ pub fn server<const A: usize>(capability: Capability) -> Result<ClusterInstance<
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Adds the RMS current and active power extremes of the single-phase

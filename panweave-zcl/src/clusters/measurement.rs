@@ -37,7 +37,7 @@ const fn def(id: ClusterId) -> ClusterDef {
 
 /// Builds a client instance of `id` (no attributes or commands).
 fn client_of<const A: usize>(id: ClusterId) -> ClusterInstance<A> {
-    ClusterInstance::new(def(id), Role::Client)
+    ClusterInstance::new(def(id).mirrored(), Role::Client)
 }
 
 /// Illuminance Measurement (§4.2): `MeasuredValue = 10000 · log10(lux) + 1`.

@@ -744,7 +744,7 @@ pub mod thermostat {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Adds the weekly schedule extension (§6.3.2.2.3) to a server:
@@ -1627,7 +1627,7 @@ pub mod fan_control {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Current `FanMode`.

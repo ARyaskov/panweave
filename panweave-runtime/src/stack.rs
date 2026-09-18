@@ -607,6 +607,31 @@ pub enum StackEvent {
         /// The command.
         overload: panweave_zcl::clusters::appliance::control::Overload,
     },
+    /// The scheduler priced a Power Profile of the server on `endpoint`
+    /// (ZCL8 §3.17.5.3, `extended` for §3.17.5.9).
+    PowerProfilePrice {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The price.
+        price: panweave_zcl::clusters::power_profile::Price,
+        /// Answer to Get Power Profile Price Extended.
+        extended: bool,
+    },
+    /// The scheduler priced the overall schedule (ZCL8 §3.17.5.4).
+    PowerProfileOverallPrice {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The price.
+        price: panweave_zcl::clusters::power_profile::OverallPrice,
+    },
+    /// The scheduler scheduled the energy phases of Power Profile `id`
+    /// on the server of `endpoint` (ZCL8 §3.17.5.5).
+    PowerProfileScheduled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Power Profile ID.
+        id: u8,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

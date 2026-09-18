@@ -107,7 +107,7 @@ pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 fn table<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Table> {

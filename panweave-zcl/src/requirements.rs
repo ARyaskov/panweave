@@ -141,6 +141,16 @@ pub const ALL: &[ClusterRequirements] = &[
         client_commands: cmds![0x00, 0x01, 0x02, 0x03],
     },
     ClusterRequirements {
+        id: ClusterId(0x001a),
+        section: "ZCL §3.17",
+        // TotalProfileNum .. ScheduleMode; every command the server
+        // receives; the mandatory ones a client receives (the price
+        // requests are optional).
+        server_attributes: attrs![0x0000, 0x0001, 0x0002, 0x0003, 0x0004],
+        server_commands: cmds![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+        client_commands: cmds![0x00, 0x01, 0x02, 0x04, 0x06, 0x07, 0x08, 0x09, 0x0a],
+    },
+    ClusterRequirements {
         id: ClusterId(0x001b),
         section: "ZCL §15.2",
         // StartTime, FinishTime; Signal State; Signal State Response /

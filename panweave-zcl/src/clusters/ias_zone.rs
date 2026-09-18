@@ -227,7 +227,7 @@ pub fn server<const A: usize>(
 
 /// Builds a client (CIE) instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 fn state<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut State> {

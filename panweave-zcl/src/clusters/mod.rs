@@ -27,6 +27,7 @@ pub mod on_off;
 pub mod ota;
 pub mod poll_control;
 pub mod power_configuration;
+pub mod power_profile;
 pub mod scenes;
 pub mod time;
 pub mod touchlink;
@@ -179,7 +180,7 @@ pub mod identify {
     /// Builds a client instance (no attributes; receives Identify Query
     /// Responses, §3.5.3).
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Remaining identification time of a server instance.

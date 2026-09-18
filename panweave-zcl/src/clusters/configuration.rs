@@ -218,7 +218,7 @@ pub mod device_temperature {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     fn dwell_secs<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> Option<u32> {
@@ -358,7 +358,7 @@ pub mod switch_configuration {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The On/Off command to send when the switch arrives at state 2
@@ -515,7 +515,7 @@ pub mod ballast {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Sets `BallastStatus`.
@@ -804,7 +804,7 @@ pub mod pump {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Resolves the effective operation and control modes (Figure 6-3):
@@ -974,7 +974,7 @@ pub mod dehumidification {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Records the relative humidity (0…100 %) and derives the cooling
@@ -1050,7 +1050,7 @@ pub mod thermostat_ui {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 }
 
@@ -1129,7 +1129,7 @@ pub mod shade {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Records the motion state: adjusting and its direction (`opening`).
@@ -1292,7 +1292,7 @@ pub mod barrier_control {
 
     /// Builds a client instance.
     pub fn client<const A: usize>() -> ClusterInstance<A> {
-        ClusterInstance::new(DEF, Role::Client)
+        ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     fn bump<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {

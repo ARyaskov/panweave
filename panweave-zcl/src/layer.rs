@@ -20,7 +20,8 @@ use crate::clusters::configuration::{barrier_control, device_temperature};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
     alarms, basic, color_control, commissioning, door_lock, hvac, ias_ace, ias_wd, ias_zone,
-    identify, level, on_off, poll_control, power_configuration, scenes, time, window_covering,
+    identify, level, on_off, poll_control, power_configuration, power_profile, scenes, time,
+    window_covering,
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
@@ -388,6 +389,32 @@ pub enum ZclEvent {
         endpoint: Endpoint,
         /// The command.
         overload: appliance_control::Overload,
+    },
+    /// The scheduler priced a Power Profile of the server on `endpoint`
+    /// (§3.17.5.3, `extended` for §3.17.5.9).
+    PowerProfilePrice {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The price.
+        price: power_profile::Price,
+        /// Answer to Get Power Profile Price Extended.
+        extended: bool,
+    },
+    /// The scheduler priced the overall schedule (§3.17.5.4).
+    PowerProfileOverallPrice {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The price.
+        price: power_profile::OverallPrice,
+    },
+    /// The scheduler scheduled the energy phases of Power Profile `id`
+    /// on the server of `endpoint` (§3.17.5.5); the schedule is in the
+    /// instance's [`power_profile::Profiles`].
+    PowerProfileScheduled {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Power Profile ID.
+        id: u8,
     },
 }
 
@@ -1175,6 +1202,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 }
                                 continue;
                             }
+                            power_profile::ID => {
+                                self.handle_power_profile(i, &origin, cmd, payload);
+                                continue;
+                            }
                             events_alerts::ID => {
                                 let Some(c) = self
                                     .endpoints
@@ -1693,6 +1724,302 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             statistics::ID,
             statistics::CMD_STATISTICS_AVAILABLE,
             &out[..n],
+        )
+    }
+
+    /// Power Profile server commands (§3.17.5): requests answered from
+    /// the stored profiles, schedules applied, prices handed over.
+    fn handle_power_profile(
+        &mut self,
+        ep_index: usize,
+        origin: &Origin,
+        cmd: CommandId,
+        payload: &[u8],
+    ) {
+        let Some(c) = self
+            .endpoints
+            .get_mut(ep_index)
+            .and_then(|e| e.cluster_mut(power_profile::ID, Role::Server))
+        else {
+            return;
+        };
+        let endpoint = origin.endpoint;
+        let mut out = [0u8; MAX_ZCL];
+        match power_profile::handle(c, cmd, payload) {
+            power_profile::Outcome::Profiles(ids) => {
+                for id in ids {
+                    let Some(p) = self
+                        .cluster(endpoint, power_profile::ID, Role::Server)
+                        .and_then(power_profile::profiles)
+                        .and_then(|p| p.profile(id))
+                    else {
+                        continue;
+                    };
+                    if let Ok(n) = p.encode(&mut out) {
+                        self.reply_cluster_specific(
+                            origin,
+                            power_profile::CMD_POWER_PROFILE_RESPONSE,
+                            &out[..n],
+                        );
+                    }
+                }
+            }
+            power_profile::Outcome::Records(records) => {
+                if let Ok(n) = power_profile::encode_records(&records, &mut out) {
+                    self.reply_cluster_specific(
+                        origin,
+                        power_profile::CMD_POWER_PROFILE_STATE_RESPONSE,
+                        &out[..n],
+                    );
+                }
+            }
+            power_profile::Outcome::Price(price) => {
+                self.push_event(ZclEvent::PowerProfilePrice {
+                    endpoint,
+                    price,
+                    extended: false,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            power_profile::Outcome::PriceExtended(price) => {
+                self.push_event(ZclEvent::PowerProfilePrice {
+                    endpoint,
+                    price,
+                    extended: true,
+                });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            power_profile::Outcome::OverallPrice(price) => {
+                self.push_event(ZclEvent::PowerProfileOverallPrice { endpoint, price });
+                let _ = self.default_response(origin, ZclStatus::Success);
+            }
+            power_profile::Outcome::Scheduled { id, changed } => {
+                let _ = self.default_response(origin, ZclStatus::Success);
+                if changed {
+                    self.push_event(ZclEvent::PowerProfileScheduled { endpoint, id });
+                    let _ = self.power_profile_notify_schedule(endpoint, id);
+                }
+            }
+            power_profile::Outcome::Constraints(constraints) => {
+                if let Ok(n) = constraints.encode(&mut out) {
+                    self.reply_cluster_specific(
+                        origin,
+                        power_profile::CMD_SCHEDULE_CONSTRAINTS_RESPONSE,
+                        &out[..n],
+                    );
+                }
+            }
+            power_profile::Outcome::ScheduleState(schedule) => {
+                if let Ok(n) = schedule.encode(&mut out) {
+                    self.reply_cluster_specific(
+                        origin,
+                        power_profile::CMD_ENERGY_PHASES_SCHEDULE_STATE_RESPONSE,
+                        &out[..n],
+                    );
+                }
+            }
+            power_profile::Outcome::Default(status) => {
+                let _ = self.default_response(origin, status);
+            }
+        }
+    }
+
+    /// The Power Profile server's profiles on `endpoint`, mutably.
+    fn power_profiles_mut(
+        &mut self,
+        endpoint: Endpoint,
+    ) -> Result<&mut power_profile::Profiles, ZclError> {
+        self.cluster_mut(endpoint, power_profile::ID, Role::Server)
+            .and_then(power_profile::profiles_mut)
+            .ok_or(ZclError::NotFound)
+    }
+
+    /// Sets the forecast of Power Profile `id` on the server of
+    /// `endpoint` (a defined profile leaves IDLE for PROGRAMMED) and
+    /// notifies the bound clients (§3.17.6.1).
+    pub fn power_profile_set(
+        &mut self,
+        endpoint: Endpoint,
+        id: u8,
+        phases: &[power_profile::EnergyPhase],
+    ) -> Result<(), ZclError> {
+        let profiles = self.power_profiles_mut(endpoint)?;
+        let entry = profiles.get_mut(id).ok_or(ZclError::NotFound)?;
+        entry.phases = Vec::from_slice(phases).map_err(|_| ZclError::TooLarge)?;
+        if entry.record.state == power_profile::state::IDLE && !phases.is_empty() {
+            entry.record.state = power_profile::state::PROGRAMMED;
+        }
+        let profile = profiles.profile(id).ok_or(ZclError::NotFound)?;
+        let mut out = [0u8; MAX_ZCL];
+        let n = profile.encode(&mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_POWER_PROFILE_NOTIFICATION,
+            &out[..n],
+        )
+    }
+
+    /// Reports the state of Power Profile `id` (its current energy
+    /// phase and `PowerProfileState`) and notifies the bound clients
+    /// with a Power Profile State Notification when it changed
+    /// (§3.17.6.5). Returns whether it changed.
+    pub fn power_profile_state(
+        &mut self,
+        endpoint: Endpoint,
+        id: u8,
+        energy_phase: u8,
+        state: u8,
+    ) -> Result<bool, ZclError> {
+        let profiles = self.power_profiles_mut(endpoint)?;
+        let entry = profiles.get_mut(id).ok_or(ZclError::NotFound)?;
+        if entry.record.energy_phase == energy_phase && entry.record.state == state {
+            return Ok(false);
+        }
+        entry.record.energy_phase = energy_phase;
+        entry.record.state = state;
+        if state == power_profile::state::ENDED || state == power_profile::state::IDLE {
+            entry.schedule.clear();
+        }
+        let records = profiles.records();
+        let mut out = [0u8; MAX_ZCL];
+        let n =
+            power_profile::encode_records(&records, &mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_POWER_PROFILE_STATE_NOTIFICATION,
+            &out[..n],
+        )?;
+        Ok(true)
+    }
+
+    /// Sets `EnergyRemote` of the Power Profile server on `endpoint` and
+    /// the remote-control flag of every profile (§3.17.4.4).
+    pub fn power_profile_set_remote(
+        &mut self,
+        endpoint: Endpoint,
+        enabled: bool,
+    ) -> Result<(), ZclError> {
+        let c = self
+            .cluster_mut(endpoint, power_profile::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        c.set_bool(power_profile::ENERGY_REMOTE.id, enabled);
+        let profiles = power_profile::profiles_mut(c).ok_or(ZclError::NotFound)?;
+        for e in &mut profiles.entries {
+            e.record.remote_control = enabled;
+            if !enabled {
+                e.schedule.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets the schedule constraints of a Power Profile and notifies the
+    /// bound clients (§3.17.6.10).
+    pub fn power_profile_constraints(
+        &mut self,
+        endpoint: Endpoint,
+        constraints: power_profile::Constraints,
+    ) -> Result<(), ZclError> {
+        let profiles = self.power_profiles_mut(endpoint)?;
+        let entry = profiles.get_mut(constraints.id).ok_or(ZclError::NotFound)?;
+        entry.constraints = constraints;
+        let mut out = [0u8; 5];
+        let n = constraints
+            .encode(&mut out)
+            .map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_SCHEDULE_CONSTRAINTS_NOTIFICATION,
+            &out[..n],
+        )
+    }
+
+    /// Notifies the bound clients of the schedule state of Power Profile
+    /// `id` (§3.17.6.9).
+    pub fn power_profile_notify_schedule(
+        &mut self,
+        endpoint: Endpoint,
+        id: u8,
+    ) -> Result<(), ZclError> {
+        let schedule = self
+            .cluster(endpoint, power_profile::ID, Role::Server)
+            .and_then(power_profile::profiles)
+            .and_then(|p| p.schedule(id))
+            .ok_or(ZclError::NotFound)?;
+        let mut out = [0u8; MAX_ZCL];
+        let n = schedule.encode(&mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_ENERGY_PHASES_SCHEDULE_STATE_NOTIFICATION,
+            &out[..n],
+        )
+    }
+
+    /// Asks the scheduler for the schedule of Power Profile `id`
+    /// (§3.17.6.7); the answer is applied by the dispatcher.
+    pub fn power_profile_request_schedule(
+        &mut self,
+        endpoint: Endpoint,
+        id: u8,
+    ) -> Result<(), ZclError> {
+        self.power_profiles_mut(endpoint)?
+            .get(id)
+            .ok_or(ZclError::NotFound)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_ENERGY_PHASES_SCHEDULE_REQUEST,
+            &[id],
+        )
+    }
+
+    /// Asks the scheduler for the price of Power Profile `id`
+    /// (§3.17.6.4); the answer arrives as [`ZclEvent::PowerProfilePrice`].
+    pub fn power_profile_get_price(&mut self, endpoint: Endpoint, id: u8) -> Result<(), ZclError> {
+        self.power_profiles_mut(endpoint)?
+            .get(id)
+            .ok_or(ZclError::NotFound)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_GET_POWER_PROFILE_PRICE,
+            &[id],
+        )
+    }
+
+    /// Asks the scheduler for the price of a Power Profile under
+    /// `request`'s options (§3.17.6.12).
+    pub fn power_profile_get_price_extended(
+        &mut self,
+        endpoint: Endpoint,
+        request: power_profile::PriceExtendedRequest,
+    ) -> Result<(), ZclError> {
+        self.power_profiles_mut(endpoint)?
+            .get(request.id)
+            .ok_or(ZclError::NotFound)?;
+        let mut out = [0u8; 4];
+        let n = request.encode(&mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_GET_POWER_PROFILE_PRICE_EXTENDED,
+            &out[..n],
+        )
+    }
+
+    /// Asks the scheduler for the overall price of the scheduled
+    /// profiles (§3.17.6.6).
+    pub fn power_profile_get_overall_price(&mut self, endpoint: Endpoint) -> Result<(), ZclError> {
+        self.power_profiles_mut(endpoint)?;
+        self.notify_bound(
+            endpoint,
+            power_profile::ID,
+            power_profile::CMD_GET_OVERALL_SCHEDULE_PRICE,
+            &[],
         )
     }
 

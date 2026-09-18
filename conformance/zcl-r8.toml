@@ -271,10 +271,10 @@ id = "PW-ZCL-GEN-016"
 section = "§3.17"
 summary = "Power Profile cluster"
 level = "optional"
-status = "not-implemented"
-module = "panweave-zcl::clusters"
-tests = []
-notes = "Not implemented; metadata entry only (TODO(PW-ZCL-POWER-PROFILE))."
+status = "implemented"
+module = "panweave-zcl::clusters::power_profile"
+tests = ["codecs_round_trip", "server_answers_requests_and_applies_schedules", "power_profile_is_forecast_scheduled_and_priced"]
+notes = "TotalProfileNum, MultipleScheduling, EnergyFormatting, EnergyRemote and ScheduleMode (writable, reportable); codecs for every §3.17.5 / §3.17.6 command (Power Profile Notification / Response with up to 7 energy phases per frame, State Response / Notification records, Get Power Profile Price (Extended) and Overall Schedule Price with their responses, Energy Phases Schedule Notification / Response / Request / State Response / State Notification, Schedule Constraints Notification / Response / Request). The server keeps up to four profiles (forecast, current record, accepted schedule, constraints) in the cluster instance; the dispatcher answers the four requests (NOT_FOUND for an unknown profile, all profiles for ID 0), applies received schedules (NOT_AUTHORIZED when the profile is not remotely controllable or a phase has MaxActivationDelay 0, NOT_FOUND for an unknown phase, PROGRAMMED → ENERGY_PHASE_WAITING_TO_START, Energy Phases Schedule State Notification when the schedule changed) and hands prices to the application (ZclEvent::PowerProfilePrice / PowerProfileOverallPrice). The application sets forecasts, states, remote control and constraints and asks for schedules and prices through the Zcl::power_profile_* helpers; the client side (scheduler) is codecs only. Profiles longer than 7 phases need the Partition cluster (not implemented)."
 [[requirement]]
 id = "PW-ZCL-GEN-017"
 section = "§3.19, §3.20"

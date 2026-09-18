@@ -370,7 +370,7 @@ pub fn server<const A: usize>(code: Option<Code>) -> ClusterInstance<A> {
 
 /// Builds a client instance.
 pub fn client<const A: usize>() -> ClusterInstance<A> {
-    ClusterInstance::new(DEF, Role::Client)
+    ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 fn panel_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Panel> {

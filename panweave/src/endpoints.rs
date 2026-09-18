@@ -30,7 +30,8 @@ use panweave_zcl::clusters::{
     commissioning, door_lock, electrical_measurement, ias_ace, ias_wd, window_covering,
 };
 use panweave_zcl::clusters::{
-    groups, identify, keep_alive, level, meter_identification, on_off, poll_control, scenes,
+    groups, identify, keep_alive, level, meter_identification, on_off, poll_control, power_profile,
+    scenes,
 };
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::requirements::requirements;
@@ -85,6 +86,9 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     events_alerts::ID,
     appliance_statistics::ID,
     meter_identification::ID,
+    power_profile::ID,
+    #[cfg(feature = "smart-energy")]
+    panweave_smart_energy::cluster::METERING,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -125,6 +129,14 @@ const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
     pressure::ID,
     flow::ID,
     water_content::RELATIVE_HUMIDITY,
+    appliance_control::ID,
+    appliance_identification::ID,
+    events_alerts::ID,
+    appliance_statistics::ID,
+    meter_identification::ID,
+    power_profile::ID,
+    #[cfg(feature = "smart-energy")]
+    panweave_smart_energy::cluster::METERING,
 ];
 
 /// Mandatory clusters of `device` that cannot be instantiated yet
@@ -242,6 +254,11 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
         illuminance_level::ID => illuminance_level::server(0).ok(),
         pressure::ID => pressure::server(-32767, 32767).ok(),
         flow::ID => flow::server(0, 0xfffe).ok(),
+        power_profile::ID => power_profile::server(1, true, true).ok(),
+        #[cfg(feature = "smart-energy")]
+        panweave_smart_energy::cluster::METERING => {
+            panweave_smart_energy::endpoints::server(id).and_then(Result::ok)
+        }
         appliance_control::ID => appliance_control::server(true).ok(),
         appliance_identification::ID => appliance_identification::server(
             appliance_identification::BasicIdentification::default(),
@@ -276,7 +293,10 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         scenes::ID => Some(scenes::client()),
         on_off::ID => Some(on_off::client()),
         level::ID => Some(level::client()),
-        level::PWM_ID => Some(ClusterInstance::new(level::PWM_DEF, Role::Client)),
+        level::PWM_ID => Some(ClusterInstance::new(
+            level::PWM_DEF.mirrored(),
+            Role::Client,
+        )),
         // Check-ins are answered without requesting fast polling; the
         // application changes the policy through the cluster state.
         poll_control::ID => Some(poll_control::client(false, 0)),
@@ -309,6 +329,11 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         illuminance_level::ID => Some(illuminance_level::client()),
         pressure::ID => Some(pressure::client()),
         flow::ID => Some(flow::client()),
+        power_profile::ID => Some(power_profile::client()),
+        #[cfg(feature = "smart-energy")]
+        panweave_smart_energy::cluster::METERING => {
+            panweave_smart_energy::endpoints::client(id).and_then(Result::ok)
+        }
         appliance_control::ID => Some(appliance_control::client()),
         appliance_identification::ID => Some(appliance_identification::client()),
         events_alerts::ID => Some(events_alerts::client()),
@@ -627,6 +652,43 @@ fn check_commands(
     }
 }
 
+/// White Goods (device 0x0052, DTL §36): Identify, Power Profile,
+/// Appliance Control, Appliance Identification and Appliance Events and
+/// Alerts servers; the application fills in the identification, the
+/// forecasts and the signal state.
+pub fn white_goods(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0052), &[], &[], false)
+}
+
+/// Home Gateway (device 0x0050, DTL §34): Identify and Time servers with
+/// the Power Profile, Metering, Meter Identification and Appliance
+/// Statistics clients of an energy management gateway.
+#[cfg(feature = "smart-energy")]
+pub fn home_gateway(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0050), &[], &[], false)
+}
+
+/// Smart Plug (device 0x0051, DTL §35): Identify, On/Off and Metering
+/// servers.
+#[cfg(feature = "smart-energy")]
+pub fn smart_plug(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0051), &[], &[], false)
+}
+
+/// Meter Interface (device 0x0053, DTL §37): Identify, Metering and
+/// Meter Identification servers.
+#[cfg(feature = "smart-energy")]
+pub fn meter_interface(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x0053), &[], &[], false)
+}
+
+/// Consumption Awareness Device (device 0x000D, DTL §14): Identify and
+/// Metering servers.
+#[cfg(feature = "smart-energy")]
+pub fn consumption_awareness(endpoint: Endpoint) -> Option<Built> {
+    device(endpoint, DeviceId(0x000D), &[], &[], false)
+}
+
 /// Definition of a cluster instance for custom endpoints.
 pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<36> {
     ClusterInstance::new(def, role)
@@ -688,6 +750,42 @@ mod tests {
         assert!(d.has_output(poll_control::ID));
         assert!(ep.cluster(keep_alive::ID, Role::Server).is_some());
         assert!(device(Endpoint(1), DeviceId(0xEEEE), &[], &[], false).is_none());
+    }
+
+    #[test]
+    fn appliance_and_energy_device_types() {
+        let (d, ep) = white_goods(Endpoint(1)).unwrap();
+        assert_eq!(d.device, DeviceId(0x0052));
+        assert!(d.has_input(power_profile::ID) && d.has_input(appliance_control::ID));
+        assert!(ep.cluster(power_profile::ID, Role::Server).is_some());
+        assert!(ep.cluster(events_alerts::ID, Role::Server).is_some());
+        assert!(validate(&d, &ep).is_empty());
+        #[cfg(feature = "smart-energy")]
+        {
+            let (d, ep) = home_gateway(Endpoint(2)).unwrap();
+            assert!(d.has_output(power_profile::ID));
+            assert!(d.has_output(panweave_smart_energy::cluster::METERING));
+            assert!(ep.cluster(appliance_statistics::ID, Role::Client).is_some());
+            assert!(validate(&d, &ep).is_empty());
+            for (build, id) in [
+                (smart_plug as fn(Endpoint) -> Option<Built>, 0x0051),
+                (meter_interface, 0x0053),
+                (consumption_awareness, 0x000D),
+            ] {
+                let (d, ep) = build(Endpoint(3)).unwrap();
+                assert_eq!(d.device, DeviceId(id));
+                assert!(
+                    ep.cluster(panweave_smart_energy::cluster::METERING, Role::Server)
+                        .is_some()
+                );
+                assert!(validate(&d, &ep).is_empty());
+            }
+        }
+        #[cfg(not(feature = "smart-energy"))]
+        assert_eq!(
+            unsupported_clusters(DeviceType::lookup(DeviceId(0x0051)).unwrap()).as_slice(),
+            &[ClusterId(0x0702)]
+        );
     }
 
     #[test]

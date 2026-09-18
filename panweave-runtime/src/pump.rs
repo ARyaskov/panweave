@@ -2393,6 +2393,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ZclEvent::ApplianceOverload { endpoint, overload } => {
                     StackEvent::ApplianceOverload { endpoint, overload }
                 }
+                ZclEvent::PowerProfilePrice {
+                    endpoint,
+                    price,
+                    extended,
+                } => StackEvent::PowerProfilePrice {
+                    endpoint,
+                    price,
+                    extended,
+                },
+                ZclEvent::PowerProfileOverallPrice { endpoint, price } => {
+                    StackEvent::PowerProfileOverallPrice { endpoint, price }
+                }
+                ZclEvent::PowerProfileScheduled { endpoint, id } => {
+                    StackEvent::PowerProfileScheduled { endpoint, id }
+                }
                 ZclEvent::FastPoll { fast, interval, .. } => {
                     // Poll Control server: switch the MAC poll rate.
                     self.fast_poll_mode = fast.then_some(interval);

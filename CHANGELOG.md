@@ -212,6 +212,27 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Power Profile cluster (ZCL8 §3.17): `clusters::power_profile` with
+  the five attributes, codecs for every command (energy phases, profile
+  records, prices, schedules, constraints, the extended price request)
+  and a server keeping up to four profiles; the dispatcher answers Power
+  Profile Request (one response per profile), Power Profile State
+  Request, Schedule Constraints Request and Energy Phases Schedule
+  State Request, applies Energy Phases Schedule Notification / Response
+  (NOT_AUTHORIZED without remote control or activation delay, the
+  profile moving to ENERGY_PHASE_WAITING_TO_START, a schedule state
+  notification when it changed) and hands prices to the application
+  (`ZclEvent::{PowerProfilePrice, PowerProfileOverallPrice,
+  PowerProfileScheduled}`, also `StackEvent`); the application drives
+  `Zcl::{power_profile_set, power_profile_state,
+  power_profile_set_remote, power_profile_constraints,
+  power_profile_request_schedule, power_profile_get_price,
+  power_profile_get_price_extended, power_profile_get_overall_price}`.
+* Device Type Library builders `panweave::endpoints::white_goods` and,
+  with the `smart-energy` feature, `home_gateway`, `smart_plug`,
+  `meter_interface` and `consumption_awareness` (the Metering cluster
+  comes from `panweave-smart-energy`); every device type of the library
+  is now instantiable.
 * Appliance Management clusters (ZCL8 Chapter 15) and Meter
   Identification (§10.13): `clusters::appliance::{control,
   identification, events_alerts, statistics}` with their attributes,
@@ -770,6 +791,9 @@ Keep a Changelog; versions follow SemVer.
 
 ### Changed
 
+* Client cluster instances built from a server definition answer
+  Discover Commands Received / Generated for their own side
+  (`ClusterDef::mirrored`); they used to list the server's commands.
 * A factory reset keeps the outgoing NWK frame counter record (BDB 3.1
   §13) and `Stack::restore` reloads it even on a factory-new device; the
   touchlink Reset To Factory New clears persistent data only once the
