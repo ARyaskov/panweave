@@ -144,6 +144,8 @@ pub struct TraceEntry {
     pub frame: Vec<u8>,
     /// Receiving node indices.
     pub delivered_to: Vec<usize>,
+    /// The channel the frame went out on.
+    pub channel: Channel,
 }
 
 /// The simulator.
@@ -331,6 +333,13 @@ impl Simulator {
         self.medium.block(r, self.nodes[i].radio);
     }
 
+    /// Moves the stack-less radio of [`Simulator::inject`] to `channel`
+    /// (a Green Power Device toggling channels).
+    pub fn set_injector_channel(&mut self, channel: Channel) {
+        let r = self.phantom_radio();
+        self.medium.set_channel(r, channel);
+    }
+
     /// Restores the link between the injected device and node `i`.
     pub fn unblock_injector(&mut self, i: usize) {
         let r = self.phantom_radio();
@@ -392,6 +401,10 @@ impl Simulator {
                     let _ = p.write_frame(now.as_millis() * 1000, &frame);
                 }
                 let (air, targets) = self.medium.transmit(radio, &frame);
+                let air_channel = self
+                    .medium
+                    .radio(radio)
+                    .map_or(Channel::DEFAULT_2_4GHZ, |r| r.channel);
                 let mut delivered = Vec::new();
                 if let Some(air) = air {
                     for t in targets {
@@ -414,6 +427,7 @@ impl Simulator {
                         node: i,
                         frame: frame.to_vec(),
                         delivered_to: delivered,
+                        channel: air_channel,
                     });
                 }
                 self.nodes[i].stack.on_tx_complete(Ok(TxResult {

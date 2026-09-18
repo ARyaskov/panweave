@@ -174,6 +174,9 @@ pub struct Proxy<const N: usize> {
     gpdfs: Deque<GpdfTx, 2>,
     tx_queue: TxQueue<1>,
     first_to_forward: bool,
+    /// On the GPD's transmit channel as SelectedSender (§A.3.9.1 step
+    /// 8.a) rather than on the operational channel.
+    away: bool,
     events: Deque<ProxyEvent, QUEUE_CAPACITY>,
     now: Instant,
 }
@@ -190,9 +193,18 @@ impl<const N: usize> Proxy<N> {
             gpdfs: Deque::new(),
             tx_queue: TxQueue::new(),
             first_to_forward: false,
+            away: false,
             events: Deque::new(),
             now: Instant::from_millis(0),
         }
+    }
+
+    /// Tells the proxy whether it is on the GPD's transmit channel
+    /// (§A.3.9.1 steps 8.a and 9): there only a Channel Request is
+    /// served, from the gpTxQueue and without a GP Commissioning
+    /// Notification; every other GPDF is dropped.
+    pub fn set_away(&mut self, away: bool) {
+        self.away = away;
     }
 
     /// Next frame to transmit.
@@ -573,6 +585,9 @@ impl<const N: usize> Proxy<N> {
             self.on_maintenance(gpdf, command_id, link);
             return;
         }
+        if self.away {
+            return;
+        }
         let Some(gpd) = gpdf.gpd else {
             return;
         };
@@ -688,6 +703,10 @@ impl<const N: usize> Proxy<N> {
         // by a receive window from its gpTxQueue.
         if command_id == command::CHANNEL_REQUEST && !gpdf.frame_control.auto_commissioning {
             self.flush_tx_queue(&gpd);
+        }
+        if self.away {
+            // Step 9.a/b: on the transmit channel nothing is forwarded.
+            return;
         }
         let counter = u32::from(gpdf.mac_sequence);
         if self.is_duplicate(&gpd, counter) {

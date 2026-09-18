@@ -371,6 +371,43 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
             .frame_counter,
         0x12
     );
+    // A regular device announcing with the GPD's alias is an address
+    // conflict (§A.3.5.2.5): the sink re-announces the alias within
+    // Dmin + Dmax so that the device changes its address. (Alias
+    // broadcasts always carry NWK sequence number 0, so the earlier
+    // alias announcement must have left the broadcast transaction
+    // tables first.)
+    sim.run_for(Duration::from_secs(15));
+    sim.take_events(r);
+    {
+        let mut annce = [0u8; 11];
+        annce[..2].copy_from_slice(&ALIAS.0.to_le_bytes());
+        annce[2..10].copy_from_slice(&ROUTER_IEEE.0.to_le_bytes());
+        annce[10] = 0x8e;
+        sim.stack(r)
+            .zdo
+            .request(
+                ShortAddress::BROADCAST_RX_ON,
+                panweave_zdo::zdp::cluster::DEVICE_ANNCE,
+                &annce,
+            )
+            .unwrap();
+        sim.stack(r).flush();
+    }
+    assert!(
+        sim.run_until(Duration::from_secs(2), |x| {
+            x.events(r).iter().any(|e| {
+                matches!(
+                    e,
+                    StackEvent::DeviceAnnounce { short, ieee, .. }
+                        if *short == ALIAS && *ieee == ExtendedAddress::BROADCAST
+                )
+            })
+        }),
+        "r {:?} c {:?}",
+        sim.events(r),
+        sim.events(c)
+    );
     // A replay is ignored.
     sim.take_events(c);
     sim.inject(&gpdf(
@@ -918,4 +955,128 @@ fn a_multi_sensor_gpd_reports_through_its_application_description() {
             ..
         }
     )));
+}
+
+/// A maintenance Channel Request GPDF announcing `next` as the channel of
+/// the next attempt; `more` when further requests follow in this attempt.
+fn channel_request_gpdf(seq: u8, next: u8, more: bool) -> Vec<u8> {
+    let body = [
+        if more { 0x4D } else { 0x0D },
+        command::CHANNEL_REQUEST,
+        panweave_green_power::commissioning::channel_to_nibble(next)
+            | (panweave_green_power::commissioning::channel_to_nibble(next + 5) << 4),
+    ];
+    let mut frame = [0u8; 32];
+    let n = MacFrame {
+        header: mac_header(
+            seq,
+            MacAddress::Short(ShortAddress(0xffff)),
+            MacAddress::None,
+        ),
+        payload: &body,
+    }
+    .encode_to_slice(&mut frame)
+    .unwrap();
+    frame[..n].to_vec()
+}
+
+#[test]
+fn the_selected_sender_delivers_the_channel_configuration_on_the_gpd_channel() {
+    let mut sim = Simulator::new();
+    let c = sim.add_stack(
+        "sink",
+        node(LogicalDeviceType::Coordinator, COORD_IEEE, 71),
+        Box::new(OnOffApp::default()),
+    );
+    let r = sim.add_stack(
+        "proxy",
+        node(LogicalDeviceType::Router, ROUTER_IEEE, 72),
+        Box::new(OnOffApp::default()),
+    );
+    sim.stack(c)
+        .enable_green_power_sink(SinkOptions::default())
+        .unwrap();
+    sim.stack(r).enable_green_power_proxy().unwrap();
+    sim.stack(c)
+        .form_network_with_key(NETWORK_KEY.clone())
+        .unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(c)
+            .iter()
+            .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(c).permit_join_network(180).unwrap();
+    sim.stack(r).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        x.events(r)
+            .iter()
+            .any(|e| matches!(e, StackEvent::Joined { .. }))
+    }));
+    sim.run_for(Duration::from_secs(3));
+    sim.stack(c)
+        .green_power_commission(true, Some(Duration::from_secs(60)))
+        .unwrap();
+    sim.run_for(Duration::from_secs(2));
+    sim.block_injector(c);
+    let operational = sim.stack_ref(c).green_power_channel();
+    let next = operational + 4;
+    // The GPD's Channel Request on the operational channel reaches the
+    // sink through the proxy; the sink appoints the proxy SelectedSender
+    // on the GPD's next channel and the proxy switches there.
+    sim.inject(&channel_request_gpdf(1, next, true));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.stack_ref(r).green_power_channel() == next
+    }));
+    assert!(
+        sim.stack_ref(r)
+            .green_power_proxy_ref()
+            .unwrap()
+            .is_first_to_forward()
+    );
+    // The GPD's last Channel Request of the attempt, on that channel, is
+    // answered with the Channel Configuration GPDF there; the proxy then
+    // returns to the operational channel.
+    sim.set_injector_channel(panweave_types::Channel::new(next).unwrap());
+    sim.trace_enabled = true;
+    sim.inject(&channel_request_gpdf(2, next, false));
+    sim.run_for(Duration::from_secs(1));
+    let config = sim
+        .trace
+        .iter()
+        .filter(|t| t.node == r)
+        .find_map(|t| {
+            let m = MacFrame::decode_exact(&t.frame).ok()?;
+            let p = m.payload;
+            (p.len() == 3 && p[0] == 0x0D && p[1] == command::CHANNEL_CONFIGURATION)
+                .then_some((t.channel, p[2]))
+        })
+        .expect("Channel Configuration GPDF from the proxy");
+    assert_eq!(config.0.raw(), next);
+    assert_eq!(
+        config.1,
+        panweave_green_power::commissioning::channel_to_nibble(operational) | 0x10
+    );
+    assert_eq!(sim.stack_ref(r).green_power_channel(), operational);
+    // The Channel Request on the GPD's channel was answered once and not
+    // forwarded (step 9.b): the only GPDF on that channel is the
+    // Channel Configuration (NWK broadcast retries of the earlier
+    // notification may still leave while the proxy is away).
+    let gpdfs_on_next = sim
+        .trace
+        .iter()
+        .filter(|t| t.node == r && t.channel.raw() == next)
+        .filter(|t| {
+            MacFrame::decode_exact(&t.frame)
+                .is_ok_and(|m| m.payload.first().is_some_and(|b| b & 0x0f == 0x0d))
+        })
+        .count();
+    assert_eq!(gpdfs_on_next, 1);
+    // A SelectedSender that hears nothing comes back after 5 s.
+    sim.set_injector_channel(panweave_types::Channel::new(operational).unwrap());
+    sim.inject(&channel_request_gpdf(3, next, true));
+    assert!(sim.run_until(Duration::from_secs(5), |x| {
+        x.stack_ref(r).green_power_channel() == next
+    }));
+    sim.run_for(Duration::from_secs(6));
+    assert_eq!(sim.stack_ref(r).green_power_channel(), operational);
 }

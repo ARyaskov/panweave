@@ -306,6 +306,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     capability,
                     ..
                 }) => {
+                    #[cfg(feature = "green-power")]
+                    self.on_green_power_announce(ieee, short);
                     self.push_event(StackEvent::DeviceAnnounce {
                         ieee,
                         short,
@@ -1735,6 +1737,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     joiner_tlvs,
                     ..
                 } => {
+                    #[cfg(feature = "green-power")]
+                    self.on_green_power_announce(device, short);
                     self.trust_center_authorize(device, short, status, Some(src), &joiner_tlvs);
                 }
                 ApsEvent::RemoveDevice { target, .. } => {

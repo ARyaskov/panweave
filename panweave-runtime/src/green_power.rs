@@ -19,7 +19,7 @@ use panweave_green_power::cluster::{
 use panweave_green_power::description::CompactReport;
 use panweave_green_power::gpdf::{GpdId, Gpdf};
 use panweave_green_power::proxy::{
-    Destination, Outgoing, PairingError, Proxy, ProxyConfig, ProxyEvent,
+    DMIN_UNIDIRECTIONAL, Destination, Outgoing, PairingError, Proxy, ProxyConfig, ProxyEvent,
 };
 use panweave_green_power::proxy_table::{ProxyEntry, ProxyTable};
 use panweave_green_power::security::KeyType;
@@ -111,7 +111,25 @@ pub struct GreenPower<C: BlockCipher> {
     endpoints: Vec<Endpoint, SINK_ENDPOINTS>,
     /// Per-GPD endpoint lists set by GP Pairing Configuration.
     pairings: Vec<(GpdId, Vec<u8, 8>), SINK_TABLE_ENTRIES>,
+    /// Aliases a regular device announced with (§A.3.6.3.4.2): the
+    /// alias Device_annce that forces it to change its address is due
+    /// at the instant, unless another device announces the alias first.
+    alias_conflicts: Vec<(ShortAddress, Instant), 4>,
+    /// The SelectedSender's excursion to the GPD's transmit channel
+    /// (§A.3.9.1 step 8.a): the channel and when to return to the
+    /// operational channel.
+    excursion: Option<(u8, Instant)>,
 }
+
+/// The longest delay before an alias conflict announcement (Dmax,
+/// §A.3.6.3.1); the shortest is Dmin.
+const DMAX: Duration = Duration::from_millis(100);
+/// How long a SelectedSender waits on the transmit channel for the
+/// GPD's Channel Request (§A.3.9.1 step 8.a).
+const EXCURSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Time left on the transmit channel after the Channel Configuration
+/// was handed to the MAC, for it to go out before the switch back.
+const EXCURSION_TAIL: Duration = Duration::from_millis(50);
 
 impl<C: BlockCipher> GreenPower<C> {
     /// Earliest pending transmission or timer.
@@ -130,6 +148,10 @@ impl<C: BlockCipher> GreenPower<C> {
         for g in &self.gpdfs {
             consider(Some(g.not_before));
         }
+        for (_, at) in &self.alias_conflicts {
+            consider(Some(*at));
+        }
+        consider(self.excursion.map(|(_, at)| at));
         consider(self.proxy.next_deadline());
         if let Some(s) = &self.sink {
             consider(s.next_deadline());
@@ -296,6 +318,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             gpdfs: Vec::new(),
             endpoints: Vec::new(),
             pairings: Vec::new(),
+            alias_conflicts: Vec::new(),
+            excursion: None,
         };
         if let Ok(table) = restore_proxy_table(&mut self.storage) {
             gp.proxy.table = table;
@@ -417,6 +441,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             return false;
         };
         let unicast = !origin.broadcast;
+        let mut switch_to = None;
         let status = match origin.header.control.direction {
             Direction::ToClient => match origin.header.command {
                 gp_cluster::server_cmd::PAIRING => match Pairing::decode_exact(payload) {
@@ -447,6 +472,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 gp_cluster::server_cmd::RESPONSE => match Response::decode_exact(payload) {
                     Ok(r) => {
                         gp.proxy.on_response(&r);
+                        if r.selected_sender == self.nwk.nib.network_address
+                            && r.tx_channel != self.nwk.nib.channel.raw()
+                        {
+                            switch_to = Some(r.tx_channel);
+                        }
                         ZclStatus::Success
                     }
                     Err(_) => ZclStatus::MalformedCommand,
@@ -517,6 +547,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
             }
         };
+        if let Some(channel) = switch_to {
+            self.green_power_excursion(channel);
+        }
         // Pairing errors are reported as Default Responses (§A.3.5.2.3).
         let mut rejected = None;
         self.pump_green_power_events(&mut rejected);
@@ -913,12 +946,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         let channel = self.nwk.nib.channel.raw();
         for g in due_gpdfs {
-            // TODO(PW-GP-CHANNEL): a SelectedSender appointed for another
-            // channel would switch to it for 5 s (§A.3.9.1 steps 8–9);
-            // the stub stays on the operational channel. Spec: GP Basic
-            // 1.1.2 §A.3.9.1.
-            if g.channel.is_some_and(|c| c != channel) {
-                continue;
+            // A GPDF for the GPD's transmit channel goes out only while
+            // the SelectedSender is there (§A.3.9.1 step 9); the return
+            // to the operational channel follows shortly after.
+            if let Some(c) = g.channel.filter(|c| *c != channel) {
+                let there = self
+                    .green_power
+                    .as_ref()
+                    .and_then(|gp| gp.excursion)
+                    .is_some_and(|(e, _)| e == c);
+                if !there {
+                    continue;
+                }
+                if let Some(gp) = self.green_power.as_mut() {
+                    gp.excursion = Some((c, now.saturating_add(EXCURSION_TAIL)));
+                }
             }
             let _ = self.mac.data_request_inter_pan(
                 PanId::BROADCAST,
@@ -933,13 +975,116 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Timers of the proxy and the sink (commissioning windows, duplicate
     /// filters, tunnelling delays, gpTxOffset).
     pub(crate) fn poll_green_power(&mut self, now: Instant) {
+        let mut due: Vec<ShortAddress, 4> = Vec::new();
         if let Some(gp) = self.green_power.as_mut() {
             gp.proxy.poll(now);
             if let Some(s) = gp.sink.as_mut() {
                 s.poll(now);
             }
+            gp.alias_conflicts.retain(|(alias, at)| {
+                if now.has_reached(*at) {
+                    let _ = due.push(*alias);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        for alias in due {
+            self.announce_alias(alias);
+        }
+        let back = self
+            .green_power
+            .as_ref()
+            .and_then(|gp| gp.excursion)
+            .is_some_and(|(_, until)| now.has_reached(until));
+        if back {
+            if let Some(gp) = self.green_power.as_mut() {
+                gp.excursion = None;
+                gp.proxy.set_away(false);
+            }
+            let page = self.nwk.nib.channel_page;
+            let channel = self.nwk.nib.channel;
+            self.mac.set_channel(page, channel);
         }
         self.pump_green_power();
+    }
+
+    /// The SelectedSender switches to the GPD's transmit channel for up
+    /// to 5 s, listening for the Channel Request its gpTxQueue answers
+    /// (§A.3.9.1 step 8.a); the stack is away from the operational
+    /// channel meanwhile.
+    fn green_power_excursion(&mut self, channel: u8) {
+        let Some(target) = panweave_types::Channel::new(channel) else {
+            return;
+        };
+        let Some(gp) = self.green_power.as_mut() else {
+            return;
+        };
+        gp.excursion = Some((channel, self.now.saturating_add(EXCURSION_TIMEOUT)));
+        gp.proxy.set_away(true);
+        let page = self.nwk.nib.channel_page;
+        self.mac.set_channel(page, target);
+    }
+
+    /// The channel the Green Power stub is on: the transmit channel of
+    /// a SelectedSender excursion, else the operational channel.
+    pub fn green_power_channel(&self) -> u8 {
+        self.green_power
+            .as_ref()
+            .and_then(|gp| gp.excursion)
+            .map_or(self.nwk.nib.channel.raw(), |(c, _)| c)
+    }
+
+    /// Whether `short` is an alias this device uses on behalf of a GPD
+    /// (the derived or assigned alias of a Proxy Table entry, the alias
+    /// or group alias of a Sink Table entry).
+    fn is_gpd_alias(&self, short: ShortAddress) -> bool {
+        let Some(gp) = self.green_power.as_ref() else {
+            return false;
+        };
+        gp.proxy.table.iter().any(|e| e.alias() == short)
+            || gp.sink.as_ref().is_some_and(|s| {
+                s.table.iter().any(|e| {
+                    e.alias() == short
+                        || e.groups
+                            .iter()
+                            .any(|(_, alias)| e.group_alias(*alias) == short)
+                })
+            })
+    }
+
+    /// A Device_annce or Update Device named `short` for `ieee`
+    /// (§A.3.5.2.3, §A.3.5.2.5): a regular device announcing with one
+    /// of this device's GPD aliases is an address conflict, answered
+    /// after a delay of Dmin to Dmax with a Device_annce for the alias
+    /// (§A.3.6.3.4.2) that makes it change its address; an alias
+    /// announcement by another proxy or sink in the meantime cancels
+    /// ours. The alias itself is never changed.
+    pub(crate) fn on_green_power_announce(&mut self, ieee: ExtendedAddress, short: ShortAddress) {
+        if self.green_power.is_none() {
+            return;
+        }
+        if ieee == ExtendedAddress::BROADCAST {
+            // An alias announcement (ours or a peer's): nothing to force.
+            if let Some(gp) = self.green_power.as_mut() {
+                gp.alias_conflicts.retain(|(a, _)| *a != short);
+            }
+            return;
+        }
+        if !self.is_gpd_alias(short) {
+            return;
+        }
+        let spread = u64::from(self.nwk.rng().next_u32()) % DMAX.as_millis().saturating_add(1);
+        let at = self
+            .now
+            .saturating_add(DMIN_UNIDIRECTIONAL)
+            .saturating_add(Duration::from_millis(spread));
+        if let Some(gp) = self.green_power.as_mut()
+            && !gp.alias_conflicts.iter().any(|(a, _)| *a == short)
+        {
+            let _ = gp.alias_conflicts.push((short, at));
+        }
     }
 
     fn send_green_power(&mut self, o: &Outgoing) {

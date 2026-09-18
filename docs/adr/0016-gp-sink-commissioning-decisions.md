@@ -70,8 +70,26 @@ them, and a few frame-level details are not spelled out either.
    the operational channel (Auto-Commissioning clear on that request); it
    never leaves the operational channel. Through a proxy it appoints the
    proxy as SelectedSender on the GPD's announced next channel (GP
-   Response). A GPD that cycles through the channels reaches the
-   operational one within its attempts.
+   Response); the appointed proxy switches to that channel for up to 5 s
+   (step 8.a), serves only the Channel Request there from its gpTxQueue
+   (step 9, no GP Commissioning Notification) and returns to the
+   operational channel 50 ms after handing the Channel Configuration to
+   the MAC, or on the timeout. Regular network traffic the stack sends
+   meanwhile (for example the retries of an earlier broadcast) leaves on
+   the GPD's channel: the specification accepts the SelectedSender's
+   absence from the operational channel. A GPD that only ever listens on
+   the operational channel is served by the sink directly.
+
+8. **Alias address conflicts** (§A.3.5.2.3, §A.3.5.2.5): a Device_annce
+   or Update Device naming one of this device's GPD aliases (derived or
+   assigned, proxy or sink side, including commissioned-group aliases)
+   for a real IEEE address is answered after Dmin + RAND(Dmax) with the
+   alias Device_annce of §A.3.6.3.4.2, unless an alias announcement for
+   that address arrives first. Alias broadcasts always carry NWK
+   sequence number 0, so a conflict announcement within the broadcast
+   transaction persistence time of the previous alias announcement is
+   suppressed as a duplicate by the neighbours; the alias is never
+   changed.
 
 ## Consequences
 

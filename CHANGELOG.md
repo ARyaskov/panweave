@@ -212,6 +212,17 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Green Power (GP 1.1.2): the SelectedSender proxy switches to the GPD's
+  transmit channel for up to 5 s after a GP Response for another
+  channel, answers the Channel Request there with the queued Channel
+  Configuration GPDF without forwarding it, and returns to the
+  operational channel (§A.3.9.1 steps 8–9; `Stack::green_power_channel`,
+  `Proxy::set_away`); a Device_annce / Update Device naming a GPD alias
+  of this proxy or sink for a real device is answered with the alias
+  Device_annce after Dmin + RAND(Dmax) (§A.3.5.2.3, §A.3.5.2.5). The
+  simulator records the transmit channel in its trace
+  (`TraceEntry::channel`) and moves the injected radio with
+  `Simulator::set_injector_channel`.
 * Metering attribute sets (SE 1.4a Annex D.3.2.2): `metering::{tou,
   load_profile, supply_limit, block, alarm, billing, supply_control,
   alternative}` give the TOU tier and block summation identifiers (as
