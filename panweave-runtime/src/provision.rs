@@ -173,6 +173,36 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.resume()
     }
 
+    /// Whether the Trust Center link key is still provisional (not yet
+    /// verified through an update).
+    pub fn trust_center_link_key_is_provisional(&self) -> bool {
+        let tc = self.aps.aib.trust_center_address;
+        !self.aps.aib.is_distributed()
+            && self
+                .aps
+                .security
+                .entry(tc)
+                .is_some_and(|e| e.attributes == KeyAttributes::ProvisionalKey)
+    }
+
+    /// Runs the On-Network TCLK Update procedure (BDB 3.1 §10.2.4) on
+    /// demand, e.g. after an out-of-band join with a provisional key
+    /// (ZD 1.1 §7.7.2.7.4); the outcome is `StackEvent::LinkKeyUpdated`,
+    /// `LinkKeyUpdateSkipped` or `LinkKeyUpdateFailed`. Only on an
+    /// operating centralized network with no update in flight.
+    pub fn update_trust_center_link_key(&mut self) -> Result<(), NwkStatus> {
+        if self.phase != Phase::Operating
+            || self.aps.aib.is_distributed()
+            || self.tclk_update.is_some()
+        {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let tc = self.aps.aib.trust_center_address;
+        self.start_tclk_update(tc);
+        self.pump();
+        Ok(())
+    }
+
     /// Leaves the network, optionally taking the children along
     /// (NLME-LEAVE.request with RemoveChildren).
     pub fn leave_with(&mut self, rejoin: bool, remove_children: bool) -> Result<(), NwkStatus> {

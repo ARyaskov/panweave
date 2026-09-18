@@ -65,6 +65,9 @@ pub enum Kind {
     /// Zigbee Direct interface configuration (ZD 1.1 §11.3.5.4): the
     /// interface state and the Anonymous Join Timeout.
     DirectConfig,
+    /// The Admin key a ZVD provisioned into a ZDD (ZD 1.1 §6.3.2.1);
+    /// kept until a factory reset.
+    DirectAdminKey,
 }
 
 /// A record key.

@@ -311,6 +311,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             {
                 self.direct_on_configured(&e);
                 self.direct_on_aware_answer(&e);
+                self.direct_on_tclk_update(&e);
             }
             #[cfg(feature = "direct")]
             if let StackEvent::NetworkKeySwitched { previous, .. } = &e {
@@ -345,6 +346,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         self.restore_direct_past_keys()?;
         #[cfg(feature = "direct")]
         self.restore_direct_config()?;
+        #[cfg(feature = "direct")]
+        self.restore_direct_admin_key()?;
         if restored == Restored::OnNetwork {
             self.bdb.set_on_network(true);
             if self.stack.config.role == LogicalDeviceType::EndDevice {
@@ -428,6 +431,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         self.stack.flush();
         self.bdb.set_on_network(false);
         self.stack.erase_persisted()?;
+        #[cfg(feature = "direct")]
+        {
+            self.direct = direct::DirectState::default();
+        }
         self.collect();
         Ok(())
     }
@@ -469,6 +476,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         // commissioning procedure runs.
         self.stack.set_fast_polling(self.bdb.is_busy());
         self.stack.poll(now);
+        #[cfg(feature = "direct")]
+        self.direct_poll(now);
         if let Some(o) = self.bdb.poll(&mut self.stack, now) {
             #[cfg(feature = "direct")]
             if let Some(d) = self.direct_bdb_outcome(o) {

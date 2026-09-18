@@ -324,6 +324,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Kind::Groups,
             Kind::GreenPower,
             Kind::DirectPastKeys,
+            Kind::DirectConfig,
+            Kind::DirectAdminKey,
             Kind::StartupSets,
         ] {
             self.storage.erase_kind(k)?;

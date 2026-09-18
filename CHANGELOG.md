@@ -212,6 +212,18 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Zigbee Direct out-of-band join follow-up (ZD 1.1 §7.7.2.7.4) and the
+  Admin key hand-off (§6.3.2.1): `Stack::update_trust_center_link_key`
+  runs the On-Network TCLK Update procedure on demand and
+  `Stack::trust_center_link_key_is_provisional` reports the key state;
+  a ZDD adopted with a provisional Trust Center link key updates it once
+  on the network, stays on the network when the Trust Center is out of
+  reach and retries every `TCLK_UPDATE_RETRY`
+  (`Node::direct_tclk_update_pending`); `Node::admin_key_for(zvd)` is
+  the provisioned Admin key (`Kind::DirectAdminKey`, restored by
+  `initialize`, erased by a factory reset) or the key derived from the
+  active TCLK on a centralized network. A factory reset now also erases
+  `Kind::DirectConfig` and resets the Zigbee Direct state.
 * Zigbee Direct Configuration cluster 0x003D (ZD 1.1 §11.3) and the ZDD
   interface state: `panweave_zcl::clusters::direct_configuration`
   (`InterfaceState`, `AnonymousJoinTimeout`, Configure Zigbee Direct

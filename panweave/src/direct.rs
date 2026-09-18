@@ -69,6 +69,10 @@ pub struct DirectState {
     pub trust_center_aware: Option<bool>,
     /// The ZDP transaction of the awareness check in flight.
     aware_seq: Option<panweave_types::TransactionSequence>,
+    /// A Trust Center link key update owed after an out-of-band join
+    /// with a provisional key (§7.7.2.7.4): retried at this time until
+    /// the key is verified; the ZDD never leaves over it.
+    tclk_update_retry: Option<panweave_types::time::Instant>,
 }
 
 impl Default for DirectState {
@@ -86,9 +90,20 @@ impl Default for DirectState {
             anonymous_join_until: None,
             trust_center_aware: None,
             aware_seq: None,
+            tclk_update_retry: None,
         }
     }
 }
+
+/// How long the ZDD waits before retrying the Trust Center link key
+/// update owed after an out-of-band join (§7.7.2.7.4 asks for a retry
+/// "when a connection with the TC is available"; the interval is an
+/// implementation choice).
+pub const TCLK_UPDATE_RETRY: panweave_types::time::Duration =
+    panweave_types::time::Duration::from_secs(60);
+
+/// Format octet of the `Kind::DirectAdminKey` record.
+const DIRECT_ADMIN_KEY_FORMAT: u8 = 1;
 
 /// Past network keys kept for Limited Authorization sessions.
 pub const PAST_NETWORK_KEYS: usize = 4;
@@ -255,6 +270,97 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 self.direct.trust_center_aware = Some(false);
             }
             _ => {}
+        }
+    }
+
+    /// The Admin authorization key of `zvd` (§6.3.2.1): the key a ZVD
+    /// provisioned with the network parameters when there is one,
+    /// otherwise the key derived from the active Trust Center link key
+    /// on a centralized network; `None` on a distributed network without
+    /// a provisioned key (no admin access, §7.7.2.7.1).
+    pub fn admin_key_for(&self, zvd: ExtendedAddress) -> Option<Key128> {
+        if let Some(k) = &self.direct.admin_key {
+            return Some(k.clone());
+        }
+        if self.stack.config.distributed || !self.stack.is_operating() {
+            return None;
+        }
+        let tc = self.stack.aps.aib.trust_center_address;
+        self.stack
+            .aps
+            .security
+            .entry(tc)
+            .map(|e| panweave_direct::auth::admin_key::<C>(zvd, &e.key))
+    }
+
+    /// Keeps the Admin key of a Form / Join Network write: a provided
+    /// key is stored until a factory reset (§6.3.2.1); a write without
+    /// one leaves an earlier key alone.
+    fn store_admin_key(&mut self, key: Option<&Key128>) {
+        if let Some(k) = key {
+            self.direct.admin_key = Some(k.clone());
+            let mut buf = [0u8; 17];
+            buf[0] = DIRECT_ADMIN_KEY_FORMAT;
+            buf[1..].copy_from_slice(k.as_bytes());
+            let _ = self
+                .stack
+                .storage
+                .store(Key::single(Kind::DirectAdminKey), &buf);
+        }
+    }
+
+    /// Restores the provisioned Admin key (part of warm start).
+    pub fn restore_direct_admin_key(&mut self) -> Result<(), StorageError> {
+        let mut buf = [0u8; 17];
+        if let Some(n) = self
+            .stack
+            .storage
+            .load(Key::single(Kind::DirectAdminKey), &mut buf)?
+            && n == 17
+            && buf[0] == DIRECT_ADMIN_KEY_FORMAT
+        {
+            let mut k = [0u8; 16];
+            k.copy_from_slice(&buf[1..]);
+            self.direct.admin_key = Some(Key128::from_bytes(k));
+        }
+        Ok(())
+    }
+
+    /// Starts (or retries) the Trust Center link key update owed after
+    /// an out-of-band join with a provisional key (§7.7.2.7.4).
+    fn direct_start_tclk_update(&mut self) {
+        let now = self.stack.now();
+        self.direct.tclk_update_retry = Some(now + TCLK_UPDATE_RETRY);
+        let _ = self.stack.update_trust_center_link_key();
+    }
+
+    /// Whether a Trust Center link key update is still owed.
+    pub fn direct_tclk_update_pending(&self) -> bool {
+        self.direct.tclk_update_retry.is_some()
+    }
+
+    /// The outcome of the owed link key update: verified or skipped
+    /// closes it; a failure keeps the retry; leaving drops it.
+    pub(crate) fn direct_on_tclk_update(&mut self, event: &StackEvent) {
+        match event {
+            StackEvent::LinkKeyUpdated
+            | StackEvent::LinkKeyUpdateSkipped { .. }
+            | StackEvent::Left { .. } => self.direct.tclk_update_retry = None,
+            _ => {}
+        }
+    }
+
+    /// Retries the owed link key update when its time has come and the
+    /// key is still provisional.
+    pub(crate) fn direct_poll(&mut self, now: panweave_types::time::Instant) {
+        if let Some(at) = self.direct.tclk_update_retry
+            && now.has_reached(at)
+        {
+            if self.stack.is_operating() && self.stack.trust_center_link_key_is_provisional() {
+                self.direct_start_tclk_update();
+            } else {
+                self.direct.tclk_update_retry = None;
+            }
         }
     }
 
@@ -519,7 +625,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
         if let Some(lk) = &p.link_key {
             self.install_direct_link_key(None, lk);
         }
-        self.direct.admin_key.clone_from(&p.admin_key);
+        self.store_admin_key(p.admin_key.as_ref());
         let params = FormationParams {
             key: p.network_key.clone(),
             extended_pan_id: p.extended_pan_id,
@@ -542,7 +648,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
         if let Some(lk) = &p.link_key {
             self.install_direct_link_key(p.trust_center, lk);
         }
-        self.direct.admin_key.clone_from(&p.admin_key);
+        self.store_admin_key(p.admin_key.as_ref());
         let channels = p.channels.unwrap_or(self.stack.config.channels);
         let duration = self.stack.config.scan_duration;
         let attempts = self.stack.config.zdo.scan_attempts;
@@ -591,6 +697,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
                     trust_center: p.trust_center.unwrap_or(ExtendedAddress::BROADCAST),
                 };
                 let r = self.stack.adopt_network(&params);
+                // §7.7.2.7.4: a provisional Trust Center link key is
+                // updated once on the network, retried while the Trust
+                // Center is out of reach, never a reason to leave.
+                if r.is_ok()
+                    && !self.stack.config.distributed
+                    && self.stack.trust_center_link_key_is_provisional()
+                {
+                    self.direct_start_tclk_update();
+                }
                 if r.is_ok() && self.stack.is_operating() {
                     // Routers are on the network at once; end devices
                     // report once their rejoin completes.

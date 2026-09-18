@@ -1009,3 +1009,179 @@ fn the_trust_center_configures_the_zdd_interface() {
     assert_eq!(again.direct.anonymous_join_timeout, 120);
     assert!(again.direct.anonymous_join_until.is_some());
 }
+
+/// An out-of-band join with a provisional Trust Center link key
+/// (ZD 1.1 §7.7.2.7.4): the ZDD updates the key once on the network; when
+/// the Trust Center is out of reach it stays on the network and retries
+/// until the update succeeds. The Admin key hand-off of §6.3.2.1: the
+/// provisioned key when there is one, the key derived from the active
+/// TCLK otherwise, persisted until a factory reset.
+#[test]
+fn an_out_of_band_join_updates_a_provisional_link_key_when_the_trust_center_answers() {
+    use panweave::runtime::AdoptParams;
+    use panweave::types::KeySequenceNumber;
+    use panweave_direct::commissioning::LinkKey;
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let channel = Channel::new_2_4ghz(15).unwrap();
+    let mask = ChannelMask::EMPTY.with(channel);
+    let nwk_key = Key128::from_bytes([0x5a; 16]);
+    let epid = ExtendedAddress(0x00EE_0000_0000_0001);
+    let tc = ExtendedAddress(0x00DD_0000_0000_0001);
+    let zvd = ExtendedAddress(0x00AA_0000_0000_0001);
+
+    // The ZDD is alone on the air when it is provisioned.
+    let router = Router::new(ExtendedAddress(0x00DD_0000_0000_0003))
+        .build::<SoftwareAes, _, _>(TestRng::seed(3), MemoryStorage::new());
+    let r = w.add(router);
+    let mut zvd_r = Commissioning::new(Level::Provisioning, false);
+    let mut buf = [0u8; 160];
+    let n = JoinNetwork {
+        method: JoiningMethod::OutOfBand,
+        extended_pan_id: Some(epid),
+        pan_id: Some(PanId(0x1A62)),
+        channels: Some(mask),
+        network_key: Some(nwk_key.clone()),
+        link_key: Some(LinkKey {
+            unique: false,
+            provisional: true,
+            key: Key128::WELL_KNOWN_GLOBAL_TCLK,
+        }),
+        nwk_address: Some(ShortAddress(0x3344)),
+        trust_center: Some(tc),
+        update_id: Some(0),
+        key_sequence: Some(0),
+        admin_key: None,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_r.write(&mut w.nodes[r].0, Characteristic::JoinNetwork, &buf[..n]),
+        Access::Ok
+    );
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        direct_done(w, r, Domain::JoinNetwork) == Some(0)
+    }));
+    assert!(w.nodes[r].0.direct_tclk_update_pending());
+    assert!(w.nodes[r].0.stack.trust_center_link_key_is_provisional());
+    // No Admin key was provisioned: it derives from the (provisional)
+    // link key for now.
+    let derived_provisional = w.nodes[r].0.admin_key_for(zvd).unwrap();
+    assert_eq!(
+        derived_provisional,
+        panweave_direct::auth::admin_key::<SoftwareAes>(zvd, &Key128::WELL_KNOWN_GLOBAL_TCLK)
+    );
+    // The first attempt fails for want of a Trust Center; the ZDD stays
+    // on the network and keeps the update owed.
+    assert!(w.run_until(Duration::from_secs(60), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::LinkKeyUpdateFailed)))
+    }));
+    assert!(w.nodes[r].0.stack.is_operating());
+    assert!(w.nodes[r].0.direct_tclk_update_pending());
+    assert!(
+        !w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::Left { .. })))
+    );
+
+    // The Trust Center comes up with the same network parameters; the
+    // commissioner registered the ZDD there with its provisional key
+    // (R23.2 §4.4.1.2 step 3: the Trust Center needs a key-pair entry
+    // for the source of an APS-secured frame).
+    let mut coord =
+        Coordinator::new(tc).build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.install_link_key(
+        ExtendedAddress(0x00DD_0000_0000_0003),
+        Key128::WELL_KNOWN_GLOBAL_TCLK,
+        panweave::security::material::LinkKeyKind::Global,
+        true,
+    );
+    let c = w.add(coord);
+    w.nodes[c]
+        .0
+        .stack
+        .adopt_network(&AdoptParams {
+            extended_pan_id: epid,
+            pan_id: PanId(0x1A62),
+            channel,
+            network_address: None,
+            key: nwk_key.clone(),
+            key_sequence: KeySequenceNumber(0),
+            update_id: 0,
+            trust_center: tc,
+        })
+        .unwrap();
+    w.nodes[r].2.clear();
+    // The retry finds it: the link key is updated and verified.
+    assert!(w.run_until(Duration::from_secs(180), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::LinkKeyUpdated)))
+    }));
+    assert!(!w.nodes[r].0.direct_tclk_update_pending());
+    assert!(!w.nodes[r].0.stack.trust_center_link_key_is_provisional());
+    // The derived Admin key follows the active TCLK.
+    let derived = w.nodes[r].0.admin_key_for(zvd).unwrap();
+    assert_ne!(derived, derived_provisional);
+    let tclk = w.nodes[r]
+        .0
+        .stack
+        .aps
+        .security
+        .entry(tc)
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(
+        derived,
+        panweave_direct::auth::admin_key::<SoftwareAes>(zvd, &tclk)
+    );
+
+    // A provisioned Admin key wins and survives a restart; a factory
+    // reset forgets it.
+    let admin = Key128::from_bytes([0x77; 16]);
+    let mut other: N = Router::new(ExtendedAddress(0x00DD_0000_0000_0004))
+        .build::<SoftwareAes, _, _>(TestRng::seed(4), MemoryStorage::new());
+    let mut zvd_o = Commissioning::new(Level::Provisioning, false);
+    let n = JoinNetwork {
+        method: JoiningMethod::OutOfBand,
+        extended_pan_id: Some(epid),
+        pan_id: Some(PanId(0x1A62)),
+        channels: Some(mask),
+        network_key: Some(nwk_key.clone()),
+        link_key: None,
+        nwk_address: Some(ShortAddress(0x3355)),
+        trust_center: Some(tc),
+        update_id: Some(0),
+        key_sequence: Some(0),
+        admin_key: Some(admin.clone()),
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_o.write(&mut other, Characteristic::JoinNetwork, &buf[..n]),
+        Access::Ok
+    );
+    assert_eq!(other.admin_key_for(zvd), Some(admin.clone()));
+    let storage = other.stack.storage.clone();
+    let mut again = Router::new(ExtendedAddress(0x00DD_0000_0000_0004))
+        .build::<SoftwareAes, _, _>(TestRng::seed(5), storage);
+    again.restore_direct_admin_key().unwrap();
+    assert_eq!(again.direct.admin_key, Some(admin));
+    other.factory_reset().unwrap();
+    assert_eq!(other.admin_key_for(zvd), None);
+    let mut fresh = Router::new(ExtendedAddress(0x00DD_0000_0000_0004))
+        .build::<SoftwareAes, _, _>(TestRng::seed(6), other.stack.storage.clone());
+    fresh.restore_direct_admin_key().unwrap();
+    assert_eq!(fresh.direct.admin_key, None);
+}
