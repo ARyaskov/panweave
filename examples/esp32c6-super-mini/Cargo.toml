@@ -1,0 +1,39 @@
+[package]
+name = "panweave-esp32c6"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "Panweave Zigbee 4.0 on the ESP32-C6 Super Mini: the radio, flash, RNG and clock adapters, and example firmware"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+panweave = { path = "../../panweave", default-features = false, features = ["crypto-software"] }
+panweave-runtime = { path = "../../panweave-runtime", default-features = false }
+panweave-storage = { path = "../../panweave-storage", default-features = false, features = ["nor-flash"] }
+esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
+esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c6", "ieee802154", "unstable"] }
+esp-storage = { version = "0.10.0", features = ["esp32c6", "bytewise-read", "embedded-storage"] }
+esp-alloc = { version = "0.11.0", features = ["esp32c6"] }
+esp-backtrace = { version = "0.20.0", features = ["esp32c6", "panic-handler", "println"] }
+esp-println = { version = "0.18.0", features = ["esp32c6"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c6"] }
+heapless = { version = "0.9", default-features = false }
+embedded-storage = "0.3.1"
+
+[features]
+default = []
+# Green Power Basic Proxy on the router firmware.
+green-power = ["panweave-runtime/green-power"]
+# Smaller ZCL tables (docs/footprint.md).
+small-tables = ["panweave/small-tables"]
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true
+incremental = false
+
+[profile.dev]
+opt-level = 1

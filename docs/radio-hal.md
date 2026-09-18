@@ -51,5 +51,5 @@ Both are `async` traits using `core::future::Future`, so any executor works.
 | Simulated medium | `panweave-sim` | reference |
 | Loopback / recorded | `panweave-testkit` | reference |
 | Host RCP over serial/USB | planned (`panweave-rcp`) | tracked |
-| ESP32-C6/H2 (`esp-ieee802154`) | example adapter | tracked |
+| ESP32-C6 (`esp-radio`) | `examples/esp32c6-super-mini` (`docs/esp32c6.md`) | adapter + four firmware images |
 | nRF52/nRF54 | example adapter | tracked |

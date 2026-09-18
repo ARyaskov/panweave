@@ -23,7 +23,7 @@ members = [
     "panweave-cli",
     "xtask",
 ]
-exclude = ["fuzz", "examples/esp32c6-temperature-sensor", "examples/size-probe"]
+exclude = ["fuzz", "examples/esp32c6-super-mini", "examples/size-probe"]
 
 [workspace.package]
 version = "0.1.0"

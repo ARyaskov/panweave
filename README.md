@@ -83,6 +83,7 @@ cargo test --workspace
 cargo xtask gate      # fmt, clippy, tests, no_std builds, conformance
 cargo bench -p panweave-security --bench crypto   # see docs/performance.md
 cd examples/size-probe && cargo build --release   # Cortex-M footprint, see docs/footprint.md
+cd examples/esp32c6-super-mini && cargo run --release --bin coordinator   # real radio, see docs/esp32c6.md
 cargo fuzz list       # fuzz targets (cargo install cargo-fuzz)
 ```
 

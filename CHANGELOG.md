@@ -1047,6 +1047,22 @@ Keep a Changelog; versions follow SemVer.
   `Node` (stack + commissioning machine) with the BDB initialization
   procedure, ready-made endpoints, the `two_nodes` example and an
   end-to-end facade test.
+* `examples/esp32c6-super-mini` (`docs/esp32c6.md`): Panweave on real
+  hardware — the ESP32-C6 Super Mini's 802.15.4 radio through
+  `esp-radio` (`Radio` executing the stack's `MacAction`s with hardware
+  acknowledgements and address filtering, the driver's PIB-at-next-frame
+  behaviour bridged by a self-addressed flush frame), the TRNG as
+  `CryptoRng`, the eFuse MAC as IEEE address, the on-chip flash as
+  `Storage`, a `Runner` loop; firmware images for a coordinator, a
+  router On/Off Light, an On/Off switch and a temperature sensor, joined
+  and bound with the BOOT button; an `esp32c6` CI job builds them.
+* `panweave_storage::nor_flash::NorFlashStore` (feature `nor-flash`): a
+  log-structured `Storage` on any `embedded-storage` NOR flash — two
+  halves of whole sectors, CRC-checked records, compaction with an
+  atomic switch (the new half's header is written last), torn records
+  skipped; `Kind::code` / `Kind::from_code` give record kinds a stable
+  on-medium code. Tested on the host against a RAM flash with real NOR
+  semantics and simulated power loss.
 * `docs/footprint.md`: the ROM / RAM budget of a router on a Cortex-M4F
   with a size probe (`examples/size-probe`, a bare-metal binary linking
   the facade `Node`), `scripts/elf_size.py` to read it (totals and the
