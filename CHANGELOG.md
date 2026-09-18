@@ -212,6 +212,8 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* `panweave::endpoints::validate_for` accepts a sleepy device without
+  the Groups and Scenes servers (DTL §1.11.1).
 * RSSI Location cluster (ZCL8 §3.13): `clusters::rssi_location` with
   the Location Information and Location Settings attributes, codecs
   for every command (absolute location, device configuration and its

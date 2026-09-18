@@ -590,16 +590,33 @@ pub type Deficiencies = Vec<Deficiency, 32>;
 /// from the instance check (the stack adds it). Clusters without known
 /// requirements only need an instance. At most 32 deficiencies are kept.
 pub fn validate(desc: &SimpleDescriptor, ep: &EndpointInstance<12, 36>) -> Deficiencies {
+    validate_for(desc, ep, false)
+}
+
+/// [`validate`] for a device of a given sleepiness: a sleepy device
+/// that cannot receive broadcasts or groupcasts may leave out the
+/// otherwise mandatory Groups and Scenes servers (DTL §1.11.1), so
+/// those are not reported missing when `sleepy`.
+pub fn validate_for(
+    desc: &SimpleDescriptor,
+    ep: &EndpointInstance<12, 36>,
+    sleepy: bool,
+) -> Deficiencies {
     let mut out = Deficiencies::new();
     match DeviceType::lookup(desc.device) {
         Some(dt) => {
             let mut missing = [(ClusterId(0), Side::Server); 32];
             let n = dt.missing(&desc.input_clusters, &desc.output_clusters, &mut missing);
             for (cluster, side) in missing.iter().take(n) {
-                let _ = out.push(Deficiency::MissingCluster {
-                    cluster: *cluster,
-                    side: *side,
-                });
+                let exempt = sleepy
+                    && *side == Side::Server
+                    && (*cluster == groups::ID || *cluster == scenes::ID);
+                if !exempt {
+                    let _ = out.push(Deficiency::MissingCluster {
+                        cluster: *cluster,
+                        side: *side,
+                    });
+                }
             }
         }
         None => {
@@ -858,6 +875,15 @@ mod tests {
             command: CommandId(0x00)
         }));
         assert_eq!(found.len(), 2);
+        // A sleepy device may leave the Groups and Scenes servers out
+        // (DTL §1.11.1); a mains device may not.
+        let (mut d, mut ep) = on_off_light(Endpoint(4)).unwrap();
+        d.input_clusters
+            .retain(|c| *c != groups::ID && *c != scenes::ID);
+        ep.clusters
+            .retain(|c| c.def.id != groups::ID && c.def.id != scenes::ID);
+        assert!(validate_for(&d, &ep, true).is_empty());
+        assert_eq!(validate_for(&d, &ep, false).len(), 2);
         // An unknown device type: clusters are still checked.
         let (mut d, ep) = on_off_light(Endpoint(3)).unwrap();
         d.device = DeviceId(0xEEEE);

@@ -10,8 +10,8 @@ summary = "Device definition conventions: attribute lists, permitted transmissio
 level = "mandatory"
 status = "partially-implemented"
 module = "panweave-device-library"
-tests = ["classification_and_finding_binding_roles"]
-notes = "Device classes (Simple / Dynamic / Node) and the cluster classification used for finding & binding are modelled; attribute lists, permitted transmission modes and the groups / scenes clarifications are documentation only."
+tests = ["classification_and_finding_binding_roles", "validation_reports_deficiencies"]
+notes = "Device classes (Simple / Dynamic / Node) and the cluster classification used for finding & binding are modelled; the §1.11.1 exemption (a sleepy device may omit the Groups and Scenes servers) is applied by panweave::endpoints::validate_for. The per-device attribute lists' Scene Table / Reportable columns and the permitted transmission mode codes (§1.9) are not recorded in metadata/devices.toml: the check-mark glyphs are lost in the specification text available to this project (requires-clarification for those columns); attribute reportability follows the ZCL cluster definitions instead. The §1.11.2 all-or-none extension field set rule binds scene commissioners (clients) and is not enforced by the server."
 [[requirement]]
 id = "PW-DTL-DEV-001"
 section = "§4–§40"
