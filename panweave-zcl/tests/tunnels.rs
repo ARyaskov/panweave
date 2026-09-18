@@ -40,12 +40,22 @@ fn node() -> Node {
     ep.add_instance(tunnels::generic_tunnel_server(504, 504, &ADDRESS).unwrap())
         .unwrap();
     ep.add_instance(tunnels::bacnet_tunnel_server()).unwrap();
+    ep.add_instance(tunnels::iso7816_tunnel_server().unwrap())
+        .unwrap();
     zcl.add_endpoint(ep).unwrap();
     zcl.poll_timers(Instant::from_millis(0));
     zcl
 }
 
 fn ind<'a>(asdu: &'a [u8], group: bool) -> DataIndication<'a> {
+    ind_for(asdu, group, tunnels::GENERIC_TUNNEL)
+}
+
+fn ind_for<'a>(
+    asdu: &'a [u8],
+    group: bool,
+    cluster: panweave_types::ClusterId,
+) -> DataIndication<'a> {
     DataIndication {
         src: CLIENT,
         src_endpoint: Endpoint(5),
@@ -56,7 +66,7 @@ fn ind<'a>(asdu: &'a [u8], group: bool) -> DataIndication<'a> {
             Delivery::Endpoint(EP)
         },
         profile: ProfileId::HOME_AUTOMATION,
-        cluster: tunnels::GENERIC_TUNNEL,
+        cluster,
         asdu,
         security: SecurityStatus::NwkKey,
         lqi: 200,
@@ -124,4 +134,55 @@ fn a_matching_protocol_address_is_answered_with_the_ieee_address() {
     }
     let (h, _) = match_request(&mut zcl, &[0x00, 0x01, 0x2B], true).unwrap();
     assert_eq!(h.command, tunnels::CMD_MATCH_PROTOCOL_ADDRESS_RESPONSE);
+}
+
+#[test]
+fn the_iso7816_server_answers_card_insertion_with_default_responses() {
+    let mut zcl = node();
+    let mut groups = GroupTable::<4>::new();
+    let send = |zcl: &mut Node, cmd, groups: &mut GroupTable<4>| -> ZclStatus {
+        let header = Header::cluster_specific(
+            panweave_types::TransactionSequence(0x30),
+            cmd,
+            Direction::ToServer,
+        );
+        let mut buf = [0u8; 16];
+        let len = Frame {
+            header,
+            payload: &[],
+        }
+        .encode_to_slice(&mut buf)
+        .unwrap();
+        while zcl.next_action().is_some() {}
+        assert!(
+            zcl.on_data(
+                &ind_for(&buf[..len], false, tunnels::ISO7816_TUNNEL),
+                groups
+            )
+            .is_none()
+        );
+        match zcl.next_action().expect("a default response") {
+            ZclAction::Send { frame, .. } => {
+                let (h, n) = Header::decode_prefix(&frame).unwrap();
+                assert_eq!(h.command, command::DEFAULT_RESPONSE);
+                DefaultResponse::decode_exact(&frame[n..]).unwrap().status
+            }
+        }
+    };
+    assert_eq!(
+        send(&mut zcl, tunnels::CMD_EXTRACT_SMART_CARD, &mut groups),
+        ZclStatus::Failure
+    );
+    assert_eq!(
+        send(&mut zcl, tunnels::CMD_INSERT_SMART_CARD, &mut groups),
+        ZclStatus::Success
+    );
+    assert_eq!(
+        send(&mut zcl, tunnels::CMD_INSERT_SMART_CARD, &mut groups),
+        ZclStatus::Failure
+    );
+    assert_eq!(
+        send(&mut zcl, tunnels::CMD_EXTRACT_SMART_CARD, &mut groups),
+        ZclStatus::Success
+    );
 }

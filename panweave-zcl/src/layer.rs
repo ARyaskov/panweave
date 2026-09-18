@@ -1264,6 +1264,31 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 self.handle_rssi_location(i, &origin, cmd, payload);
                                 continue;
                             }
+                            tunnels::ISO7816_TUNNEL
+                                if matches!(
+                                    cmd,
+                                    tunnels::CMD_INSERT_SMART_CARD
+                                        | tunnels::CMD_EXTRACT_SMART_CARD
+                                ) =>
+                            {
+                                // §9.5.5.3.2.3 / §9.5.5.3.3.3: the answer
+                                // is the Default Response status.
+                                let status = self
+                                    .endpoints
+                                    .get_mut(i)
+                                    .and_then(|e| {
+                                        e.cluster_mut(tunnels::ISO7816_TUNNEL, Role::Server)
+                                    })
+                                    .map_or(ZclStatus::Failure, |c| {
+                                        if cmd == tunnels::CMD_INSERT_SMART_CARD {
+                                            tunnels::iso7816_insert(c)
+                                        } else {
+                                            tunnels::iso7816_extract(c)
+                                        }
+                                    });
+                                let _ = self.default_response(&origin, status);
+                                continue;
+                            }
                             tunnels::GENERIC_TUNNEL
                                 if cmd == tunnels::CMD_MATCH_PROTOCOL_ADDRESS =>
                             {

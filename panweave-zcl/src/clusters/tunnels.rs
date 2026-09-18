@@ -4,7 +4,10 @@
 //! server beside it (Match Protocol Address, answered when the address
 //! equals `ProtocolAddress`; Advertise Protocol Address on start-up and
 //! change), and BACnet NPDUs cross the BACnet tunnel as Transfer NPDU
-//! commands (the BACnet network layer is the application's).
+//! commands (the BACnet network layer is the application's). The ISO
+//! 7816 Protocol Tunnel (§9.5, cluster 0x0615) carries smart card APDUs
+//! both ways once a client inserted its card (`Status` BUSY) and until
+//! it extracted it.
 
 use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId, ExtendedAddress};
@@ -18,6 +21,99 @@ use crate::types::{DataType, Value};
 pub const GENERIC_TUNNEL: ClusterId = ClusterId(0x0600);
 /// BACnet Protocol Tunnel cluster identifier.
 pub const BACNET_PROTOCOL_TUNNEL: ClusterId = ClusterId(0x0601);
+/// ISO 7816 Protocol Tunnel cluster identifier.
+pub const ISO7816_TUNNEL: ClusterId = ClusterId(0x0615);
+
+/// ISO 7816 Tunnel `Status` (uint8: FREE / BUSY, Table 9-26).
+pub const ISO7816_STATUS: AttributeDef = AttributeDef::new(0x0001, DataType::Uint(1), Access::RO);
+/// `Status`: no client connected.
+pub const ISO7816_FREE: u8 = 0x00;
+/// `Status`: a client's smart card is inserted.
+pub const ISO7816_BUSY: u8 = 0x01;
+/// Transfer APDU (both directions).
+pub const CMD_TRANSFER_APDU: CommandId = CommandId(0x00);
+/// Insert Smart Card (client → server).
+pub const CMD_INSERT_SMART_CARD: CommandId = CommandId(0x01);
+/// Extract Smart Card (client → server).
+pub const CMD_EXTRACT_SMART_CARD: CommandId = CommandId(0x02);
+
+/// ISO 7816 Protocol Tunnel cluster definition.
+pub const ISO7816_TUNNEL_DEF: ClusterDef = ClusterDef {
+    id: ISO7816_TUNNEL,
+    revision: 1,
+    received: &[
+        CMD_TRANSFER_APDU,
+        CMD_INSERT_SMART_CARD,
+        CMD_EXTRACT_SMART_CARD,
+    ],
+    generated: &[CMD_TRANSFER_APDU],
+};
+
+/// Transfer APDU (§9.5.5.3.1): an ISO 7816 APDU as an octet string.
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct TransferApdu<'a> {
+    /// The APDU.
+    pub apdu: &'a [u8],
+}
+
+impl<'a> TransferApdu<'a> {
+    /// Parses the payload.
+    pub fn parse(payload: &'a [u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(payload);
+        Ok(TransferApdu {
+            apdu: read_octets(&mut r)?,
+        })
+    }
+
+    /// Encodes the payload.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        write_octets(w, self.apdu)
+    }
+}
+
+/// Builds an ISO 7816 Tunnel server, FREE.
+pub fn iso7816_tunnel_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+    let mut c = ClusterInstance::new(ISO7816_TUNNEL_DEF, Role::Server);
+    c.add_attribute(
+        ISO7816_STATUS,
+        &Value::Uint {
+            width: 1,
+            value: u64::from(ISO7816_FREE),
+        },
+    )?;
+    Ok(c)
+}
+
+/// Builds an ISO 7816 Tunnel client.
+pub fn iso7816_tunnel_client<const A: usize>() -> ClusterInstance<A> {
+    ClusterInstance::new(ISO7816_TUNNEL_DEF.mirrored(), Role::Client)
+}
+
+/// Whether the ISO 7816 server is BUSY (a card inserted).
+pub fn iso7816_busy<const A: usize>(c: &ClusterInstance<A>) -> bool {
+    c.u8(ISO7816_STATUS.id) == Some(ISO7816_BUSY)
+}
+
+/// Insert Smart Card at the server (§9.5.5.3.2.3): BUSY is a FAILURE,
+/// FREE becomes BUSY with SUCCESS.
+pub fn iso7816_insert<const A: usize>(c: &mut ClusterInstance<A>) -> ZclStatus {
+    if iso7816_busy(c) {
+        return ZclStatus::Failure;
+    }
+    c.set_u8(ISO7816_STATUS.id, ISO7816_BUSY);
+    ZclStatus::Success
+}
+
+/// Extract Smart Card at the server (§9.5.5.3.3.3): FREE is a FAILURE,
+/// BUSY becomes FREE with SUCCESS.
+pub fn iso7816_extract<const A: usize>(c: &mut ClusterInstance<A>) -> ZclStatus {
+    if !iso7816_busy(c) {
+        return ZclStatus::Failure;
+    }
+    c.set_u8(ISO7816_STATUS.id, ISO7816_FREE);
+    ZclStatus::Success
+}
 
 /// Longest protocol address (`ProtocolAddress` is an octet string of
 /// up to 255 octets; a BACnet device identifier is three).
@@ -310,5 +406,28 @@ mod tests {
         assert_eq!(gc.role, Role::Client);
         let bc: ClusterInstance<4> = bacnet_tunnel_client();
         assert_eq!(bc.role, Role::Client);
+    }
+
+    #[test]
+    fn the_iso7816_tunnel_takes_one_card_at_a_time() {
+        let mut c: ClusterInstance<4> = iso7816_tunnel_server().unwrap();
+        assert!(!iso7816_busy(&c));
+        assert_eq!(iso7816_extract(&mut c), ZclStatus::Failure);
+        assert_eq!(iso7816_insert(&mut c), ZclStatus::Success);
+        assert!(iso7816_busy(&c));
+        assert_eq!(iso7816_insert(&mut c), ZclStatus::Failure);
+        assert_eq!(iso7816_extract(&mut c), ZclStatus::Success);
+        assert!(!iso7816_busy(&c));
+        let a = TransferApdu {
+            apdu: &[0x00, 0xA4, 0x04, 0x00],
+        };
+        let mut out = [0u8; 8];
+        let mut w = Writer::new(&mut out);
+        a.encode(&mut w).unwrap();
+        let n = w.position();
+        assert_eq!(&out[..n], &[4, 0x00, 0xA4, 0x04, 0x00]);
+        assert_eq!(TransferApdu::parse(&out[..n]).unwrap(), a);
+        let ic: ClusterInstance<4> = iso7816_tunnel_client();
+        assert_eq!(ic.role, Role::Client);
     }
 }
