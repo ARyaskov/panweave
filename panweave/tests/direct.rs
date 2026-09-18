@@ -712,3 +712,145 @@ fn zvd_joins_and_talks_through_the_tunnel() {
     w.nodes[c].0.close_tunnel(1);
     assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());
 }
+
+/// On a distributed network the ZDD itself hands the ZVD its Basic
+/// authorization key under the distributed global link key (ZD 1.1
+/// §7.7.4.5).
+#[test]
+fn zvd_joins_a_distributed_network_through_the_tunnel() {
+    use panweave::codec::{Encode, Writer};
+    use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave::nwk::frame::{FrameType, Header};
+    use panweave::nwk::tlv::{
+        DeviceCapabilityExtension, FragmentationParameters, SupportedKeyNegotiationMethods, tag,
+        write_encapsulation,
+    };
+    use panweave::types::MacCapability;
+    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0003);
+    let mut router = Router::distributed(zdd_ieee)
+        .build::<SoftwareAes, _, _>(TestRng::seed(9), MemoryStorage::new());
+    router.stack.config.trust_center_policy.allow_joins = true;
+    router
+        .stack
+        .config
+        .trust_center_policy
+        .allow_virtual_devices = true;
+    let r = w.add(router);
+    w.nodes[r]
+        .0
+        .stack
+        .form_network_with_key(Key128::from_bytes([0x7c; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    assert!(w.nodes[r].0.stack.aps.aib.is_distributed());
+    w.nodes[r].0.stack.permit_join_network(180).unwrap();
+    w.settle();
+    w.nodes[r].2.clear();
+    let zvd = ExtendedAddress(0x00AD_0000_0000_0010);
+    let wanted = ShortAddress(0x2B7D);
+    assert!(w.nodes[r].0.open_tunnel(2, 0x0043, zvd));
+    let mut tlvs = [0u8; 48];
+    let mut tw = Writer::new(&mut tlvs);
+    write_encapsulation(&mut tw, tag::JOINER_ENCAPSULATION, |w| {
+        SupportedKeyNegotiationMethods {
+            protocols: 0x01,
+            secrets: 0x01,
+            source: None,
+        }
+        .write(w)?;
+        FragmentationParameters {
+            node: wanted,
+            options: 0,
+            max_incoming_transfer_unit: 128,
+        }
+        .write(w)?;
+        DeviceCapabilityExtension(DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE).write(w)
+    })
+    .unwrap();
+    let tn = tw.position();
+    let header = Header::new(FrameType::Command, ShortAddress(0), wanted, 1, 1)
+        .with_src_ieee(zvd)
+        .with_dst_ieee(zdd_ieee);
+    let zdd_short = w.nodes[r].0.stack.nwk.nib.network_address;
+    let header = Header {
+        dst: zdd_short,
+        ..header
+    };
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::InitialJoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &tlvs[..tn],
+    });
+    let mut npdu = [0u8; 120];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    let mut tlv = [0u8; 160];
+    let t = NpduMessage {
+        assume_security: false,
+        npdu: &npdu[..h + n],
+    }
+    .encode(&mut tlv)
+    .unwrap();
+    w.nodes[r]
+        .0
+        .on_tunnel_write(2, SessionKind::ZvdProvisioning, &tlv[..t])
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(5), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .filter(|e| matches!(e, Event::DirectTunnel { link: 2, .. }))
+            .count()
+            >= 2
+    }));
+    let out: Vec<NpduMessage<'_>> = w.nodes[r]
+        .2
+        .iter()
+        .filter_map(|e| match e {
+            Event::DirectTunnel { tlv, .. } => Some(tlv),
+            _ => None,
+        })
+        .map(|tlv| NpduMessage::parse(&tlv[2..]).unwrap())
+        .collect();
+    // The second NPDU is the Basic key transport under the key-load key
+    // of the distributed global link key; the network key stays home.
+    let (kh, kn) = Header::decode_prefix(out[1].npdu).unwrap();
+    assert_eq!(kh.dst, wanted);
+    let aps = &out[1].npdu[kn..];
+    assert_eq!(aps[0] & 0x23, 0x21);
+    assert_eq!(
+        (aps[if aps[0] & 0x80 != 0 { 3 } else { 2 }] >> 3) & 0x03,
+        0x03
+    );
+    assert!(
+        !w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectTunnelDeclined { .. }))
+    );
+    assert_eq!(
+        w.nodes[r]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(zvd)
+            .unwrap()
+            .link,
+        Some(2)
+    );
+}

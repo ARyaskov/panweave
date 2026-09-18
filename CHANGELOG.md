@@ -223,7 +223,9 @@ Keep a Changelog; versions follow SemVer.
   carries the Device Capability Extension ZVD flag with a Basic
   authorization key under the key-load key instead of the network key,
   refuses it otherwise, and sends every virtual device a fresh Basic key
-  on a network key update; the ZDD facade drops tunnelled Network
+  on a network key update; on a distributed network the ZDD router
+  hands the ZVD its Basic key under the distributed global link key
+  (§7.7.4.5); the ZDD facade drops tunnelled Network
   Commissioning Requests without the flag and reports
   `Event::DirectTunnelDeclined` instead of tunnelling a frame that
   conveys a network key.

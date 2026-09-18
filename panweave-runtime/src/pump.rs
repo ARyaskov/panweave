@@ -1001,14 +1001,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     let e = LinkKeyEntry::provisional(device, key, LinkKeyKind::Global);
                     let _ = self.aps.install_link_key(e);
                 }
-                self.send_network_key(
-                    device,
+                let route = KeyRoute::Direct {
                     short,
-                    KeyRoute::Direct {
-                        short,
-                        nwk_secure: false,
-                    },
-                );
+                    nwk_secure: false,
+                };
+                // A Zigbee Direct Virtual Device on a distributed network
+                // gets its Basic authorization key from the ZDD, under
+                // the distributed global link key (ZD 1.1 §7.7.4.5).
+                if Self::joiner_is_virtual_device(joiner_tlvs) {
+                    self.virtual_devices.retain(|(d, _)| *d != device);
+                    let _ = self.virtual_devices.push((device, None));
+                    let seq = self.network_key_sequence;
+                    self.send_basic_authorization_key(device, short, seq, route, true);
+                } else {
+                    self.send_network_key(device, short, route);
+                }
             }
         } else {
             let tc_short = AddrView(&self.nwk)
@@ -1070,14 +1077,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 });
         // A Zigbee Direct Virtual Device (Device Capability Extension
         // Global TLV, bit 0): never the network key (§4.6.3.2.2.4).
-        let virtual_device = TlvSet::validate(joiner_tlvs, |_| false)
-            .ok()
-            .and_then(|set| {
-                set.joiner_encapsulation()
-                    .and_then(|inner| inner.device_capability_extension())
-                    .or_else(|| set.device_capability_extension())
-            })
-            .is_some_and(|d| d.0 & DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE != 0);
+        let virtual_device = Self::joiner_is_virtual_device(joiner_tlvs);
         let decision = self.config.trust_center_policy.evaluate_join(
             kind,
             self.aps.security.entry(device),
@@ -1122,6 +1122,19 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 let _ = self.nwk.leave(Some(device), false, false);
             }
         }
+    }
+
+    /// Whether a joiner's TLVs carry the Device Capability Extension
+    /// Global TLV with the Zigbee Direct Virtual Device flag.
+    fn joiner_is_virtual_device(joiner_tlvs: &[u8]) -> bool {
+        TlvSet::validate(joiner_tlvs, |_| false)
+            .ok()
+            .and_then(|set| {
+                set.joiner_encapsulation()
+                    .and_then(|inner| inner.device_capability_extension())
+                    .or_else(|| set.device_capability_extension())
+            })
+            .is_some_and(|d| d.0 & DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE != 0)
     }
 
     /// Network admittance of a Zigbee Direct Virtual Device
