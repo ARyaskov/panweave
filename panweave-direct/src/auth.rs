@@ -4,7 +4,6 @@
 //! `KDF(H(IEEE || key), {instance})` over AES-MMO-128 / HMAC-AES-MMO-128.
 
 use panweave_security::cipher::BlockCipher;
-use panweave_security::mmo;
 use panweave_types::{ExtendedAddress, Key128};
 
 /// KDF instance of the Basic authorization key.
@@ -25,23 +24,16 @@ pub enum Level {
     Admin,
 }
 
-fn derive<C: BlockCipher>(zvd: ExtendedAddress, key: &Key128, instance: u8) -> Key128 {
-    let mut input = [0u8; 24];
-    input[..8].copy_from_slice(&zvd.0.to_le_bytes());
-    input[8..].copy_from_slice(key.as_bytes());
-    let s = mmo::hash::<C>(&input);
-    Key128::from_bytes(mmo::hmac::<C>(&s, &[instance]))
-}
-
-/// The Basic authorization key of `zvd` for a network with `nwk_key`.
+/// The Basic authorization key of `zvd` for a network with `nwk_key`
+/// (`panweave_security::authorization::basic_key`).
 pub fn basic_key<C: BlockCipher>(zvd: ExtendedAddress, nwk_key: &Key128) -> Key128 {
-    derive::<C>(zvd, nwk_key, BASIC_INSTANCE)
+    panweave_security::authorization::basic_key::<C>(zvd, nwk_key)
 }
 
 /// The Admin authorization key of `zvd` derived from the ZDD's Trust
 /// Center link key (when no Admin key was provisioned).
 pub fn admin_key<C: BlockCipher>(zvd: ExtendedAddress, tc_link_key: &Key128) -> Key128 {
-    derive::<C>(zvd, tc_link_key, ADMIN_INSTANCE)
+    panweave_security::authorization::admin_key::<C>(zvd, tc_link_key)
 }
 
 #[cfg(test)]

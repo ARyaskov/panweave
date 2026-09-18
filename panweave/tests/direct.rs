@@ -454,11 +454,45 @@ fn zdd_keeps_past_network_keys_for_limited_authorization() {
 #[test]
 fn zvd_joins_and_talks_through_the_tunnel() {
     use panweave::aps::frame::{Addressing, Header as ApsHeader};
-    use panweave::codec::{Decode, Encode};
+    use panweave::codec::{Decode, Encode, Writer};
     use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
     use panweave::nwk::frame::{FrameType, Header};
+    use panweave::nwk::tlv::{
+        DeviceCapabilityExtension, FragmentationParameters, SupportedKeyNegotiationMethods, tag,
+        write_encapsulation,
+    };
+    use panweave::security::authorization::basic_key;
     use panweave::types::{ClusterId, Endpoint, MacCapability, MacStatus, ProfileId};
-    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+    use panweave_direct::tunnel::{NpduMessage, SessionKind, TunnelError};
+
+    /// The Joiner Encapsulation of a ZVD (§7.7.4.3), or without the
+    /// Device Capability Extension.
+    fn joiner_tlvs(virtual_device: bool) -> Vec<u8> {
+        let mut buf = [0u8; 48];
+        let mut w = Writer::new(&mut buf);
+        write_encapsulation(&mut w, tag::JOINER_ENCAPSULATION, |w| {
+            SupportedKeyNegotiationMethods {
+                protocols: 0x01,
+                secrets: 0x01,
+                source: None,
+            }
+            .write(w)?;
+            FragmentationParameters {
+                node: ShortAddress(0x4E21),
+                options: 0,
+                max_incoming_transfer_unit: 128,
+            }
+            .write(w)?;
+            if virtual_device {
+                DeviceCapabilityExtension(DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE)
+                    .write(w)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let n = w.position();
+        buf[..n].to_vec()
+    }
 
     let mut w = World {
         medium: VirtualMedium::new(),
@@ -469,11 +503,13 @@ fn zvd_joins_and_talks_through_the_tunnel() {
     let mut coord = Coordinator::new(zdd_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
     coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
     let c = w.add(coord);
+    let nwk_key = Key128::from_bytes([0x5a; 16]);
     w.nodes[c]
         .0
         .stack
-        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .form_network_with_key(nwk_key.clone())
         .unwrap();
     assert!(w.run_until(Duration::from_secs(30), |w| {
         w.nodes[c]
@@ -489,31 +525,47 @@ fn zvd_joins_and_talks_through_the_tunnel() {
     let wanted = ShortAddress(0x4E21);
     assert!(w.nodes[c].0.open_tunnel(1, 0x0042, zvd));
     // Network Commissioning Request, unsecured, over the provisioning
-    // session.
+    // session. Without the Device Capability Extension the ZDD drops it
+    // (§7.7.4.8); with it, the join proceeds.
     let header = Header::new(FrameType::Command, ShortAddress::COORDINATOR, wanted, 1, 1)
         .with_src_ieee(zvd)
         .with_dst_ieee(zdd_ieee);
-    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
-        kind: CommissioningType::InitialJoin,
-        capability: MacCapability(0)
-            .with_rx_on_when_idle(true)
-            .with_allocate_address(true),
-        tlvs: &[],
-    });
-    let mut npdu = [0u8; 64];
-    let h = header.encode_to_slice(&mut npdu).unwrap();
-    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
-    let mut tlv = [0u8; 96];
-    let t = NpduMessage {
-        assume_security: false,
-        npdu: &npdu[..h + n],
-    }
-    .encode(&mut tlv)
-    .unwrap();
-    w.nodes[c]
-        .0
-        .on_tunnel_write(1, SessionKind::ZvdProvisioning, &tlv[..t])
+    let capability = MacCapability(0)
+        .with_rx_on_when_idle(true)
+        .with_allocate_address(true);
+    let mut tlv = [0u8; 160];
+    for (virtual_device, seq) in [(false, 1u8), (true, 2)] {
+        let tlvs = joiner_tlvs(virtual_device);
+        let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+            kind: CommissioningType::InitialJoin,
+            capability,
+            tlvs: &tlvs,
+        });
+        let mut npdu = [0u8; 120];
+        let header = Header {
+            sequence: seq,
+            ..header
+        };
+        let h = header.encode_to_slice(&mut npdu).unwrap();
+        let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+        let t = NpduMessage {
+            assume_security: false,
+            npdu: &npdu[..h + n],
+        }
+        .encode(&mut tlv)
         .unwrap();
+        let r = w.nodes[c]
+            .0
+            .on_tunnel_write(1, SessionKind::ZvdProvisioning, &tlv[..t]);
+        if virtual_device {
+            r.unwrap();
+        } else {
+            assert_eq!(r, Err(TunnelError::Dropped));
+            w.settle();
+            assert!(w.nodes[c].2.is_empty());
+            assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());
+        }
+    }
     assert!(w.run_until(Duration::from_secs(5), |w| {
         w.nodes[c]
             .2
@@ -540,11 +592,19 @@ fn zvd_joins_and_talks_through_the_tunnel() {
         panic!("not a commissioning response");
     };
     assert_eq!((r.status, r.address), (MacStatus::Success, wanted));
-    // 2. The Trust Center's Transport Key (APS command, NWK-unsecured).
+    // 2. The Trust Center's Transport Key: an APS command, NWK-unsecured,
+    //    APS-secured with the key-load key (the Basic authorization key
+    //    of §4.6.3.2.2.4, never the network key).
     let (kh, kn) = Header::decode_prefix(out[1].npdu).unwrap();
     assert!(!out[1].assume_security);
     assert_eq!(kh.dst, wanted);
-    assert_eq!(out[1].npdu[kn] & 0x03, 0x01, "an APS command frame");
+    let aps = &out[1].npdu[kn..];
+    assert_eq!(aps[0] & 0x03, 0x01, "an APS command frame");
+    assert_ne!(aps[0] & 0x20, 0, "APS-secured");
+    let aux_control = aps[if aps[0] & 0x80 != 0 { 3 } else { 2 }];
+    assert_eq!((aux_control >> 3) & 0x03, 0x03, "key-load key");
+    let expected_basic = basic_key::<SoftwareAes>(zvd, &nwk_key);
+    assert_ne!(expected_basic, nwk_key);
     assert!(w.nodes[c].2.iter().any(
         |e| matches!(e, Event::Stack(StackEvent::DeviceAuthorized { ieee, .. }) if *ieee == zvd)
     ));
@@ -615,6 +675,39 @@ fn zvd_joins_and_talks_through_the_tunnel() {
     assert_eq!(zdp[1], 0x00);
     assert_eq!(&zdp[2..10], &zdd_ieee.0.to_le_bytes());
     assert_eq!(&zdp[10..12], &[0x00, 0x00]);
+    // A network key update: the broadcast Transport Key with the new
+    // network key is declined for the tunnel (§9) and the ZVD gets a
+    // Basic authorization key derived from the new key instead.
+    w.nodes[c].2.clear();
+    w.nodes[c]
+        .0
+        .stack
+        .update_network_key(Key128::from_bytes([0x6b; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(2), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectTunnelDeclined { link: 1 }))
+    }));
+    let key_loads = w.nodes[c]
+        .2
+        .iter()
+        .filter_map(|e| match e {
+            Event::DirectTunnel { tlv, .. } => Some(NpduMessage::parse(&tlv[2..]).unwrap()),
+            _ => None,
+        })
+        .filter(|m| {
+            let Ok((h, n)) = Header::decode_prefix(m.npdu) else {
+                return false;
+            };
+            let aps = &m.npdu[n..];
+            h.frame_control.frame_type() == FrameType::Data
+                && aps[0] & 0x23 == 0x21
+                && (aps[if aps[0] & 0x80 != 0 { 3 } else { 2 }] >> 3) & 0x03 == 0x03
+        })
+        .count();
+    assert_eq!(key_loads, 1, "{:?}", w.nodes[c].2);
     // Closing the tunnel forgets the ZVD.
     w.nodes[c].0.close_tunnel(1);
     assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());

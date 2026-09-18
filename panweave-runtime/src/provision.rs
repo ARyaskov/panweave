@@ -224,6 +224,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .now
             .saturating_add(self.nwk.nib.network_broadcast_delivery_time);
         self.key_update = Some((sequence, at));
+        self.update_virtual_devices_keys(sequence);
         self.pump();
         Ok(sequence)
     }

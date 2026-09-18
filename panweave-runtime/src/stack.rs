@@ -667,6 +667,17 @@ pub enum StackEvent {
         /// The peer treats the NPDU as NWK-secured.
         assume_security: bool,
     },
+    /// A Basic authorization key for this device as a Zigbee Direct
+    /// Virtual Device arrived (R23.2 §4.6.3.2.2.4); the host's ZVD
+    /// session layer uses it, the stack does not.
+    BasicAuthorizationKey {
+        /// The key.
+        key: Key128,
+        /// Sequence number of the network key it derives from.
+        sequence: KeySequenceNumber,
+        /// The Trust Center.
+        source: ExtendedAddress,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,
@@ -865,6 +876,10 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) factory_reset_pending: bool,
     /// OTA upgrade server discovery in progress (ZCL8 §11.8).
     pub(crate) ota_discovery: Option<crate::ota::OtaDiscovery>,
+    /// Joined Zigbee Direct Virtual Devices (isVirtualDevice of their
+    /// key-pair descriptors, §4.6.3.2.2.4): a network key update sends
+    /// them a Basic authorization key instead of the new network key.
+    pub(crate) virtual_devices: Vec<(ExtendedAddress, Option<ShortAddress>), 8>,
     /// Interference reporting state (Annex E).
     pub(crate) interference: crate::agility::Interference,
     /// `apsFragmentationCacheTable` and the messages held for discovery
@@ -1019,6 +1034,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             factory_reset_pending: false,
             tclk_update: None,
             ota_discovery: None,
+            virtual_devices: Vec::new(),
             interference: crate::agility::Interference::default(),
             fragmentation: crate::fragment_cache::FragmentationCache::default(),
             pending_channel_change: None,

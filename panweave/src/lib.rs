@@ -106,6 +106,15 @@ pub enum Event {
         /// The TLV.
         tlv: heapless::Vec<u8, { panweave_direct::tunnel::MAX_VALUE_LEN + 2 }>,
     },
+    /// The APSME declined forwarding a frame to the ZVD behind `link`
+    /// because it conveyed an active or prospective network key (ZD 1.1
+    /// §9): the host closes the BLE connection so the ZVD re-establishes
+    /// its session.
+    #[cfg(feature = "direct")]
+    DirectTunnelDeclined {
+        /// The link.
+        link: u8,
+    },
 }
 
 /// A device: the stack plus its commissioning machine.

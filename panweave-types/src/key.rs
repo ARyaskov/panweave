@@ -97,6 +97,13 @@ pub enum KeyType {
     /// Ephemeral global link key (`0xB0`), used by Zigbee Direct
     /// ephemeral authorization sessions.
     EphemeralGlobal,
+    /// Ephemeral unique authorization key (`0xB1`, Zigbee Direct).
+    EphemeralUnique,
+    /// Basic authorization key of a Zigbee Direct Virtual Device
+    /// (`0xB2`, R23.2 Table 4-9 / ZD 1.1 §6.3.2.1).
+    BasicAuthorization,
+    /// Administrative authorization key (`0xB3`, Zigbee Direct).
+    AdministrativeAuthorization,
     /// A value not defined by the specification revision this crate
     /// implements; preserved for forward compatibility.
     Unknown(u8),
@@ -111,6 +118,9 @@ impl KeyType {
             KeyType::ApplicationLinkKey => 0x03,
             KeyType::TrustCenterLinkKey => 0x04,
             KeyType::EphemeralGlobal => 0xB0,
+            KeyType::EphemeralUnique => 0xB1,
+            KeyType::BasicAuthorization => 0xB2,
+            KeyType::AdministrativeAuthorization => 0xB3,
             KeyType::Unknown(v) => v,
         }
     }
@@ -123,6 +133,9 @@ impl KeyType {
             0x03 => KeyType::ApplicationLinkKey,
             0x04 => KeyType::TrustCenterLinkKey,
             0xB0 => KeyType::EphemeralGlobal,
+            0xB1 => KeyType::EphemeralUnique,
+            0xB2 => KeyType::BasicAuthorization,
+            0xB3 => KeyType::AdministrativeAuthorization,
             other => KeyType::Unknown(other),
         }
     }

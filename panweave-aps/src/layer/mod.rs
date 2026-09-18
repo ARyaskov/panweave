@@ -339,6 +339,17 @@ pub enum TransportedKey {
         /// This device requested the key.
         initiator: bool,
     },
+    /// A Basic authorization key (0xB2) for this device as a Zigbee
+    /// Direct Virtual Device; the stack does not install it (a ZVD's
+    /// BLE session layer uses it).
+    BasicAuthorization {
+        /// The key.
+        key: Key128,
+        /// Sequence number of the network key it derives from.
+        sequence: KeySequenceNumber,
+        /// The Trust Center.
+        source: ExtendedAddress,
+    },
 }
 
 /// Management indications and confirms.

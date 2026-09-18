@@ -212,6 +212,21 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Zigbee Direct Virtual Device admittance (R23.2 §4.6.3.2.2.4, ZD 1.1
+  §7.7.4.3, §7.7.4.8, §9; ADR-0017): `KeyType::{EphemeralUnique,
+  BasicAuthorization, AdministrativeAuthorization}`,
+  `KeyDescriptor::BasicAuthorizationKey`,
+  `Aps::transport_basic_authorization_key`,
+  `panweave_security::authorization::{basic_key, admin_key}` (Annex B.3
+  vector) and `StackEvent::BasicAuthorizationKey`; a Trust Center with
+  `allow_virtual_devices` answers a joiner whose Joiner Encapsulation
+  carries the Device Capability Extension ZVD flag with a Basic
+  authorization key under the key-load key instead of the network key,
+  refuses it otherwise, and sends every virtual device a fresh Basic key
+  on a network key update; the ZDD facade drops tunnelled Network
+  Commissioning Requests without the flag and reports
+  `Event::DirectTunnelDeclined` instead of tunnelling a frame that
+  conveys a network key.
 * Trusted Links (R23.2 §3.2.2.41–§3.2.2.44) and the Zigbee Direct
   Tunnel Service binding (ZD 1.1 §7.7.3–§7.7.4): `NeighborEntry::link`
   marks a neighbour reached over a Trusted Link, `Nwk::on_trusted_link_data`

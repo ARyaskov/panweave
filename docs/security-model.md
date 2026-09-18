@@ -176,6 +176,13 @@ set to the reported value.
 
 ## Zigbee Direct boundary
 
+* A Zigbee Virtual Device never receives the network key: the Trust Center
+  transports a Basic authorization key derived from it (ADR-0017), and the
+  ZDD refuses to tunnel Transport Key frames that convey a network key or
+  are secured with the key-transport key, closing the connection instead
+  (ZD 1.1 §9). Tunnelled Network Commissioning Requests without the ZVD
+  flag are dropped before the stack sees them (§7.7.4.8).
+
 BLE transport is abstract. `panweave-direct` treats every GATT write as
 untrusted, performs session establishment before any commissioning or tunnel
 operation, enforces counter monotonicity on the secured characteristic

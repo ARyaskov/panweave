@@ -40,6 +40,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod authorization;
 pub mod aux_header;
 pub mod ccm;
 pub mod challenge;

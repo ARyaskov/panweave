@@ -118,6 +118,20 @@ pub enum KeyDescriptor<'a> {
         /// Optional TLVs.
         tlvs: &'a [u8],
     },
+    /// Basic authorization key of a Zigbee Direct Virtual Device
+    /// (StandardKeyType 0xB2, R23.2 §4.6.3.2.2.4 / ZD 1.1 §7.7.4.3): the
+    /// key derived from the network key, that key's sequence number,
+    /// and the addresses as for a network key (ADR-0017).
+    BasicAuthorizationKey {
+        /// The Basic authorization key.
+        key: Key128,
+        /// Sequence number of the network key it derives from.
+        sequence: KeySequenceNumber,
+        /// The ZVD.
+        destination: ExtendedAddress,
+        /// The Trust Center (or ZDD on a distributed network).
+        source: ExtendedAddress,
+    },
 }
 
 /// Transport Key command (§4.4.11.1).
@@ -134,6 +148,7 @@ impl TransportKey<'_> {
             KeyDescriptor::TrustCenterLinkKey { .. } => KeyType::TrustCenterLinkKey,
             KeyDescriptor::NetworkKey { .. } => KeyType::StandardNetworkKey,
             KeyDescriptor::ApplicationLinkKey { .. } => KeyType::ApplicationLinkKey,
+            KeyDescriptor::BasicAuthorizationKey { .. } => KeyType::BasicAuthorization,
         }
     }
 }
@@ -162,6 +177,12 @@ impl<'a> Decode<'a> for TransportKey<'a> {
                 }
             }
             KeyType::StandardNetworkKey => KeyDescriptor::NetworkKey {
+                key,
+                sequence: KeySequenceNumber(r.u8()?),
+                destination: ExtendedAddress(r.u64_le()?),
+                source: ExtendedAddress(r.u64_le()?),
+            },
+            KeyType::BasicAuthorization => KeyDescriptor::BasicAuthorizationKey {
                 key,
                 sequence: KeySequenceNumber(r.u8()?),
                 destination: ExtendedAddress(r.u64_le()?),
@@ -196,7 +217,9 @@ impl Encode for TransportKey<'_> {
         1 + 16
             + match &self.descriptor {
                 KeyDescriptor::TrustCenterLinkKey { tlvs, .. } => 8 + 8 + tlvs.len(),
-                KeyDescriptor::NetworkKey { .. } => 1 + 8 + 8,
+                KeyDescriptor::NetworkKey { .. } | KeyDescriptor::BasicAuthorizationKey { .. } => {
+                    1 + 8 + 8
+                }
                 KeyDescriptor::ApplicationLinkKey { tlvs, .. } => 8 + 1 + tlvs.len(),
             }
     }
@@ -216,6 +239,12 @@ impl Encode for TransportKey<'_> {
                 w.bytes(tlvs)
             }
             KeyDescriptor::NetworkKey {
+                key,
+                sequence,
+                destination,
+                source,
+            }
+            | KeyDescriptor::BasicAuthorizationKey {
                 key,
                 sequence,
                 destination,

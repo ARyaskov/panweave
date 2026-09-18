@@ -10,13 +10,17 @@
 //! neighbour behind a Trusted Link of the stack.
 
 use panweave_bdb::Outcome;
+use panweave_codec::Decode;
 use panweave_direct::commissioning::{
     DeviceType, Domain, FindingBinding, FormNetwork, JoinNetwork, JoinedStatus, JoiningMethod,
     LeaveNetwork, ManageJoiners, NetworkInfo, NetworkStatus, STATUS_FAILURE, STATUS_SUCCESS,
     StatusReport, Zdd,
 };
-use panweave_direct::rotation::PastNetworkKeys;
+use panweave_direct::rotation::{Forwarding, PastNetworkKeys, forwarding_decision};
 use panweave_direct::tunnel::{self, NpduMessage, SessionKind, TunnelError};
+use panweave_nwk::command::{CommissioningRequest, NwkCommandId};
+use panweave_nwk::frame::{FrameType as NwkFrameType, Header as NwkHeader};
+use panweave_nwk::tlv::{DeviceCapabilityExtension, GlobalTlvs};
 use panweave_runtime::{AdoptParams, FormationParams, JoinMode, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::LinkKeyKind;
@@ -128,9 +132,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         let mut first_error = None;
         for item in tunnel::preprocess(payload, session) {
             match item {
-                Ok(m) => self
-                    .stack
-                    .on_trusted_link_npdu(link, peer, m.npdu, m.assume_security),
+                Ok(m) => {
+                    if !Self::declares_virtual_device(m.npdu) {
+                        // §7.7.4.8: a Network Commissioning Request that
+                        // does not declare a ZVD is dropped, or the
+                        // Trust Center would send the network key.
+                        first_error.get_or_insert(TunnelError::Dropped);
+                        continue;
+                    }
+                    self.stack
+                        .on_trusted_link_npdu(link, peer, m.npdu, m.assume_security);
+                }
                 Err(e) => {
                     first_error.get_or_insert(e);
                 }
@@ -138,6 +150,37 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         }
         self.collect();
         first_error.map_or(Ok(()), Err)
+    }
+
+    /// Whether `npdu` is anything but a Network Commissioning Request
+    /// lacking the Device Capability Extension Global TLV with the
+    /// Zigbee Direct Virtual Device flag (§7.7.4.8).
+    fn declares_virtual_device(npdu: &[u8]) -> bool {
+        let Ok((header, n)) = NwkHeader::decode_prefix(npdu) else {
+            return true;
+        };
+        if header.frame_control.frame_type() != NwkFrameType::Command {
+            return true;
+        }
+        let Some(payload) = npdu.get(n..) else {
+            return true;
+        };
+        if payload.first().copied().map(NwkCommandId::from_raw)
+            != Some(NwkCommandId::CommissioningRequest)
+        {
+            return true;
+        }
+        let Ok(req) = CommissioningRequest::decode_exact(payload.get(1..).unwrap_or(&[])) else {
+            return false;
+        };
+        req.tlv_set()
+            .ok()
+            .and_then(|set| {
+                set.joiner_encapsulation()
+                    .and_then(|inner| inner.device_capability_extension())
+                    .or_else(|| set.device_capability_extension())
+            })
+            .is_some_and(|d| d.0 & DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE != 0)
     }
 
     /// Turns a stack NPDU for a Trusted Link into the tunnel TLV
@@ -153,6 +196,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         };
         if !self.direct.tunnels.iter().any(|(l, _)| l == link) {
             return None;
+        }
+        // §9: a data frame conveying an active or prospective network
+        // key never reaches the ZVD; the connection is closed instead.
+        if let Ok((header, n)) = NwkHeader::decode_prefix(npdu)
+            && header.frame_control.frame_type() == NwkFrameType::Data
+            && forwarding_decision(npdu.get(n..).unwrap_or(&[])) == Forwarding::Decline
+        {
+            return Some(Event::DirectTunnelDeclined { link: *link });
         }
         let mut buf = [0u8; tunnel::MAX_VALUE_LEN + 2];
         let n = NpduMessage {

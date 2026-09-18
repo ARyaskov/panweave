@@ -272,6 +272,77 @@ impl<
         self.finish_command(id, ApsCommandId::TransportKey)
     }
 
+    /// APSME-TRANSPORT-KEY.request with a Zigbee Direct Virtual Device's
+    /// Basic authorization key (§4.6.3.2.2.4): sent in place of the
+    /// network key, APS-secured with the key-load key derived from the
+    /// ZVD's Trust Center link key, directly or tunnelled through the
+    /// ZVD's parent (the ZDD). `sequence` names the network key the
+    /// Basic key derives from.
+    pub fn transport_basic_authorization_key(
+        &mut self,
+        device: ExtendedAddress,
+        key: &Key128,
+        sequence: KeySequenceNumber,
+        route: KeyRoute,
+    ) -> Result<RequestId, ApsError> {
+        if self.state == DeviceState::NotJoined {
+            return Err(ApsError::NotJoined);
+        }
+        let source = if self.aib.is_distributed() {
+            ExtendedAddress::BROADCAST
+        } else {
+            self.local_ieee
+        };
+        let id = self.alloc_request();
+        let cmd = ApsCommand::TransportKey(TransportKey {
+            descriptor: KeyDescriptor::BasicAuthorizationKey {
+                key: key.clone(),
+                sequence,
+                destination: device,
+                source,
+            },
+        });
+        let partner = self.link_key_for(device).ok_or(ApsError::NoKey)?;
+        match route {
+            KeyRoute::Broadcast => return Err(ApsError::IllegalRequest),
+            KeyRoute::Direct { short, nwk_secure } => {
+                self.send_command(
+                    id,
+                    short,
+                    &cmd,
+                    Some(partner),
+                    KeyType::BasicAuthorization,
+                    nwk_secure,
+                    nwk_secure,
+                    None,
+                )?;
+            }
+            KeyRoute::Tunnel { parent } => {
+                let inner_counter = self.next_counter();
+                let inner_header = Header::command(inner_counter, false)
+                    .with_ack_request(false)
+                    .secured(true);
+                self.send_command_wrapped(
+                    id,
+                    parent,
+                    &cmd,
+                    None,
+                    KeyType::BasicAuthorization,
+                    true,
+                    true,
+                    None,
+                    Some(Wrap::Tunnel {
+                        joiner: device,
+                        inner_header,
+                        inner_partner: partner,
+                    }),
+                )?;
+                return self.finish_command(id, ApsCommandId::Tunnel);
+            }
+        }
+        self.finish_command(id, ApsCommandId::TransportKey)
+    }
+
     /// APSME-TRANSPORT-KEY.request with a Trust Center link key
     /// (§4.4.2.1.3): the new key is sent APS-secured with the key-load
     /// key derived from the current link key and, once confirmed,
@@ -1106,6 +1177,31 @@ impl<
                     key: TransportedKey::ApplicationLink {
                         partner: *partner,
                         initiator: *initiator,
+                    },
+                    authorizes: false,
+                });
+            }
+            KeyDescriptor::BasicAuthorizationKey {
+                key,
+                sequence,
+                destination,
+                source,
+            } => {
+                // Only for this device, only under APS security with the
+                // key-load key (§4.6.3.2.2.4).
+                if *destination != self.local_ieee
+                    || !aps_secured
+                    || sec.key_id != KeyIdentifier::KeyLoad
+                {
+                    self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
+                    return;
+                }
+                self.push_event(ApsEvent::TransportKey {
+                    src: *source,
+                    key: TransportedKey::BasicAuthorization {
+                        key: key.clone(),
+                        sequence: *sequence,
+                        source: *source,
                     },
                     authorizes: false,
                 });

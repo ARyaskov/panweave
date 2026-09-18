@@ -18,7 +18,7 @@ use panweave_mac::service::{MacEvent, RxDisposition, TxStatus};
 use panweave_nwk::interface::{InterfaceType, MacInterfaceEntry};
 use panweave_nwk::layer::{JoinMethod, JoinParams};
 use panweave_nwk::layer::{NwkAction, NwkEvent, RxOutcome};
-use panweave_nwk::tlv::{GlobalTlvs, SupportedKeyNegotiationMethods};
+use panweave_nwk::tlv::{DeviceCapabilityExtension, GlobalTlvs, SupportedKeyNegotiationMethods};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy};
@@ -1068,12 +1068,26 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     m.protocols & SupportedKeyNegotiationMethods::PROTO_SPEKE_CURVE25519_AES_MMO
                         != 0
                 });
+        // A Zigbee Direct Virtual Device (Device Capability Extension
+        // Global TLV, bit 0): never the network key (§4.6.3.2.2.4).
+        let virtual_device = TlvSet::validate(joiner_tlvs, |_| false)
+            .ok()
+            .and_then(|set| {
+                set.joiner_encapsulation()
+                    .and_then(|inner| inner.device_capability_extension())
+                    .or_else(|| set.device_capability_extension())
+            })
+            .is_some_and(|d| d.0 & DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE != 0);
         let decision = self.config.trust_center_policy.evaluate_join(
             kind,
             self.aps.security.entry(device),
             offers_dlk,
             None,
         );
+        if virtual_device {
+            self.admit_virtual_device(device, short, parent, decision);
+            return;
+        }
         match decision {
             JoinDecision::NegotiateKey { create_entry } => {
                 self.start_joiner_negotiation(device, short, parent, create_entry);
@@ -1107,6 +1121,100 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             JoinDecision::Remove => {
                 let _ = self.nwk.leave(Some(device), false, false);
             }
+        }
+    }
+
+    /// Network admittance of a Zigbee Direct Virtual Device
+    /// (§4.6.3.2.2.4): with `allowVirtualDevices` the joiner gets a
+    /// Basic authorization key derived from the active network key,
+    /// APS-secured with the key-load key of its Trust Center link key,
+    /// through its parent (the ZDD); without, it is not admitted and the
+    /// parent is told to remove it. The stack remembers the device as
+    /// virtual so that a network key update sends it a fresh Basic key
+    /// instead of the new network key.
+    fn admit_virtual_device(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        parent: Option<ShortAddress>,
+        decision: JoinDecision,
+    ) {
+        let admitted = self.config.trust_center_policy.allow_virtual_devices
+            && matches!(
+                decision,
+                JoinDecision::TransportNetworkKey { .. } | JoinDecision::NegotiateKey { .. }
+            );
+        if !admitted {
+            let _ = self.nwk.leave(Some(device), false, false);
+            return;
+        }
+        if self.aps.security.entry(device).is_none() {
+            let e = LinkKeyEntry::provisional(
+                device,
+                Key128::WELL_KNOWN_GLOBAL_TCLK,
+                LinkKeyKind::Global,
+            );
+            let _ = self.aps.install_link_key(e);
+        }
+        self.virtual_devices.retain(|(d, _)| *d != device);
+        let _ = self.virtual_devices.push((device, parent));
+        let route = match parent {
+            Some(p) => KeyRoute::Tunnel { parent: p },
+            None => KeyRoute::Direct {
+                short,
+                nwk_secure: false,
+            },
+        };
+        let seq = self.network_key_sequence;
+        self.send_basic_authorization_key(device, short, seq, route, true);
+    }
+
+    /// Transports the Basic authorization key of `device` derived from
+    /// network key `seq` (ZD 1.1 §6.3.2.1); `joining` tracks the request
+    /// as the joiner's authorization.
+    fn send_basic_authorization_key(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        seq: KeySequenceNumber,
+        route: KeyRoute,
+        joining: bool,
+    ) {
+        let Some(nwk_key) = self.nwk.security.keys.get(seq).map(|s| s.key.clone()) else {
+            return;
+        };
+        let key = panweave_security::authorization::basic_key::<C>(device, &nwk_key);
+        if let Ok(request) = self
+            .aps
+            .transport_basic_authorization_key(device, &key, seq, route)
+            && joining
+        {
+            let _ = self.pending_children.push(PendingChild {
+                ieee: device,
+                short,
+                request,
+            });
+        }
+    }
+
+    /// A network key update: every joined Zigbee Direct Virtual Device
+    /// gets a Basic authorization key derived from the prospective key
+    /// instead of the key itself (§4.6.3.2.2.4), NWK-secured, through
+    /// its parent when it joined through one.
+    pub(crate) fn update_virtual_devices_keys(&mut self, sequence: KeySequenceNumber) {
+        let devices = self.virtual_devices.clone();
+        for (device, parent) in devices {
+            let Some(short) = AddrView(&self.nwk).short_of(device) else {
+                continue;
+            };
+            let route = match parent {
+                Some(p) => KeyRoute::Tunnel { parent: p },
+                None => KeyRoute::Direct {
+                    short,
+                    nwk_secure: true,
+                },
+            };
+            self.send_basic_authorization_key(device, short, sequence, route, false);
         }
     }
 
@@ -1792,6 +1900,19 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                     TransportedKey::ApplicationLink { partner, initiator } => {
                         self.push_event(StackEvent::ApplicationLinkKey { partner, initiator });
+                    }
+                    TransportedKey::BasicAuthorization {
+                        key,
+                        sequence,
+                        source,
+                    } => {
+                        // This stack is not a ZVD; a host running one on
+                        // top of it gets the key for its session layer.
+                        self.push_event(StackEvent::BasicAuthorizationKey {
+                            key,
+                            sequence,
+                            source,
+                        });
                     }
                 },
                 ApsEvent::SwitchKey { sequence, .. } => {
