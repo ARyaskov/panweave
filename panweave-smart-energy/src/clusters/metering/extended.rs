@@ -247,6 +247,40 @@ pub mod notification_scheme {
     pub const fn is_configurable(scheme: u8) -> bool {
         matches!(scheme, 0x03..=0xfe)
     }
+
+    /// Notification Flag Order of predefined scheme A (D.3.4.4.3.4):
+    /// `FunctionalNotificationFlags` alone.
+    pub const ORDER_A: u32 = 0x0FFF_FFFF;
+    /// Notification Flag Order of predefined scheme B (D.3.4.4.3.5):
+    /// `FunctionalNotificationFlags` then `NotificationFlags2`–`5`.
+    pub const ORDER_B: u32 = 0x0123_4FFF;
+
+    /// The Notification Flag Order of a predefined scheme.
+    pub const fn predefined_order(scheme: u8) -> Option<u32> {
+        match scheme {
+            A => Some(ORDER_A),
+            B => Some(ORDER_B),
+            _ => None,
+        }
+    }
+
+    /// The notification flag numbers a Notification Flag Order lists,
+    /// in transmission order: eight nibbles from the most significant,
+    /// each the number of a flag attribute (0 =
+    /// `FunctionalNotificationFlags`, 1–7 = `NotificationFlags2`–`8`),
+    /// 0xF ending the list.
+    pub fn flag_numbers(order: u32) -> heapless::Vec<u8, 8> {
+        let mut out = heapless::Vec::new();
+        for i in (0..8).rev() {
+            #[allow(clippy::cast_possible_truncation)]
+            let n = ((order >> (i * 4)) & 0xF) as u8;
+            if n > 7 {
+                break;
+            }
+            let _ = out.push(n);
+        }
+        out
+    }
 }
 
 /// Supply status (Tables D-56, D-68).
@@ -957,6 +991,17 @@ pub struct MirrorReportAttributeResponse {
 }
 
 impl MirrorReportAttributeResponse {
+    /// The report of `scheme` with flag order `order` (a predefined
+    /// scheme's, or a configured one's): the flag attributes the order
+    /// lists, read through `flag` by number, in that order.
+    pub fn for_order(scheme: u8, order: u32, flag: impl Fn(u8) -> u32) -> Self {
+        let mut flags = Vec::new();
+        for n in notification_scheme::flag_numbers(order) {
+            let _ = flags.push(flag(n));
+        }
+        MirrorReportAttributeResponse { scheme, flags }
+    }
+
     /// Parses the payload.
     pub fn parse(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader::new(bytes);
@@ -2062,6 +2107,47 @@ pub struct Mirror {
     pub endpoint: u8,
     /// Configuration from ConfigureMirror, once received.
     pub config: Option<ConfigureMirror>,
+    /// The notification flag attributes (Table D-58), by number: 0 =
+    /// `FunctionalNotificationFlags`, 1–7 = `NotificationFlags2`–`8`.
+    pub notification_flags: [u32; 8],
+    /// A scheme the meter configured (ConfigureNotificationScheme):
+    /// its number and Notification Flag Order.
+    pub configured_scheme: Option<(u8, u32)>,
+}
+
+impl Mirror {
+    /// The Notification Flag Order of the mirror's scheme (predefined
+    /// A / B, or the configured one), `None` when unconfigured or
+    /// unknown.
+    pub fn flag_order(&self) -> Option<u32> {
+        let scheme = self.config?.scheme;
+        notification_scheme::predefined_order(scheme).or_else(|| {
+            self.configured_scheme
+                .filter(|(s, _)| *s == scheme)
+                .map(|(_, o)| o)
+        })
+    }
+
+    /// The MirrorReportAttributeResponse the mirror sends after a
+    /// Report Attributes from the meter (D.3.3.3.1.10): only with
+    /// Mirror Notification Reporting on and a known scheme.
+    pub fn report_response(&self) -> Option<MirrorReportAttributeResponse> {
+        let cfg = self.config?;
+        if !cfg.notification_reporting {
+            return None;
+        }
+        let order = self.flag_order()?;
+        Some(MirrorReportAttributeResponse::for_order(
+            cfg.scheme,
+            order,
+            |n| {
+                self.notification_flags
+                    .get(usize::from(n))
+                    .copied()
+                    .unwrap_or(0)
+            },
+        ))
+    }
 }
 
 /// ESI-side mirror allocation (D.3.2.3.1.2 / .3, D.3.3.3.1.2 / .3).
@@ -2100,6 +2186,8 @@ impl<const N: usize> MirrorTable<N> {
                     meter,
                     endpoint,
                     config: None,
+                    notification_flags: [0; 8],
+                    configured_scheme: None,
                 });
                 RequestMirrorResponse {
                     endpoint: u16::from(endpoint),
@@ -2153,6 +2241,45 @@ impl<const N: usize> MirrorTable<N> {
     /// The mirror on `endpoint`.
     pub fn on_endpoint(&self, endpoint: u8) -> Option<&Mirror> {
         self.mirrors.iter().find(|m| m.endpoint == endpoint)
+    }
+
+    /// The mirror on `endpoint`, mutably.
+    pub fn on_endpoint_mut(&mut self, endpoint: u8) -> Option<&mut Mirror> {
+        self.mirrors.iter_mut().find(|m| m.endpoint == endpoint)
+    }
+
+    /// Sets (`set`) or clears bits of notification flag number `n` of
+    /// the mirror on `endpoint` (the ESI noting a command waiting for
+    /// the meter, D.3.4.4.3); whether the mirror and flag exist.
+    pub fn notify(&mut self, endpoint: u8, n: u8, bits: u32, set: bool) -> bool {
+        let Some(m) = self.on_endpoint_mut(endpoint) else {
+            return false;
+        };
+        let Some(f) = m.notification_flags.get_mut(usize::from(n)) else {
+            return false;
+        };
+        if set {
+            *f |= bits;
+        } else {
+            *f &= !bits;
+        }
+        true
+    }
+
+    /// Stores a scheme the meter configured (ConfigureNotificationScheme,
+    /// D.3.2.3.1.10): only the configurable values, never the predefined
+    /// ones; whether it was stored.
+    pub fn configure_scheme(&mut self, endpoint: u8, scheme: u8, flag_order: u32) -> bool {
+        if !notification_scheme::is_configurable(scheme) {
+            return false;
+        }
+        match self.on_endpoint_mut(endpoint) {
+            Some(m) => {
+                m.configured_scheme = Some((scheme, flag_order));
+                true
+            }
+            None => false,
+        }
     }
 
     /// The mirrors.
@@ -2853,6 +2980,72 @@ mod tests {
         assert_eq!(f.flow_measured(300, 71), None);
         assert_eq!(f.flow_measured(250, 72), Some(supply_status::OFF));
         assert_eq!(f.status, supply_status::OFF);
+    }
+
+    #[test]
+    fn predefined_notification_schemes_order_the_flags() {
+        use notification_scheme as ns;
+        assert_eq!(ns::predefined_order(ns::A), Some(ns::ORDER_A));
+        assert_eq!(ns::predefined_order(ns::B), Some(ns::ORDER_B));
+        assert_eq!(ns::predefined_order(0x10), None);
+        assert_eq!(ns::flag_numbers(ns::ORDER_A).as_slice(), &[0]);
+        assert_eq!(ns::flag_numbers(ns::ORDER_B).as_slice(), &[0, 1, 2, 3, 4]);
+        assert_eq!(
+            ns::flag_numbers(0x7654_3210).as_slice(),
+            &[7, 6, 5, 4, 3, 2, 1, 0]
+        );
+        assert!(ns::flag_numbers(0xFFFF_FFFF).is_empty());
+        let flags = [0x11u32, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        let r =
+            MirrorReportAttributeResponse::for_order(ns::B, ns::ORDER_B, |n| flags[usize::from(n)]);
+        assert_eq!(r.scheme, ns::B);
+        assert_eq!(r.flags.as_slice(), &[0x11, 0x22, 0x33, 0x44, 0x55]);
+        // A mirror answers only when notification reporting is on and
+        // its scheme is known; a configured scheme brings its own order.
+        let mut table: MirrorTable<2> = MirrorTable::new(&[20, 21]);
+        let _ = table.request(0x1234);
+        assert!(table.on_endpoint(20).unwrap().report_response().is_none());
+        assert!(table.notify(20, 1, 0x3, true));
+        assert!(!table.notify(20, 8, 0x3, true), "no such flag");
+        assert!(table.configure(
+            20,
+            &ConfigureMirror {
+                issuer_event_id: 1,
+                reporting_interval: 60,
+                notification_reporting: false,
+                scheme: ns::A,
+            },
+            true
+        ));
+        assert!(table.on_endpoint(20).unwrap().report_response().is_none());
+        assert!(table.configure(
+            20,
+            &ConfigureMirror {
+                issuer_event_id: 2,
+                reporting_interval: 60,
+                notification_reporting: true,
+                scheme: ns::A,
+            },
+            true
+        ));
+        let r = table.on_endpoint(20).unwrap().report_response().unwrap();
+        assert_eq!((r.scheme, r.flags.as_slice()), (ns::A, &[0u32][..]));
+        assert!(!table.configure_scheme(20, ns::B, 0), "predefined: fixed");
+        assert!(table.configure_scheme(20, 0x10, 0x10FF_FFFF));
+        assert!(table.configure(
+            20,
+            &ConfigureMirror {
+                issuer_event_id: 3,
+                reporting_interval: 60,
+                notification_reporting: true,
+                scheme: 0x10,
+            },
+            true
+        ));
+        let r = table.on_endpoint(20).unwrap().report_response().unwrap();
+        assert_eq!((r.scheme, r.flags.as_slice()), (0x10, &[0x3u32, 0][..]));
+        assert!(table.notify(20, 1, 0x1, false));
+        assert_eq!(table.on_endpoint(20).unwrap().notification_flags[1], 0x2);
     }
 
     #[test]

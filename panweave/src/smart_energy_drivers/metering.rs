@@ -10,7 +10,7 @@ use panweave_runtime::{Stack, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_smart_energy::clusters::metering::extended::{
     self as ext, ChangeSupply, ConfigureMirror, FastPoll, FastPollModeResponse, GetSampledData,
-    GetSnapshot, LocalChangeSupply, MirrorRemoved, MirrorTable, PublishSnapshot,
+    GetSnapshot, LocalChangeSupply, Mirror, MirrorRemoved, MirrorTable, PublishSnapshot,
     RequestFastPollMode, RequestMirrorResponse, ResetLoadLimitCounter, SampledDataResponse,
     Sampler, ScheduleSnapshot, SetSupplyStatus, SetUncontrolledFlowThreshold, Snapshot,
     SnapshotAssembler, SnapshotSchedules, Snapshots, StartSampling, StartSamplingResponse,
@@ -62,6 +62,17 @@ pub enum MeteringServerEvent {
         sample_id: u16,
         /// Sample type.
         sample_type: u8,
+    },
+    /// The mirror answered a report with its notification flags
+    /// (MirrorReportAttributeResponse, D.3.3.3.1.10): the meter fetches
+    /// what waits on the ESI.
+    NotificationFlags {
+        /// The scheme.
+        scheme: u8,
+        /// The flags in the scheme's order (`count` of them).
+        flags: [u32; ext::MAX_NOTIFICATION_FLAGS],
+        /// How many flags were sent.
+        count: u8,
     },
     /// A ScheduleSnapshot was answered; `accepted` schedules were set
     /// up.
@@ -209,6 +220,69 @@ impl MeteringServer {
             &self.snapshot_payload,
             now,
         )
+    }
+
+    /// Reports the current values of `ids` to the mirror at `mirror`
+    /// (a Report Attributes command, D.3.4.4.2); the mirror answers with
+    /// its notification flags when notification reporting is on.
+    /// Returns whether a report was sent (attributes the endpoint does
+    /// not carry are skipped).
+    pub fn report_to_mirror<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        mirror: Destination,
+        ids: &[panweave_types::AttributeId],
+    ) -> bool {
+        use panweave_codec::Encode;
+        use panweave_zcl::frame::Header;
+        use panweave_zcl::global::AttributeValue;
+        let mut buf = [0u8; panweave_zcl::layer::MAX_ZCL];
+        let mut w = panweave_codec::Writer::new(&mut buf);
+        let mut n = 0;
+        {
+            let Some(c) =
+                stack
+                    .zcl
+                    .cluster(self.endpoint, metering::ID, panweave_zcl::Role::Server)
+            else {
+                return false;
+            };
+            for id in ids {
+                let Some(value) = c.attributes.value(*id) else {
+                    continue;
+                };
+                if (AttributeValue { id: *id, value }).encode(&mut w).is_err() {
+                    break;
+                }
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return false;
+        }
+        let len = w.position();
+        let seq = stack.zcl.next_seq();
+        let header = Header::global(
+            seq,
+            panweave_zcl::global::command::REPORT_ATTRIBUTES,
+            Direction::ToClient,
+        )
+        .disable_default_response(true);
+        stack
+            .zcl
+            .send(
+                mirror,
+                panweave_types::ProfileId::SMART_ENERGY,
+                metering::ID,
+                self.endpoint,
+                &header,
+                buf.get(..len).unwrap_or(&[]),
+                panweave_aps::layer::TxOptions {
+                    security: true,
+                    ..panweave_aps::layer::TxOptions::ACKED
+                },
+            )
+            .is_ok()
     }
 
     /// Publishes snapshot `id` to the client that scheduled snapshots
@@ -416,6 +490,22 @@ impl MeteringServer {
                         cause: req.cause,
                     },
                 )
+            }
+            ext::CMD_MIRROR_REPORT_ATTRIBUTE_RESPONSE => {
+                let Ok(r) = ext::MirrorReportAttributeResponse::parse(payload) else {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                };
+                default_response(stack, &origin, ZclStatus::Success);
+                let mut flags = [0u32; ext::MAX_NOTIFICATION_FLAGS];
+                for (slot, f) in flags.iter_mut().zip(r.flags.iter()) {
+                    *slot = *f;
+                }
+                Some(MeteringServerEvent::NotificationFlags {
+                    scheme: r.scheme,
+                    flags,
+                    count: u8::try_from(r.flags.len()).unwrap_or(u8::MAX),
+                })
             }
             ext::CMD_SCHEDULE_SNAPSHOT => {
                 let Ok(cmd) = ScheduleSnapshot::parse(payload) else {
@@ -803,6 +893,26 @@ pub enum MeteringEvent {
     SampledData(SampledDataResponse),
     /// The meter answered Schedule Snapshot.
     SnapshotsScheduled(ext::ScheduleSnapshotResponse),
+    /// A mirrored meter reported attributes into its mirror; the
+    /// MirrorReportAttributeResponse went back when configured.
+    MirrorReported {
+        /// The meter.
+        meter: ShortAddress,
+        /// The mirror endpoint.
+        endpoint: Endpoint,
+        /// Attributes mirrored.
+        attributes: u8,
+        /// The notification flags answered, if any.
+        answered: bool,
+    },
+    /// A mirrored meter configured a notification scheme on its
+    /// mirror (ConfigureNotificationScheme).
+    SchemeConfigured {
+        /// The mirror endpoint.
+        endpoint: Endpoint,
+        /// The scheme.
+        scheme: u8,
+    },
     /// The meter answered Take Snapshot.
     SnapshotTaken(TakeSnapshotResponse),
     /// A complete snapshot was assembled from its Publish Snapshot
@@ -936,6 +1046,73 @@ impl<const MIRRORS: usize> MeteringClient<MIRRORS> {
         self.request(stack, meter, ext::CMD_TAKE_SNAPSHOT, &cause.to_le_bytes())
     }
 
+    /// A Report Attributes from a mirrored meter (D.3.4.4.2): the
+    /// values land in the mirror endpoint's Metering server (attributes
+    /// it does not carry yet are added), and with Mirror Notification
+    /// Reporting on the MirrorReportAttributeResponse with the flags of
+    /// the mirror's scheme goes back (D.3.3.3.1.10).
+    fn on_mirror_report<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        origin: &panweave_zcl::layer::Origin,
+        payload: &[u8],
+    ) -> Option<MeteringEvent> {
+        use panweave_codec::{Decode, Reader};
+        use panweave_zcl::attribute::{Access, AttributeDef};
+        use panweave_zcl::global::AttributeValue;
+        let mut attributes = 0u8;
+        if let Some(c) =
+            stack
+                .zcl
+                .cluster_mut(origin.endpoint, metering::ID, panweave_zcl::Role::Server)
+        {
+            let mut r = Reader::new(payload);
+            while let Ok(rec) = AttributeValue::decode(&mut r) {
+                let stored = c.attributes.set(rec.id, &rec.value).is_ok()
+                    || c.add_attribute(
+                        AttributeDef::new(rec.id.0, rec.value.data_type(), Access::RO),
+                        &rec.value,
+                    )
+                    .is_ok();
+                if stored {
+                    attributes = attributes.saturating_add(1);
+                }
+            }
+        }
+        let response = self
+            .mirrors
+            .on_endpoint(origin.endpoint.0)
+            .and_then(Mirror::report_response);
+        let answered = match response {
+            Some(r) => {
+                let mut buf = [0u8; 1 + 4 * ext::MAX_NOTIFICATION_FLAGS];
+                let mut w = panweave_codec::Writer::new(&mut buf);
+                r.encode(&mut w).is_ok() && {
+                    let n = w.position();
+                    send(
+                        stack,
+                        origin.endpoint,
+                        Destination::Short {
+                            address: origin.src,
+                            endpoint: origin.src_endpoint,
+                        },
+                        metering::ID,
+                        ext::CMD_MIRROR_REPORT_ATTRIBUTE_RESPONSE,
+                        Direction::ToServer,
+                        buf.get(..n).unwrap_or(&[]),
+                    )
+                }
+            }
+            None => false,
+        };
+        Some(MeteringEvent::MirrorReported {
+            meter: origin.src,
+            endpoint: origin.endpoint,
+            attributes,
+            answered,
+        })
+    }
+
     /// Schedule Snapshot (D.3.3.3.1.5).
     pub fn schedule_snapshot<C: BlockCipher, R: CryptoRng, S: Storage>(
         &self,
@@ -1045,11 +1222,67 @@ impl<const MIRRORS: usize> MeteringClient<MIRRORS> {
         stack: &mut Stack<C, R, S>,
         event: &StackEvent,
     ) -> Option<MeteringEvent> {
-        let (origin, payload) =
-            command_for(event, self.endpoint, metering::ID, Direction::ToClient)?;
+        if let StackEvent::ZclReport(f) = event
+            && f.origin.cluster == metering::ID
+            && self
+                .mirrors
+                .on_endpoint(f.origin.endpoint.0)
+                .is_some_and(|m| m.meter == f.origin.src.0)
+        {
+            return self.on_mirror_report(stack, &f.origin, &f.payload);
+        }
+        let (origin, payload) = match event {
+            StackEvent::ZclCommand(f)
+                if f.origin.cluster == metering::ID
+                    && f.origin.header.control.direction == Direction::ToClient
+                    && f.origin.header.control.frame_type
+                        == panweave_zcl::frame::FrameType::ClusterSpecific
+                    && self
+                        .mirrors
+                        .on_endpoint(f.origin.endpoint.0)
+                        .is_some_and(|m| m.meter == f.origin.src.0)
+                    && matches!(
+                        f.origin.header.command,
+                        ext::CMD_CONFIGURE_MIRROR
+                            | ext::CMD_CONFIGURE_NOTIFICATION_SCHEME
+                            | ext::CMD_CONFIGURE_NOTIFICATION_FLAGS
+                    ) =>
+            {
+                (&f.origin, f.payload.as_slice())
+            }
+            _ => command_for(event, self.endpoint, metering::ID, Direction::ToClient)?,
+        };
         let origin = *origin;
         let ok = |stack: &mut Stack<C, R, S>| default_response(stack, &origin, ZclStatus::Success);
         match origin.header.command {
+            ext::CMD_CONFIGURE_NOTIFICATION_SCHEME => {
+                let Ok(cmd) = ext::ConfigureNotificationScheme::parse(payload) else {
+                    default_response(stack, &origin, ZclStatus::MalformedCommand);
+                    return None;
+                };
+                let stored =
+                    self.mirrors
+                        .configure_scheme(origin.endpoint.0, cmd.scheme, cmd.flag_order);
+                default_response(
+                    stack,
+                    &origin,
+                    if stored {
+                        ZclStatus::Success
+                    } else {
+                        ZclStatus::InvalidValue
+                    },
+                );
+                stored.then_some(MeteringEvent::SchemeConfigured {
+                    endpoint: origin.endpoint,
+                    scheme: cmd.scheme,
+                })
+            }
+            ext::CMD_CONFIGURE_NOTIFICATION_FLAGS => {
+                // The bit allocations of a configured scheme are the
+                // application's to interpret; acknowledged.
+                ok(stack);
+                None
+            }
             metering::CMD_GET_PROFILE_RESPONSE => {
                 let Ok(r) = GetProfileResponse::parse(payload) else {
                     default_response(stack, &origin, ZclStatus::MalformedCommand);

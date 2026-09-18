@@ -396,6 +396,201 @@ pub const FULL_CLIENT_DEF: ClusterDef = ClusterDef {
     generated: extended::RECEIVED,
 };
 
+/// The client-side Notification attribute set (Table D-58): the
+/// bitmaps a two-way mirror sets for the sleepy meter behind it
+/// (D.3.4.4.3), and their bits.
+pub mod notification {
+    use panweave_types::AttributeId;
+    use panweave_zcl::attribute::{Access, AttributeDef};
+    use panweave_zcl::types::DataType;
+
+    /// `FunctionalNotificationFlags` (map32, Table D-59).
+    pub const FUNCTIONAL_NOTIFICATION_FLAGS: AttributeDef =
+        AttributeDef::new(0x0000, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags2` (map32, Table D-69: the Price cluster).
+    pub const NOTIFICATION_FLAGS_2: AttributeDef =
+        AttributeDef::new(0x0001, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags3` (map32, Table D-70: the Calendar cluster).
+    pub const NOTIFICATION_FLAGS_3: AttributeDef =
+        AttributeDef::new(0x0002, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags4` (map32, Table D-71: the Prepayment cluster).
+    pub const NOTIFICATION_FLAGS_4: AttributeDef =
+        AttributeDef::new(0x0003, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags5` (map32, Table D-72: the Device Management
+    /// cluster).
+    pub const NOTIFICATION_FLAGS_5: AttributeDef =
+        AttributeDef::new(0x0004, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags6` (map32; no bits defined).
+    pub const NOTIFICATION_FLAGS_6: AttributeDef =
+        AttributeDef::new(0x0005, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags7` (map32; no bits defined).
+    pub const NOTIFICATION_FLAGS_7: AttributeDef =
+        AttributeDef::new(0x0006, DataType::Bitmap(4), Access::RO);
+    /// `NotificationFlags8` (map32; no bits defined).
+    pub const NOTIFICATION_FLAGS_8: AttributeDef =
+        AttributeDef::new(0x0007, DataType::Bitmap(4), Access::RO);
+
+    /// The attribute of notification flag number `n` (0 =
+    /// `FunctionalNotificationFlags`, 1–7 = `NotificationFlags2`–`8`,
+    /// as a Notification Flag Order nibble names them).
+    pub const fn flag_attribute(n: u8) -> Option<AttributeId> {
+        if n <= 7 {
+            Some(AttributeId(n as u16))
+        } else {
+            None
+        }
+    }
+
+    /// `FunctionalNotificationFlags` bits (Table D-59).
+    pub mod functional {
+        /// New OTA firmware.
+        pub const NEW_OTA_FIRMWARE: u32 = 1 << 0;
+        /// CBKE update request.
+        pub const CBKE_UPDATE_REQUEST: u32 = 1 << 1;
+        /// Time sync.
+        pub const TIME_SYNC: u32 = 1 << 2;
+        /// Stay awake request (HAN).
+        pub const STAY_AWAKE_HAN: u32 = 1 << 4;
+        /// Stay awake request (WAN).
+        pub const STAY_AWAKE_WAN: u32 = 1 << 5;
+        /// Push Historical Metering Data attribute set (bits 6–8).
+        pub const PUSH_HISTORICAL_METERING_MASK: u32 = 0x7 << 6;
+        /// Push Historical Prepayment Data attribute set (bits 9–11).
+        pub const PUSH_HISTORICAL_PREPAYMENT_MASK: u32 = 0x7 << 9;
+        /// Push all static data: Basic cluster.
+        pub const PUSH_STATIC_BASIC: u32 = 1 << 12;
+        /// Push all static data: Metering cluster.
+        pub const PUSH_STATIC_METERING: u32 = 1 << 13;
+        /// Push all static data: Prepayment cluster.
+        pub const PUSH_STATIC_PREPAYMENT: u32 = 1 << 14;
+        /// Network key active.
+        pub const NETWORK_KEY_ACTIVE: u32 = 1 << 15;
+        /// Display Message.
+        pub const DISPLAY_MESSAGE: u32 = 1 << 16;
+        /// Cancel All Messages.
+        pub const CANCEL_ALL_MESSAGES: u32 = 1 << 17;
+        /// Change Supply.
+        pub const CHANGE_SUPPLY: u32 = 1 << 18;
+        /// Local Change Supply.
+        pub const LOCAL_CHANGE_SUPPLY: u32 = 1 << 19;
+        /// SetUncontrolledFlowThreshold.
+        pub const SET_UNCONTROLLED_FLOW_THRESHOLD: u32 = 1 << 20;
+        /// Tunnel message pending.
+        pub const TUNNEL_MESSAGE_PENDING: u32 = 1 << 21;
+        /// Get Snapshot.
+        pub const GET_SNAPSHOT: u32 = 1 << 22;
+        /// Get Sampled Data.
+        pub const GET_SAMPLED_DATA: u32 = 1 << 23;
+        /// New sub-GHz channel masks available.
+        pub const NEW_SUB_GHZ_CHANNEL_MASKS: u32 = 1 << 24;
+        /// Energy scan pending.
+        pub const ENERGY_SCAN_PENDING: u32 = 1 << 25;
+        /// Channel change pending.
+        pub const CHANNEL_CHANGE_PENDING: u32 = 1 << 26;
+    }
+
+    /// `NotificationFlags2` bits (Table D-69, the Price cluster).
+    pub mod price {
+        /// PublishPrice.
+        pub const PUBLISH_PRICE: u32 = 1 << 0;
+        /// PublishBlockPeriod.
+        pub const PUBLISH_BLOCK_PERIOD: u32 = 1 << 1;
+        /// PublishTariffInformation.
+        pub const PUBLISH_TARIFF_INFORMATION: u32 = 1 << 2;
+        /// PublishConversionFactor.
+        pub const PUBLISH_CONVERSION_FACTOR: u32 = 1 << 3;
+        /// PublishCalorificValue.
+        pub const PUBLISH_CALORIFIC_VALUE: u32 = 1 << 4;
+        /// PublishCO2Value.
+        pub const PUBLISH_CO2_VALUE: u32 = 1 << 5;
+        /// PublishBillingPeriod.
+        pub const PUBLISH_BILLING_PERIOD: u32 = 1 << 6;
+        /// PublishConsolidatedBill.
+        pub const PUBLISH_CONSOLIDATED_BILL: u32 = 1 << 7;
+        /// PublishPriceMatrix.
+        pub const PUBLISH_PRICE_MATRIX: u32 = 1 << 8;
+        /// PublishBlockThresholds.
+        pub const PUBLISH_BLOCK_THRESHOLDS: u32 = 1 << 9;
+        /// PublishCurrencyConversion.
+        pub const PUBLISH_CURRENCY_CONVERSION: u32 = 1 << 10;
+        /// PublishCreditPaymentInfo.
+        pub const PUBLISH_CREDIT_PAYMENT_INFO: u32 = 1 << 12;
+        /// PublishCPPEvent.
+        pub const PUBLISH_CPP_EVENT: u32 = 1 << 13;
+        /// PublishTierLabels.
+        pub const PUBLISH_TIER_LABELS: u32 = 1 << 14;
+        /// CancelTariff.
+        pub const CANCEL_TARIFF: u32 = 1 << 15;
+    }
+
+    /// `NotificationFlags3` bits (Table D-70, the Calendar cluster).
+    pub mod calendar {
+        /// PublishCalendar.
+        pub const PUBLISH_CALENDAR: u32 = 1 << 0;
+        /// PublishSpecialDays.
+        pub const PUBLISH_SPECIAL_DAYS: u32 = 1 << 1;
+        /// PublishSeasons.
+        pub const PUBLISH_SEASONS: u32 = 1 << 2;
+        /// PublishWeek.
+        pub const PUBLISH_WEEK: u32 = 1 << 3;
+        /// PublishDay.
+        pub const PUBLISH_DAY: u32 = 1 << 4;
+        /// CancelCalendar.
+        pub const CANCEL_CALENDAR: u32 = 1 << 5;
+    }
+
+    /// `NotificationFlags4` bits (Table D-71, the Prepayment cluster).
+    pub mod prepayment {
+        /// Select Available Emergency Credit.
+        pub const SELECT_AVAILABLE_EMERGENCY_CREDIT: u32 = 1 << 0;
+        /// Change Debt.
+        pub const CHANGE_DEBT: u32 = 1 << 1;
+        /// Emergency Credit Setup.
+        pub const EMERGENCY_CREDIT_SETUP: u32 = 1 << 2;
+        /// Consumer Top Up.
+        pub const CONSUMER_TOP_UP: u32 = 1 << 3;
+        /// Credit Adjustment.
+        pub const CREDIT_ADJUSTMENT: u32 = 1 << 4;
+        /// Change Payment Mode.
+        pub const CHANGE_PAYMENT_MODE: u32 = 1 << 5;
+        /// Get Prepay Snapshot.
+        pub const GET_PREPAY_SNAPSHOT: u32 = 1 << 6;
+        /// Get Top Up Log.
+        pub const GET_TOP_UP_LOG: u32 = 1 << 7;
+        /// Set Low Credit Warning Level.
+        pub const SET_LOW_CREDIT_WARNING_LEVEL: u32 = 1 << 8;
+        /// Get Debt Repayment Log.
+        pub const GET_DEBT_REPAYMENT_LOG: u32 = 1 << 9;
+        /// Set Maximum Credit Limit.
+        pub const SET_MAXIMUM_CREDIT_LIMIT: u32 = 1 << 10;
+        /// Set Overall Debt Cap.
+        pub const SET_OVERALL_DEBT_CAP: u32 = 1 << 11;
+    }
+
+    /// `NotificationFlags5` bits (Table D-72, the Device Management
+    /// cluster).
+    pub mod device_management {
+        /// Publish Change of Tenancy.
+        pub const PUBLISH_CHANGE_OF_TENANCY: u32 = 1 << 0;
+        /// Publish Change of Supplier.
+        pub const PUBLISH_CHANGE_OF_SUPPLIER: u32 = 1 << 1;
+        /// Request New Password 1 Response.
+        pub const REQUEST_NEW_PASSWORD_1_RESPONSE: u32 = 1 << 2;
+        /// Request New Password 2 Response.
+        pub const REQUEST_NEW_PASSWORD_2_RESPONSE: u32 = 1 << 3;
+        /// Request New Password 3 Response.
+        pub const REQUEST_NEW_PASSWORD_3_RESPONSE: u32 = 1 << 4;
+        /// Request New Password 4 Response.
+        pub const REQUEST_NEW_PASSWORD_4_RESPONSE: u32 = 1 << 5;
+        /// UpdateSiteID.
+        pub const UPDATE_SITE_ID: u32 = 1 << 6;
+        /// ResetBatteryCounter.
+        pub const RESET_BATTERY_COUNTER: u32 = 1 << 7;
+        /// UpdateCIN.
+        pub const UPDATE_CIN: u32 = 1 << 8;
+    }
+}
+
 /// `UnitofMeasure` values (Table D-26); 0x80 | value is the BCD form.
 pub mod unit_of_measure {
     /// kWh and kW.

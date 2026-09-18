@@ -16,14 +16,14 @@ use panweave::mac::service::MacServiceConfig;
 use panweave::runtime::{JoinMode, StackConfig, StackEvent};
 use panweave::smart_energy::cluster as c;
 use panweave::smart_energy::clusters::metering::extended::{
-    ANY_CAUSE, ChangeSupply, DemandLimiting, GetSampledData, GetSnapshot, LocalChangeSupply,
-    RequestFastPollMode, ScheduleSnapshot, SetSupplyStatus, SetUncontrolledFlowThreshold,
-    SnapshotSchedule, StartSampling, SupplyEvent, sample_type, schedule_confirmation,
-    snapshot_cause, snapshot_confirmation, snapshot_schedule, snapshot_type, supply_control,
-    supply_status,
+    ANY_CAUSE, ChangeSupply, ConfigureMirror, DemandLimiting, GetSampledData, GetSnapshot,
+    LocalChangeSupply, RequestFastPollMode, ScheduleSnapshot, SetSupplyStatus,
+    SetUncontrolledFlowThreshold, SnapshotSchedule, StartSampling, SupplyEvent,
+    notification_scheme, sample_type, schedule_confirmation, snapshot_cause, snapshot_confirmation,
+    snapshot_schedule, snapshot_type, supply_control, supply_status,
 };
 use panweave::smart_energy::clusters::metering::{
-    GetProfile, IntervalPeriod, ProfileStatus, supply_limit as sl,
+    GetProfile, IntervalPeriod, ProfileStatus, notification, supply_limit as sl,
 };
 use panweave::smart_energy::devices;
 use panweave::smart_energy_drivers::metering::{
@@ -67,6 +67,19 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
         panweave::smart_energy::endpoints::add_supply_limit(m).unwrap();
     }
     n.add_endpoint(desc, ep).unwrap();
+    if role == LogicalDeviceType::Coordinator {
+        // The ESI's first mirror endpoint: a Metering server standing in
+        // for the meter, with the client the meter's commands and
+        // reports address (D.3.4.4).
+        let (desc, ep) = se::device(
+            Endpoint(MIRROR_ENDPOINTS[0]),
+            devices::ENERGY_SERVICE_INTERFACE,
+            &[c::METERING],
+            &[c::METERING],
+        )
+        .unwrap();
+        n.add_endpoint(desc, ep).unwrap();
+    }
     n
 }
 
@@ -632,6 +645,117 @@ fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
             .mirrors()
             .len(),
         1
+    );
+    // The meter configures its mirror with predefined scheme B and
+    // notification reporting; the ESI notes a price and a time sync
+    // waiting; the meter's report lands in the mirror and comes back
+    // answered with the flags in scheme B's order (D.3.4.4.3).
+    let mirror = Destination::Short {
+        address: ShortAddress(0x0000),
+        endpoint: Endpoint(MIRROR_ENDPOINTS[0]),
+    };
+    {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        assert!(app.driver.as_ref().unwrap().configure_mirror(
+            stack,
+            mirror,
+            &ConfigureMirror {
+                issuer_event_id: 0x70,
+                reporting_interval: 60,
+                notification_reporting: true,
+                scheme: notification_scheme::B,
+            }
+        ));
+    }
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Esi>(e)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(ev, MeteringEvent::MirrorConfigured { .. }))
+    }));
+    {
+        let (_, app) = sim.stack_and_app::<Esi>(e).unwrap();
+        let d = app.driver.as_mut().unwrap();
+        assert!(d.mirrors.notify(
+            MIRROR_ENDPOINTS[0],
+            0,
+            notification::functional::TIME_SYNC,
+            true
+        ));
+        assert!(d.mirrors.notify(
+            MIRROR_ENDPOINTS[0],
+            1,
+            notification::price::PUBLISH_PRICE,
+            true
+        ));
+        assert!(
+            !d.mirrors.notify(MIRROR_ENDPOINTS[1], 0, 1, true),
+            "no mirror there"
+        );
+    }
+    let summation = {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        let value = stack
+            .zcl
+            .cluster(EP, c::METERING, panweave::zcl::Role::Server)
+            .unwrap()
+            .u64(panweave::smart_energy::clusters::metering::CURRENT_SUMMATION_DELIVERED.id)
+            .unwrap();
+        assert!(app.driver.as_ref().unwrap().report_to_mirror(
+            stack,
+            mirror,
+            &[panweave::smart_energy::clusters::metering::CURRENT_SUMMATION_DELIVERED.id]
+        ));
+        value
+    };
+    assert!(sim.run_until(Duration::from_secs(10), |x| {
+        x.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(ev, MeteringServerEvent::NotificationFlags { .. }))
+    }));
+    assert!(
+        sim.app::<Esi>(e).unwrap().events.iter().any(|ev| matches!(
+            ev,
+            MeteringEvent::MirrorReported {
+                endpoint: Endpoint(20),
+                attributes: 1,
+                answered: true,
+                ..
+            }
+        )),
+        "{:?}",
+        sim.app::<Esi>(e).unwrap().events
+    );
+    assert_eq!(
+        sim.stack(e)
+            .zcl
+            .cluster(
+                Endpoint(MIRROR_ENDPOINTS[0]),
+                c::METERING,
+                panweave::zcl::Role::Server
+            )
+            .unwrap()
+            .u64(panweave::smart_energy::clusters::metering::CURRENT_SUMMATION_DELIVERED.id),
+        Some(summation)
+    );
+    assert!(
+        sim.app::<Meter>(m)
+            .unwrap()
+            .events
+            .iter()
+            .any(|ev| matches!(
+                ev,
+                MeteringServerEvent::NotificationFlags {
+                    scheme: notification_scheme::B,
+                    flags,
+                    count: 5,
+                } if flags[0] == notification::functional::TIME_SYNC
+                    && flags[1] == notification::price::PUBLISH_PRICE
+                    && flags[2..5] == [0, 0, 0]
+            ))
     );
     {
         let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();

@@ -212,6 +212,21 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Metering two-way mirror notification flags (SE 1.4a D.3.4.4.3,
+  D.3.3.3.1.10): `metering::notification` (the Notification attribute
+  set of Table D-58 with the bits of Tables D-59 and D-69–D-72), the
+  predefined schemes A / B as Notification Flag Orders
+  (`notification_scheme::{ORDER_A, ORDER_B, predefined_order,
+  flag_numbers}`), `Mirror::{notification_flags, configured_scheme,
+  report_response}`, `MirrorTable::{notify, configure_scheme}`,
+  `MirrorReportAttributeResponse::for_order`; the ESI's `MeteringClient`
+  driver mirrors a meter's Report Attributes into the mirror endpoint's
+  Metering server, answers with the MirrorReportAttributeResponse when
+  notification reporting is on and takes Configure Mirror /
+  ConfigureNotificationScheme on mirror endpoints
+  (`MeteringEvent::{MirrorReported, SchemeConfigured}`); the meter's
+  `MeteringServer::report_to_mirror` and
+  `MeteringServerEvent::NotificationFlags`.
 * Metering snapshot schedules (SE 1.4a D.3.3.3.1.5, D.3.4.5):
   `SnapshotSchedules` stores the schedules of a Schedule Snapshot with
   the Table D-50 confirmations, `next_snapshot_time` works the Table
