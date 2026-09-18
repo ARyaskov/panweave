@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(concentration::measured(&co2), Some(0.04));
         // The reportable change is a floating-point magnitude: a change
         // of 0.005 does not trigger a report, 0.02 does.
-        let a = co2
+        let mut a = co2
             .attributes
             .get_mut(concentration::MEASURED_VALUE.id, None)
             .unwrap();

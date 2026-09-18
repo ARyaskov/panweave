@@ -743,12 +743,11 @@ fn reset_to_factory_defaults_restores_attributes_and_reporting() {
     let c = zcl.cluster(EP, level::ID, Role::Server).unwrap();
     assert_eq!(c.u8(level::ON_LEVEL.id), Some(level::ON_LEVEL_UNDEFINED));
     let c = zcl.cluster(EP, on_off::ID, Role::Server).unwrap();
-    let rep = c
+    let rep = *c
         .attributes
         .get(on_off::ON_OFF.id, None)
         .unwrap()
         .reporting
-        .as_ref()
         .unwrap();
     assert_eq!((rep.min, rep.max), (0, 300), "default reporting restored");
     let c = zcl.cluster(EP, basic::ID, Role::Server).unwrap();

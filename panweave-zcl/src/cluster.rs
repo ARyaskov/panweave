@@ -207,9 +207,8 @@ impl<const A: usize> ClusterInstance<A> {
         initial: &Value<'_>,
         reporting: crate::attribute::DefaultReporting,
     ) -> Result<(), ZclStatus> {
-        let a = crate::attribute::Attribute::new(def, initial)?
-            .with_default_reporting(reporting, Instant::from_millis(0));
-        self.attributes.add_attribute(a)
+        self.attributes
+            .add_reported(def, initial, reporting, Instant::from_millis(0))
     }
 
     /// Restores the factory defaults of every attribute and clears the
@@ -489,7 +488,7 @@ impl<const A: usize> ClusterInstance<A> {
                         Ok(()) if undivided && any_error => continue,
                         Ok(()) => {
                             let set = match self.attributes.get_mut(rec.id, manuf) {
-                                Some(a) => a.set(&rec.value).map(|_| ()),
+                                Some(mut a) => a.set(&rec.value).map(|_| ()),
                                 None => Err(ZclStatus::UnsupportedAttribute),
                             };
                             match set {
@@ -877,13 +876,14 @@ impl<const A: usize> ClusterInstance<A> {
                 max,
                 change,
             } => {
-                let Some(a) = self.attributes.get_mut(id, manuf) else {
+                let Some(mut a) = self.attributes.get_mut(id, manuf) else {
                     return ZclStatus::UnsupportedAttribute;
                 };
-                if a.def.ty.is_composite() || !a.def.access.has(Access::REPORT) {
+                let def = a.def();
+                if def.ty.is_composite() || !def.access.has(Access::REPORT) {
                     return ZclStatus::UnreportableAttribute;
                 }
-                if ty != a.def.ty {
+                if ty != def.ty {
                     return ZclStatus::InvalidDataType;
                 }
                 if max != 0 && max != 0xffff && max < min {
@@ -904,7 +904,7 @@ impl<const A: usize> ClusterInstance<A> {
                 ZclStatus::Success
             }
             ReportingConfig::Received { id, timeout } => {
-                let Some(a) = self.attributes.get_mut(id, manuf) else {
+                let Some(mut a) = self.attributes.get_mut(id, manuf) else {
                     return ZclStatus::UnreportableAttribute;
                 };
                 a.set_report_timeout(timeout);
@@ -930,7 +930,7 @@ impl<const A: usize> ClusterInstance<A> {
                 config: placeholder(rec),
             };
         }
-        match (rec.direction, &a.reporting) {
+        match (rec.direction, a.reporting) {
             (ReportDirection::Reported, Some(r)) if r.active() => ReadReportingConfigStatus {
                 status: ZclStatus::Success,
                 config: ReportingConfig::Reported {
@@ -959,7 +959,7 @@ impl<const A: usize> ClusterInstance<A> {
                 status: ZclStatus::Success,
                 config: ReportingConfig::Received {
                     id: rec.id,
-                    timeout: r.as_ref().map_or(0, |r| r.timeout),
+                    timeout: r.map_or(0, |r| r.timeout),
                 },
             },
         }
@@ -972,7 +972,8 @@ impl<const A: usize> ClusterInstance<A> {
         // frame of a multi-frame report (§2.3.4.5.2).
         const STATUS_LEN: usize = 4;
         let mut n = 0;
-        for a in self.attributes.iter_mut() {
+        for i in 0..self.attributes.len() {
+            let a = self.attributes.at(i);
             if !a.report_due(now) {
                 continue;
             }
@@ -986,7 +987,7 @@ impl<const A: usize> ClusterInstance<A> {
             if rec.encode(out).is_err() {
                 break;
             }
-            a.mark_reported(now);
+            self.attributes.at_mut(i).mark_reported(now);
             n += 1;
         }
         if n == 0 {
@@ -1015,10 +1016,7 @@ impl<const A: usize> ClusterInstance<A> {
 
     /// Earliest scheduled report.
     pub fn next_report(&self) -> Option<Instant> {
-        self.attributes
-            .iter()
-            .filter_map(crate::attribute::Attribute::next_report)
-            .min_by_key(|t| t.as_millis())
+        self.attributes.next_report()
     }
 
     /// Decodes `bytes` as a value of `id`'s type (helper for tests and
