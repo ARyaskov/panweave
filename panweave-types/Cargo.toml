@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core strongly typed protocol values for the Panweave Zigbee stack"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc"]
 alloc = []
 serde = ["dep:serde"]
 defmt = ["dep:defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 serde = { workspace = true, optional = true }

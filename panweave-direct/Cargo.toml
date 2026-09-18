@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: Zigbee Direct 1.1 security sessions, secured characteristics, advertisement and service codecs"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -19,6 +20,9 @@ defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt"]
 curve25519 = ["panweave-security/dlk"]
 # ECDHE-PSK/P-256/SHA-256/HMAC-SHA-256-128 (Authenticate characteristic 3).
 p256 = ["dep:p256", "dep:sha2", "dep:hmac"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

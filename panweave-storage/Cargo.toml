@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: storage"
+description = "Panweave Zigbee stack: the persistent storage abstraction, an in-memory store and a log-structured store on NOR flash"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -17,6 +18,9 @@ serde = ["dep:serde", "heapless/serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt"]
 # A log-structured store on any `embedded-storage` NOR flash.
 nor-flash = ["dep:embedded-storage"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

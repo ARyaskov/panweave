@@ -325,7 +325,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Asks the Trust Center for an application link key shared with
     /// `partner` (APSME-REQUEST-KEY.request, §4.4.6.1, BDB 3.1 §7.4).
-    /// The key arrives as [`StackEvent::ApplicationLinkKey`] on both
+    /// The key arrives as [`StackEvent::ApplicationLinkKey`](crate::StackEvent::ApplicationLinkKey) on both
     /// devices once the Trust Center's policy allows it.
     pub fn request_application_link_key(
         &mut self,

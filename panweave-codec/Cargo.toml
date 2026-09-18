@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: codec"
+description = "Panweave Zigbee stack: zero-copy reader / writer, Encode / Decode traits and the R23 TLV codec"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc", "panweave-types/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

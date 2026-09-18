@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: Green Power Basic 1.1.2 GPDF codec, GP stub security, Green Power cluster and proxy"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc", "panweave-types/std", "panweave-codec/std", "panweave-mac/std", 
 alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt", "panweave-mac/defmt", "heapless/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

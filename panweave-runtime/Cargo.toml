@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: sans-I/O stack driver composing MAC, NWK, APS, ZDO and ZCL"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -22,6 +23,9 @@ std = ["alloc", "panweave-types/std", "panweave-mac/std", "panweave-nwk/std", "p
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt", "panweave-mac/defmt", "panweave-nwk/defmt", "panweave-aps/defmt", "panweave-zdo/defmt", "panweave-zcl/defmt", "panweave-bdb/defmt", "panweave-storage/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }
@@ -43,7 +47,9 @@ defmt = { workspace = true, optional = true }
 panweave-security = { workspace = true, features = ["crypto-software", "dlk"] }
 panweave-runtime = { path = ".", features = ["dlk", "green-power"] }
 panweave-testkit = { workspace = true }
-panweave-sim = { workspace = true }
+# Path only, no version: a dev-dependency cycle (the simulator runs this
+# runtime) that `cargo publish` strips rather than orders.
+panweave-sim = { path = "../panweave-sim" }
 panweave-pcap = { workspace = true }
 panweave-green-power = { workspace = true }
 

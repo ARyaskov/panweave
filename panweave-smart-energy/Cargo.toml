@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Panweave Zigbee stack: smart-energy"
+description = "Panweave Zigbee stack: Smart Energy 1.4a clusters, devices, CBKE and the metering / price / DRLC / messaging drivers"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc", "panweave-types/std", "panweave-security/std", "panweave-zcl/std
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt", "heapless/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

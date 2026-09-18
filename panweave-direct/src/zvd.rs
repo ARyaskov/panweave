@@ -22,7 +22,7 @@ pub struct BleAddress(pub [u8; 6]);
 /// a ZDD using a previously obtained BLE address").
 pub const KNOWN_ZDDS: usize = 4;
 
-/// A randomly generated, locally administered EUI-64 (§8.5, [R7]): the
+/// A randomly generated, locally administered EUI-64 (§8.5, \[R7\]): the
 /// U/L bit of the first octet on the air (bit 1 of the most significant
 /// octet) set, the I/G bit clear.
 pub fn random_eui64<R: CryptoRng>(rng: &mut R) -> ExtendedAddress {

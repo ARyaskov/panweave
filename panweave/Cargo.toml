@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Independent Rust implementation of IEEE 802.15.4-based Zigbee protocol functionality"
+readme = "../README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -25,6 +26,9 @@ smart-energy = ["dep:panweave-smart-energy"]
 # Smaller ZCL tables (8 clusters × 24 attributes per endpoint); see
 # docs/footprint.md.
 small-tables = ["panweave-runtime/small-tables"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

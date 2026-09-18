@@ -6,8 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: PCAP export and frame summaries (host-side)"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true, features = ["std"] }

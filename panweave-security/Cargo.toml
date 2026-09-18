@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: CCM*, AES-MMO, key hierarchy, frame security and Trust Center policy"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -19,6 +20,9 @@ defmt = ["dep:defmt", "panweave-types/defmt", "panweave-codec/defmt"]
 crypto-software = ["dep:aes", "dep:cipher"]
 # Curve25519 ECDHE/SPEKE for R23 dynamic link keys and Zigbee Direct.
 dlk = ["dep:x25519-dalek", "dep:curve25519-dalek"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

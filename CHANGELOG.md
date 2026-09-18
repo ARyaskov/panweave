@@ -5,6 +5,10 @@ Keep a Changelog; versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-18
+
+The first release: the stack as inventoried in `docs/conformance.md`.
+
 ### Added
 
 * Workspace scaffold, specification map, architecture, security and storage

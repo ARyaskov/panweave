@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: Base Device Behavior 3.1 commissioning procedures"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc", "panweave-types/std", "panweave-aps/std", "panweave-zcl/std", "p
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde", "panweave-aps/serde"]
 defmt = ["dep:defmt", "panweave-types/defmt", "panweave-aps/defmt", "panweave-zcl/defmt", "panweave-device-library/defmt", "heapless/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

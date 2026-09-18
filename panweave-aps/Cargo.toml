@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Panweave Zigbee stack: application support sub-layer (frames, ack/retry, fragmentation, binding, groups, APS security commands)"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -15,6 +16,9 @@ std = ["alloc", "panweave-types/std", "panweave-codec/std", "panweave-security/s
 alloc = ["panweave-types/alloc", "panweave-codec/alloc"]
 serde = ["dep:serde", "heapless/serde", "panweave-types/serde"]
 defmt = ["dep:defmt", "heapless/defmt", "panweave-types/defmt", "panweave-codec/defmt", "panweave-security/defmt"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 panweave-types = { workspace = true }

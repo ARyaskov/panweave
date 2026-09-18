@@ -9,17 +9,17 @@
 //!
 //! Sub-modules split the behaviour by specification area:
 //!
-//! * [`tx`] — frame construction, security, unicast routing decision,
+//! * `tx` — frame construction, security, unicast routing decision,
 //!   NWK-level retries (§3.6.2.1, §3.6.4.3).
-//! * [`rx`] — reception, filtering, security, relay, command dispatch
+//! * `rx` — reception, filtering, security, relay, command dispatch
 //!   (§3.6.2.2).
-//! * [`route`] — route discovery, route reply, route record, network
+//! * `route` — route discovery, route reply, route record, network
 //!   status handling, link status (§3.6.4).
-//! * [`bcast`] — broadcast transactions and passive acknowledgement
+//! * `bcast` — broadcast transactions and passive acknowledgement
 //!   (§3.6.6).
-//! * [`join`] — discovery, formation, joining, rejoining, leaving,
+//! * `join` — discovery, formation, joining, rejoining, leaving,
 //!   permit joining, PAN-ID conflict (§3.6.1).
-//! * [`maint`] — link status periods, child aging, end-device timeout
+//! * `maint` — link status periods, child aging, end-device timeout
 //!   negotiation (§3.6.10) and the timer loop.
 
 mod bcast;
