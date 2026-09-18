@@ -212,6 +212,10 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Metering block information snapshot sub-payloads (SE 1.4a Figures
+  D-21 / D-22 / D-25 / D-26, payload types 2, 3, 6, 7): `BlockSnapshot`
+  with the tier × block summations behind the "Number of Tiers and
+  Block Thresholds in Use" bitmap.
 * Metering two-way mirror notification flags (SE 1.4a D.3.4.4.3,
   D.3.3.3.1.10): `metering::notification` (the Notification attribute
   set of Table D-58 with the bits of Tables D-59 and D-69–D-72), the

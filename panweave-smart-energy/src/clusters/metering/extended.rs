@@ -845,6 +845,114 @@ impl TouSnapshot {
     }
 }
 
+/// Tier × block summations a block snapshot carries.
+pub const MAX_TIER_BLOCKS: usize = 32;
+
+/// The block information snapshot sub-payload (Figures D-21 / D-22 and,
+/// without the billing fields, D-25 / D-26; types 2, 3, 6, 7): the TOU
+/// fields followed by the tier × block summations of the Block
+/// Information attribute set, block index fastest, as many as the
+/// "Number of Tiers and Block Thresholds in Use" bitmap says (tiers in
+/// the high nibble, blocks in the low one; the low nibble is read as
+/// the number of blocks reported per tier, an interpretation).
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct BlockSnapshot {
+    /// The TOU part: summation, billing and tier summations.
+    pub tou: TouSnapshot,
+    /// Tiers with block summations (high nibble of the bitmap).
+    pub block_tiers: u8,
+    /// Blocks reported per tier (low nibble of the bitmap).
+    pub blocks: u8,
+    /// `CurrentTierTBlockBSummation`, tier 1 block 1 first, block index
+    /// fastest: `block_tiers × blocks` of them.
+    pub tier_blocks: Vec<u64, MAX_TIER_BLOCKS>,
+}
+
+impl BlockSnapshot {
+    /// Parses a complete sub-payload of `payload_type`.
+    pub fn parse(payload_type: u8, bytes: &[u8]) -> Result<Self, CodecError> {
+        let tou_type = match payload_type {
+            snapshot_type::BLOCK_DELIVERED => snapshot_type::TOU_DELIVERED,
+            snapshot_type::BLOCK_RECEIVED => snapshot_type::TOU_RECEIVED,
+            snapshot_type::BLOCK_DELIVERED_NO_BILLING => snapshot_type::TOU_DELIVERED_NO_BILLING,
+            snapshot_type::BLOCK_RECEIVED_NO_BILLING => snapshot_type::TOU_RECEIVED_NO_BILLING,
+            other => {
+                return Err(CodecError::InvalidField {
+                    field: "snapshot payload type",
+                    value: u32::from(other),
+                });
+            }
+        };
+        let mut r = Reader::new(bytes);
+        let summation = read_u48(&mut r)?;
+        let billing = if matches!(
+            tou_type,
+            snapshot_type::TOU_DELIVERED | snapshot_type::TOU_RECEIVED
+        ) {
+            Some((r.u32_le()?, r.u32_le()?, r.u32_le()?, r.u32_le()?, r.u8()?))
+        } else {
+            None
+        };
+        let n = r.u8()?;
+        let mut tiers = Vec::new();
+        for _ in 0..n {
+            tiers
+                .push(read_u48(&mut r)?)
+                .map_err(|_| CodecError::Unrepresentable { field: "tiers" })?;
+        }
+        let bitmap = r.u8()?;
+        let block_tiers = bitmap >> 4;
+        let blocks = bitmap & 0x0F;
+        let mut tier_blocks = Vec::new();
+        for _ in 0..(u16::from(block_tiers) * u16::from(blocks)) {
+            tier_blocks
+                .push(read_u48(&mut r)?)
+                .map_err(|_| CodecError::Unrepresentable {
+                    field: "tier blocks",
+                })?;
+        }
+        Ok(BlockSnapshot {
+            tou: TouSnapshot {
+                summation,
+                billing,
+                tiers,
+            },
+            block_tiers,
+            blocks,
+            tier_blocks,
+        })
+    }
+
+    /// Encodes the sub-payload.
+    pub fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        if self.block_tiers > 15
+            || self.blocks > 15
+            || self.tier_blocks.len() != usize::from(self.block_tiers) * usize::from(self.blocks)
+        {
+            return Err(CodecError::Unrepresentable {
+                field: "tier blocks",
+            });
+        }
+        self.tou.encode(w)?;
+        w.u8((self.block_tiers << 4) | self.blocks)?;
+        for v in &self.tier_blocks {
+            write_u48(w, *v)?;
+        }
+        Ok(())
+    }
+
+    /// The payload type of this snapshot for `received` registers.
+    pub const fn payload_type(&self, received: bool) -> u8 {
+        match (self.tou.billing.is_some(), received) {
+            (true, false) => snapshot_type::BLOCK_DELIVERED,
+            (true, true) => snapshot_type::BLOCK_RECEIVED,
+            (false, false) => snapshot_type::BLOCK_DELIVERED_NO_BILLING,
+            (false, true) => snapshot_type::BLOCK_RECEIVED_NO_BILLING,
+        }
+    }
+}
+
 /// GetSampledDataResponse (D.3.2.3.1.8).
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -2524,6 +2632,38 @@ mod tests {
             tou
         );
         assert!(TouSnapshot::parse(snapshot_type::BLOCK_DELIVERED, &buf[..n]).is_err());
+        // The block variant: two tiers with three blocks each, no
+        // billing.
+        let block = BlockSnapshot {
+            tou: TouSnapshot {
+                summation: 77,
+                billing: None,
+                tiers: Vec::from_slice(&[10, 20]).unwrap(),
+            },
+            block_tiers: 2,
+            blocks: 3,
+            tier_blocks: Vec::from_slice(&[1, 2, 3, 4, 5, 6]).unwrap(),
+        };
+        let mut buf = [0u8; 96];
+        let mut w = Writer::new(&mut buf);
+        block.encode(&mut w).unwrap();
+        let n = w.position();
+        assert_eq!(n, 6 + 1 + 12 + 1 + 36);
+        assert_eq!(
+            block.payload_type(true),
+            snapshot_type::BLOCK_RECEIVED_NO_BILLING
+        );
+        assert_eq!(
+            BlockSnapshot::parse(block.payload_type(false), &buf[..n]).unwrap(),
+            block
+        );
+        assert!(BlockSnapshot::parse(snapshot_type::TOU_DELIVERED, &buf[..n]).is_err());
+        let short = BlockSnapshot {
+            tier_blocks: Vec::from_slice(&[1]).unwrap(),
+            ..block
+        };
+        let mut w = Writer::new(&mut buf);
+        assert!(short.encode(&mut w).is_err());
         let ps = PublishSnapshot {
             snapshot_id: 1,
             time: 2,
