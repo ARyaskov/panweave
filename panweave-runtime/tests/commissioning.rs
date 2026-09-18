@@ -35,7 +35,7 @@ const COORD: ExtendedAddress = ExtendedAddress(0x00CC_0000_0000_0001);
 const LAMP: ExtendedAddress = ExtendedAddress(0x00CC_0000_0000_0002);
 const SWITCH: ExtendedAddress = ExtendedAddress(0x00CC_0000_0000_0003);
 
-fn basic_server() -> panweave_zcl::ClusterInstance<36> {
+fn basic_server() -> panweave_runtime::StackCluster {
     basic::server(
         basic::power_source::MAINS_SINGLE_PHASE,
         b"Panweave",
@@ -45,7 +45,7 @@ fn basic_server() -> panweave_zcl::ClusterInstance<36> {
 }
 
 /// On/Off light: Identify, Groups and On/Off servers.
-fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
+fn lamp_endpoint() -> (SimpleDescriptor, panweave_runtime::StackEndpoint) {
     let desc = SimpleDescriptor::new(
         Endpoint(1),
         ProfileId::HOME_AUTOMATION,
@@ -64,7 +64,7 @@ fn lamp_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
 }
 
 /// On/Off switch: Identify server + client, Groups client, On/Off client.
-fn switch_endpoint() -> (SimpleDescriptor, EndpointInstance<12, 36>) {
+fn switch_endpoint() -> (SimpleDescriptor, panweave_runtime::StackEndpoint) {
     let desc = SimpleDescriptor::new(
         Endpoint(2),
         ProfileId::HOME_AUTOMATION,

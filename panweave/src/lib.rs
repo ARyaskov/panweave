@@ -77,7 +77,6 @@ use panweave_types::{
     ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, Key128,
     LogicalDeviceType, NwkStatus,
 };
-use panweave_zcl::layer::EndpointInstance;
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 /// Events of a [`Node`].
@@ -351,7 +350,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        instance: EndpointInstance<12, 36>,
+        instance: panweave_runtime::StackEndpoint,
     ) -> Result<(), EndpointError> {
         self.stack.add_endpoint(descriptor, instance)
     }

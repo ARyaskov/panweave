@@ -22,6 +22,9 @@ dlk = ["panweave-runtime/dlk", "panweave-security/dlk"]
 direct = ["dep:panweave-direct"]
 # Smart Energy 1.4a endpoints (Table 5-13 devices) and clusters.
 smart-energy = ["dep:panweave-smart-energy"]
+# Smaller ZCL tables (8 clusters × 24 attributes per endpoint); see
+# docs/footprint.md.
+small-tables = ["panweave-runtime/small-tables"]
 
 [dependencies]
 panweave-types = { workspace = true }

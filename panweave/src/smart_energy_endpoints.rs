@@ -8,11 +8,11 @@
 //! cluster rules before it is returned.
 
 use heapless::Vec;
+use panweave_runtime::StackCluster;
 use panweave_smart_energy::cluster as c;
 use panweave_smart_energy::devices::{self, Device, common};
 use panweave_smart_energy::endpoints as se;
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
-use panweave_zcl::ClusterInstance;
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zdo::descriptor::SimpleDescriptor;
 
@@ -70,14 +70,14 @@ pub enum BuildError {
     Full,
 }
 
-fn server_instance(id: ClusterId) -> Result<ClusterInstance<36>, BuildError> {
+fn server_instance(id: ClusterId) -> Result<StackCluster, BuildError> {
     if let Some(r) = se::server(id) {
         return r.map_err(|_| BuildError::Full);
     }
     endpoints::server(id).ok_or(BuildError::Unimplemented(id))
 }
 
-fn client_instance(id: ClusterId) -> Result<ClusterInstance<36>, BuildError> {
+fn client_instance(id: ClusterId) -> Result<StackCluster, BuildError> {
     if let Some(r) = se::client(id) {
         return r.map_err(|_| BuildError::Full);
     }

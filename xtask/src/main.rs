@@ -349,6 +349,20 @@ fn gate() -> Result<(), String> {
     )?;
     run(&root, "cargo", &["test", "--workspace"])?;
     run(&root, "cargo", &["test", "--doc", "--workspace"])?;
+    // The small-tables profile changes the dimensions of every endpoint
+    // type: it must at least build with every feature (CI tests it).
+    run(
+        &root,
+        "cargo",
+        &[
+            "check",
+            "-p",
+            "panweave",
+            "--all-targets",
+            "--features",
+            "small-tables,crypto-software,std,smart-energy,direct,dlk",
+        ],
+    )?;
     // no_std verification for the core crates: build the library targets
     // without default features on a bare-metal target when it is installed.
     let no_std_crates = [

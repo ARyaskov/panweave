@@ -17,6 +17,7 @@ use panweave_types::{
     KeySequenceNumber, LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId,
     ShortAddress, TransactionSequence,
 };
+use panweave_zcl::ClusterInstance;
 use panweave_zcl::clusters::basic;
 use panweave_zcl::layer::{EndpointInstance, Origin, Zcl};
 use panweave_zdo::descriptor::{
@@ -33,8 +34,29 @@ pub type StackNwk<C, R> = Nwk<C, R, 16, 16, 4, 16>;
 pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
 pub type StackZdo = Zdo<4>;
-/// ZCL with 2 endpoints × 8 clusters × 16 attributes.
-pub type StackZcl = Zcl<2, 12, 36>;
+/// Endpoints the ZCL dispatcher holds (the Green Power endpoint counts).
+pub const ENDPOINTS: usize = 2;
+/// Cluster instances per endpoint, the Basic server the stack adds
+/// included (`small-tables`: 8).
+#[cfg(not(feature = "small-tables"))]
+pub const ENDPOINT_CLUSTERS: usize = 12;
+/// Cluster instances per endpoint, the Basic server the stack adds
+/// included (`small-tables`: 8).
+#[cfg(feature = "small-tables")]
+pub const ENDPOINT_CLUSTERS: usize = 8;
+/// Attributes per cluster instance (`small-tables`: 24).
+#[cfg(not(feature = "small-tables"))]
+pub const CLUSTER_ATTRIBUTES: usize = 36;
+/// Attributes per cluster instance (`small-tables`: 24).
+#[cfg(feature = "small-tables")]
+pub const CLUSTER_ATTRIBUTES: usize = 24;
+/// ZCL with [`ENDPOINTS`] endpoints × [`ENDPOINT_CLUSTERS`] clusters ×
+/// [`CLUSTER_ATTRIBUTES`] attributes.
+pub type StackZcl = Zcl<ENDPOINTS, ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
+/// An endpoint of the stack's dimensions.
+pub type StackEndpoint = EndpointInstance<ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
+/// A cluster instance of the stack's dimensions.
+pub type StackCluster = ClusterInstance<CLUSTER_ATTRIBUTES>;
 
 /// Queue capacity for stack events.
 pub const EVENT_CAPACITY: usize = 16;
@@ -1111,7 +1133,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        mut instance: EndpointInstance<12, 36>,
+        mut instance: StackEndpoint,
     ) -> Result<(), EndpointError> {
         if instance
             .cluster(basic::ID, panweave_zcl::Role::Server)

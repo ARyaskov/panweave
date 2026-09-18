@@ -15,6 +15,9 @@ default = []
 dlk = ["panweave-security/dlk"]
 # Green Power Basic Proxy (GP Basic 1.1.2).
 green-power = ["dep:panweave-green-power"]
+# Smaller ZCL tables: 8 clusters × 24 attributes per endpoint instead of
+# 12 × 36 (see docs/footprint.md).
+small-tables = []
 std = ["alloc", "panweave-types/std", "panweave-mac/std", "panweave-nwk/std", "panweave-aps/std", "panweave-zdo/std", "panweave-zcl/std", "panweave-bdb/std", "panweave-storage/std", "panweave-security/std"]
 alloc = ["panweave-types/alloc"]
 serde = ["dep:serde", "panweave-types/serde"]

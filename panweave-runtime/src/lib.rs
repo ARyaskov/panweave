@@ -48,6 +48,7 @@ pub mod touchlink;
 pub use persist::Restored;
 pub use provision::{AdoptParams, FormationParams};
 pub use stack::{
-    EndpointError, JoinMode, Stack, StackAps, StackConfig, StackEvent, StackNwk, StackZcl,
+    CLUSTER_ATTRIBUTES, ENDPOINT_CLUSTERS, ENDPOINTS, EVENT_CAPACITY, EndpointError, JoinMode,
+    Stack, StackAps, StackCluster, StackConfig, StackEndpoint, StackEvent, StackNwk, StackZcl,
     StackZdo, ZclFrame, ZdpData,
 };

@@ -4,8 +4,8 @@
 //! required PIN and accepted with it (Unlock Response, the bolt
 //! operation reaching the application, the RF operation event with the
 //! PIN masked), and the automatic relock fires with a Manual-source
-//! Auto Lock event.
-
+//! Auto Lock event. The Door Lock server outgrows `small-tables`.
+#![cfg(not(feature = "small-tables"))]
 #![allow(
     clippy::indexing_slicing,
     clippy::unwrap_used,

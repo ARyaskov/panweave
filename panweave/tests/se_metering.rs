@@ -1,9 +1,10 @@
 //! The Metering drivers over the simulator: an ESI reads a meter's
 //! profile, puts it in fast poll mode, samples it, takes and fetches a
 //! snapshot, changes the supply and hosts a mirror for it — under APS
-//! link-key security.
+//! link-key security. The mirror is a second endpoint: not with
+//! `small-tables`.
 
-#![cfg(feature = "smart-energy")]
+#![cfg(all(feature = "smart-energy", not(feature = "small-tables")))]
 #![allow(
     clippy::indexing_slicing,
     clippy::unwrap_used,

@@ -10,6 +10,7 @@
 
 use heapless::Vec;
 use panweave_device_library::{DeviceType, Side};
+use panweave_runtime::{StackCluster, StackEndpoint};
 use panweave_types::{
     AttributeId, ClusterId, CommandId, DeviceId, Endpoint, ExtendedAddress, ProfileId,
 };
@@ -42,7 +43,7 @@ use panweave_zcl::{ClusterDef, ClusterInstance, Role};
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 /// An endpoint definition: descriptor plus cluster instances.
-pub type Built = (SimpleDescriptor, EndpointInstance<12, 36>);
+pub type Built = (SimpleDescriptor, StackEndpoint);
 
 /// Clusters this crate can instantiate (server side).
 const IMPLEMENTED_SERVERS: &[ClusterId] = &[
@@ -165,7 +166,7 @@ pub fn unsupported_clusters(device: &DeviceType) -> Vec<ClusterId, 16> {
 }
 
 /// A server instance of `id` with its defaults, when implemented.
-pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
+pub fn server(id: ClusterId) -> Option<StackCluster> {
     match id {
         identify::ID => identify::server().ok(),
         groups::ID => groups::server().ok(),
@@ -310,7 +311,7 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
 }
 
 /// A client instance of `id`, when implemented.
-pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
+pub fn client(id: ClusterId) -> Option<StackCluster> {
     match id {
         identify::ID => Some(identify::client()),
         groups::ID => Some(groups::client()),
@@ -608,7 +609,7 @@ pub type Deficiencies = Vec<Deficiency, 32>;
 /// commands ([`panweave_zcl::requirements`]). The Basic server is exempt
 /// from the instance check (the stack adds it). Clusters without known
 /// requirements only need an instance. At most 32 deficiencies are kept.
-pub fn validate(desc: &SimpleDescriptor, ep: &EndpointInstance<12, 36>) -> Deficiencies {
+pub fn validate(desc: &SimpleDescriptor, ep: &StackEndpoint) -> Deficiencies {
     validate_for(desc, ep, false)
 }
 
@@ -616,11 +617,7 @@ pub fn validate(desc: &SimpleDescriptor, ep: &EndpointInstance<12, 36>) -> Defic
 /// that cannot receive broadcasts or groupcasts may leave out the
 /// otherwise mandatory Groups and Scenes servers (DTL §1.11.1), so
 /// those are not reported missing when `sleepy`.
-pub fn validate_for(
-    desc: &SimpleDescriptor,
-    ep: &EndpointInstance<12, 36>,
-    sleepy: bool,
-) -> Deficiencies {
+pub fn validate_for(desc: &SimpleDescriptor, ep: &StackEndpoint, sleepy: bool) -> Deficiencies {
     let mut out = Deficiencies::new();
     match DeviceType::lookup(desc.device) {
         Some(dt) => {
@@ -684,7 +681,7 @@ fn check_commands(
     out: &mut Deficiencies,
     cluster: ClusterId,
     side: Side,
-    inst: &ClusterInstance<36>,
+    inst: &StackCluster,
     required: &[CommandId],
 ) {
     for command in required {
@@ -736,7 +733,7 @@ pub fn consumption_awareness(endpoint: Endpoint) -> Option<Built> {
 }
 
 /// Definition of a cluster instance for custom endpoints.
-pub fn custom_cluster(def: ClusterDef, role: Role) -> ClusterInstance<36> {
+pub fn custom_cluster(def: ClusterDef, role: Role) -> StackCluster {
     ClusterInstance::new(def, role)
 }
 
@@ -778,6 +775,9 @@ mod tests {
             (ias_warning_device, 0x0403, ias_wd::ID),
         ];
         for (build, id, cluster) in sensors {
+            if outgrows_small_tables(DeviceId(id)) {
+                continue;
+            }
             let (d, ep) = build(Endpoint(5)).unwrap();
             assert_eq!(d.device, DeviceId(id));
             assert!(d.has_input(cluster));
@@ -834,10 +834,24 @@ mod tests {
         );
     }
 
+    /// Device types that need the default tables: the Door Lock server
+    /// has more than 24 attributes, the On/Off Sensor more than 8
+    /// clusters (docs/footprint.md).
+    fn outgrows_small_tables(id: DeviceId) -> bool {
+        cfg!(feature = "small-tables") && matches!(id, DeviceId(0x000a) | DeviceId(0x0850))
+    }
+
     #[test]
     fn every_buildable_device_type_validates() {
         for dt in &panweave_device_library::DEVICES {
             if !unsupported_clusters(dt).is_empty() {
+                continue;
+            }
+            if outgrows_small_tables(dt.id) {
+                assert!(
+                    device(Endpoint(1), dt.id, &[], &[], false)
+                        .is_none_or(|(d, ep)| !validate(&d, &ep).is_empty())
+                );
                 continue;
             }
             let (d, ep) = device(Endpoint(1), dt.id, &[], &[], false).unwrap();

@@ -2,8 +2,9 @@
 //! notifying a bound coordinator of a Power Configuration battery alarm
 //! (ZCL8 §3.3, §3.11) with a time stamp from its Time server, the alarm
 //! log read back with Get Alarm, a Reset Alarm reaching the application,
-//! and the Time server set over the network (§3.12).
-
+//! and the Time server set over the network (§3.12). The Diagnostics
+//! server outgrows `small-tables`.
+#![cfg(not(feature = "small-tables"))]
 #![allow(
     clippy::indexing_slicing,
     clippy::unwrap_used,
