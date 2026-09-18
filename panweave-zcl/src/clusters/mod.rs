@@ -6,6 +6,7 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
 
 pub mod alarms;
+pub mod appliance;
 pub mod color_control;
 pub mod commissioning;
 pub mod configuration;
@@ -21,6 +22,7 @@ pub mod io;
 pub mod keep_alive;
 pub mod level;
 pub mod measurement;
+pub mod meter_identification;
 pub mod on_off;
 pub mod ota;
 pub mod poll_control;

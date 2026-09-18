@@ -141,6 +141,15 @@ pub const ALL: &[ClusterRequirements] = &[
         client_commands: cmds![0x00, 0x01, 0x02, 0x03],
     },
     ClusterRequirements {
+        id: ClusterId(0x001b),
+        section: "ZCL §15.2",
+        // StartTime, FinishTime; Signal State; Signal State Response /
+        // Notification.
+        server_attributes: attrs![0x0000, 0x0001],
+        server_commands: cmds![0x01],
+        client_commands: cmds![0x00, 0x01],
+    },
+    ClusterRequirements {
         id: ClusterId(0x0020),
         section: "ZCL §3.16",
         // Check-inInterval, LongPollInterval, ShortPollInterval,
@@ -328,6 +337,41 @@ pub const ALL: &[ClusterRequirements] = &[
         server_attributes: attrs![0x0000],
         server_commands: cmds![0x00, 0x01],
         client_commands: cmds![],
+    },
+    ClusterRequirements {
+        id: ClusterId(0x0b00),
+        section: "ZCL §15.3",
+        // BasicIdentification.
+        server_attributes: attrs![0x0000],
+        server_commands: cmds![],
+        client_commands: cmds![],
+    },
+    ClusterRequirements {
+        id: ClusterId(0x0b01),
+        section: "ZCL §10.13",
+        // CompanyName, MeterTypeID, DataQualityID, POD, AvailablePower,
+        // PowerThreshold.
+        server_attributes: attrs![0x0000, 0x0001, 0x0004, 0x000c, 0x000d, 0x000e],
+        server_commands: cmds![],
+        client_commands: cmds![],
+    },
+    ClusterRequirements {
+        id: ClusterId(0x0b02),
+        section: "ZCL §15.4",
+        // Get Alerts; Get Alerts Response, Alerts Notification, Event
+        // Notification.
+        server_attributes: attrs![],
+        server_commands: cmds![0x00],
+        client_commands: cmds![0x00, 0x01, 0x02],
+    },
+    ClusterRequirements {
+        id: ClusterId(0x0b03),
+        section: "ZCL §15.5",
+        // LogMaxSize, LogQueueMaxSize; Log Request, Log Queue Request;
+        // Log Notification .. Statistics Available.
+        server_attributes: attrs![0x0000, 0x0001],
+        server_commands: cmds![0x00, 0x01],
+        client_commands: cmds![0x00, 0x01, 0x02, 0x03],
     },
     ClusterRequirements {
         id: ClusterId(0x0b04),

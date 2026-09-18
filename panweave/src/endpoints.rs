@@ -11,6 +11,10 @@
 use heapless::Vec;
 use panweave_device_library::{DeviceType, Side};
 use panweave_types::{AttributeId, ClusterId, CommandId, DeviceId, Endpoint, ProfileId};
+use panweave_zcl::clusters::appliance::{
+    control as appliance_control, events_alerts, identification as appliance_identification,
+    statistics as appliance_statistics,
+};
 use panweave_zcl::clusters::configuration::{
     ballast, barrier_control, dehumidification, device_temperature, pump, shade,
     switch_configuration, thermostat_ui,
@@ -25,7 +29,9 @@ use panweave_zcl::clusters::{
 use panweave_zcl::clusters::{
     commissioning, door_lock, electrical_measurement, ias_ace, ias_wd, window_covering,
 };
-use panweave_zcl::clusters::{groups, identify, keep_alive, level, on_off, poll_control, scenes};
+use panweave_zcl::clusters::{
+    groups, identify, keep_alive, level, meter_identification, on_off, poll_control, scenes,
+};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zcl::requirements::requirements;
 use panweave_zcl::{ClusterDef, ClusterInstance, Role};
@@ -74,6 +80,11 @@ const IMPLEMENTED_SERVERS: &[ClusterId] = &[
     pressure::ID,
     flow::ID,
     water_content::RELATIVE_HUMIDITY,
+    appliance_control::ID,
+    appliance_identification::ID,
+    events_alerts::ID,
+    appliance_statistics::ID,
+    meter_identification::ID,
 ];
 /// Clusters this crate can instantiate (client side).
 const IMPLEMENTED_CLIENTS: &[ClusterId] = &[
@@ -231,6 +242,22 @@ pub fn server(id: ClusterId) -> Option<ClusterInstance<36>> {
         illuminance_level::ID => illuminance_level::server(0).ok(),
         pressure::ID => pressure::server(-32767, 32767).ok(),
         flow::ID => flow::server(0, 0xfffe).ok(),
+        appliance_control::ID => appliance_control::server(true).ok(),
+        appliance_identification::ID => appliance_identification::server(
+            appliance_identification::BasicIdentification::default(),
+        )
+        .ok(),
+        events_alerts::ID => Some(events_alerts::server()),
+        appliance_statistics::ID => appliance_statistics::server().ok(),
+        meter_identification::ID => meter_identification::server(&meter_identification::Identity {
+            company_name: b"",
+            meter_type: meter_identification::meter_type::GENERIC,
+            data_quality: meter_identification::data_quality::NOT_CERTIFIED,
+            pod: b"",
+            available_power: 0,
+            power_threshold: 0,
+        })
+        .ok(),
         water_content::RELATIVE_HUMIDITY => water_content::server(
             water_content::RELATIVE_HUMIDITY,
             0,
@@ -282,6 +309,11 @@ pub fn client(id: ClusterId) -> Option<ClusterInstance<36>> {
         illuminance_level::ID => Some(illuminance_level::client()),
         pressure::ID => Some(pressure::client()),
         flow::ID => Some(flow::client()),
+        appliance_control::ID => Some(appliance_control::client()),
+        appliance_identification::ID => Some(appliance_identification::client()),
+        events_alerts::ID => Some(events_alerts::client()),
+        appliance_statistics::ID => Some(appliance_statistics::client()),
+        meter_identification::ID => Some(meter_identification::client()),
         water_content::RELATIVE_HUMIDITY => {
             Some(water_content::client(water_content::RELATIVE_HUMIDITY))
         }

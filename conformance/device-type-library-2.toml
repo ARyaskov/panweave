@@ -20,7 +20,7 @@ level = "mandatory"
 status = "partially-implemented"
 module = "panweave-device-library"
 tests = ["light_and_switch_endpoints"]
-notes = "All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. The facade instantiates every general, measurement, lighting, HVAC, closure and IAS cluster a device type lists (endpoint builders for the lights, switches, sensors, thermostat, window covering, door lock, ballast, on/off sensor, IAS devices and the Trust Center utility endpoint); device types needing the appliance, power profile, metering or partition clusters (Home Gateway, Smart Plug, White Goods, Meter Interface) still report them through unsupported_clusters."
+notes = "All 47 device types of Table 3 with their mandatory server / client clusters (from the PICS tables) are generated from metadata/devices.toml; optional clusters are not recorded. The facade instantiates every general, measurement, lighting, HVAC, closure, IAS and appliance-management cluster a device type lists, plus Meter Identification (endpoint builders for the lights, switches, sensors, thermostat, window covering, door lock, ballast, on/off sensor, IAS devices and the Trust Center utility endpoint); device types needing the Power Profile or Metering clusters (Home Gateway, Smart Plug, White Goods, Meter Interface, Consumption Awareness) still report them through unsupported_clusters."
 [[requirement]]
 id = "PW-DTL-VAL-001"
 section = "§1.4, per-device cluster requirements"

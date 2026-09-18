@@ -212,6 +212,17 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Appliance Management clusters (ZCL8 Chapter 15) and Meter
+  Identification (§10.13): `clusters::appliance::{control,
+  identification, events_alerts, statistics}` with their attributes,
+  command codecs and server state (signal state, alert list, log queue),
+  answered by the dispatcher (Signal State, Get Alerts, Log Request, Log
+  Queue Request) and driven by the application through
+  `Zcl::{appliance_signal_state, appliance_alert, appliance_event,
+  appliance_log, appliance_statistics_available}` and the
+  `ApplianceCommand` / `ApplianceOverload` events (also `StackEvent`);
+  `clusters::meter_identification` with the Table 10-215 attributes.
+  The facade instantiates all five clusters.
 * Endpoint validation (DTL §2.3, ZCL "M/O" columns):
   `panweave_zcl::requirements` lists the unconditionally mandatory
   server attributes and received commands of every implemented cluster;

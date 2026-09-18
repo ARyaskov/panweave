@@ -590,6 +590,23 @@ pub enum StackEvent {
         /// Transitions complete.
         done: bool,
     },
+    /// The Appliance Control server on `endpoint` was told to execute
+    /// `command` (ZCL8 Table 15-6); the application performs it and
+    /// reports the new state with `Stack::zcl_mut().appliance_signal_state`.
+    ApplianceCommand {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Command Identification.
+        command: u8,
+    },
+    /// An overload command reached the Appliance Control server on
+    /// `endpoint` (ZCL8 §15.2.4.4–§15.2.4.6).
+    ApplianceOverload {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The command.
+        overload: panweave_zcl::clusters::appliance::control::Overload,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

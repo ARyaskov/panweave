@@ -96,6 +96,13 @@ pub enum ClusterState {
     Mains(crate::clusters::power_configuration::MainsDwell),
     /// A threshold dwell timer (Device Temperature Configuration §3.4).
     Dwell(crate::clusters::configuration::Dwell),
+    /// Appliance Control server state: the signal state (§15.2).
+    ApplianceControl(crate::clusters::appliance::control::State),
+    /// Appliance Events and Alerts server state: the current alerts
+    /// (§15.4).
+    ApplianceAlerts(crate::clusters::appliance::events_alerts::Alerts),
+    /// Appliance Statistics server state: the log queue (§15.5).
+    ApplianceLogs(crate::clusters::appliance::statistics::LogQueue),
 }
 
 /// A cluster instance.
@@ -250,6 +257,15 @@ impl<const A: usize> ClusterInstance<A> {
             ClusterState::Dwell(_) => {
                 ClusterState::Dwell(crate::clusters::configuration::Dwell::default())
             }
+            ClusterState::ApplianceControl(_) => {
+                ClusterState::ApplianceControl(crate::clusters::appliance::control::State::default())
+            }
+            ClusterState::ApplianceAlerts(_) => ClusterState::ApplianceAlerts(
+                crate::clusters::appliance::events_alerts::Alerts::default(),
+            ),
+            ClusterState::ApplianceLogs(_) => ClusterState::ApplianceLogs(
+                crate::clusters::appliance::statistics::LogQueue::default(),
+            ),
             ClusterState::None => ClusterState::None,
         };
     }

@@ -15,6 +15,7 @@ use panweave_types::{
 };
 
 use crate::cluster::{ClusterDef, ClusterInstance, GlobalOutcome, Role};
+use crate::clusters::appliance::{control as appliance_control, events_alerts, statistics};
 use crate::clusters::configuration::{barrier_control, device_temperature};
 use crate::clusters::groups::{self, GroupStore};
 use crate::clusters::{
@@ -370,6 +371,23 @@ pub enum ZclEvent {
         b: u16,
         /// Transitions complete.
         done: bool,
+    },
+    /// The Appliance Control server on `endpoint` was told to execute
+    /// `command` (Table 15-6); the application performs it and reports
+    /// the new state with [`Zcl::appliance_signal_state`] (§15.2.4.1).
+    ApplianceCommand {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// Command Identification.
+        command: u8,
+    },
+    /// An overload command reached the Appliance Control server on
+    /// `endpoint` (§15.2.4.4–§15.2.4.6).
+    ApplianceOverload {
+        /// Endpoint.
+        endpoint: Endpoint,
+        /// The command.
+        overload: appliance_control::Overload,
     },
 }
 
@@ -1108,6 +1126,108 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                                 }
                                 continue;
                             }
+                            appliance_control::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get(i)
+                                    .and_then(|e| e.cluster(appliance_control::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let endpoint = origin.endpoint;
+                                match appliance_control::handle(c, cmd, payload) {
+                                    appliance_control::Outcome::Execute(command) => {
+                                        self.push_event(ZclEvent::ApplianceCommand {
+                                            endpoint,
+                                            command,
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    appliance_control::Outcome::Response(state) => {
+                                        let mut out = [0u8; 5];
+                                        if let Ok(n) = state.encode(&mut out) {
+                                            self.reply_cluster_specific(
+                                                &origin,
+                                                appliance_control::CMD_SIGNAL_STATE_RESPONSE,
+                                                &out[..n],
+                                            );
+                                        }
+                                    }
+                                    appliance_control::Outcome::WriteFunctions => {
+                                        // The functions are applied by the
+                                        // application: the command is handed
+                                        // over as an indication.
+                                        result.get_or_insert(ZclIndication::Command {
+                                            origin,
+                                            payload,
+                                        });
+                                    }
+                                    appliance_control::Outcome::Overload(overload) => {
+                                        self.push_event(ZclEvent::ApplianceOverload {
+                                            endpoint,
+                                            overload,
+                                        });
+                                        let _ = self.default_response(&origin, ZclStatus::Success);
+                                    }
+                                    appliance_control::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
+                                continue;
+                            }
+                            events_alerts::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get(i)
+                                    .and_then(|e| e.cluster(events_alerts::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let mut out = [0u8; 1 + 3 * events_alerts::MAX_ALERTS];
+                                match events_alerts::handle(c, cmd, &mut out) {
+                                    events_alerts::Outcome::Response(n) => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            events_alerts::CMD_GET_ALERTS_RESPONSE,
+                                            &out[..n],
+                                        );
+                                    }
+                                    events_alerts::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
+                                continue;
+                            }
+                            statistics::ID => {
+                                let Some(c) = self
+                                    .endpoints
+                                    .get(i)
+                                    .and_then(|e| e.cluster(statistics::ID, Role::Server))
+                                else {
+                                    continue;
+                                };
+                                let mut out = [0u8; 12 + statistics::MAX_LOG];
+                                match statistics::handle(c, cmd, payload, &mut out) {
+                                    statistics::Outcome::Log(n) => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            statistics::CMD_LOG_RESPONSE,
+                                            &out[..n],
+                                        );
+                                    }
+                                    statistics::Outcome::Ids(n) => {
+                                        self.reply_cluster_specific(
+                                            &origin,
+                                            statistics::CMD_LOG_QUEUE_RESPONSE,
+                                            &out[..n],
+                                        );
+                                    }
+                                    statistics::Outcome::Default(status) => {
+                                        let _ = self.default_response(&origin, status);
+                                    }
+                                }
+                                continue;
+                            }
                             hvac::thermostat::ID => {
                                 let Some(c) = self.endpoints.get_mut(i).and_then(|e| {
                                     e.cluster_mut(hvac::thermostat::ID, Role::Server)
@@ -1439,6 +1559,141 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 cool,
             });
         }
+    }
+
+    /// Sends a server-generated cluster-specific command of `cluster`
+    /// on `endpoint` to the bound clients (Default Response disabled).
+    fn notify_bound(
+        &mut self,
+        endpoint: Endpoint,
+        cluster: ClusterId,
+        command: CommandId,
+        payload: &[u8],
+    ) -> Result<(), ZclError> {
+        let profile = self.endpoint(endpoint).ok_or(ZclError::NotFound)?.profile;
+        let seq = self.next_seq();
+        let header = Header::cluster_specific(seq, command, Direction::ToClient)
+            .disable_default_response(true);
+        let frame = Self::build(&header, payload)?;
+        self.push_action(ZclAction::Send {
+            destination: Destination::Bound,
+            profile,
+            cluster,
+            src_endpoint: endpoint,
+            frame,
+            options: TxOptions::ACKED,
+        });
+        Ok(())
+    }
+
+    /// Sets the signal state of the Appliance Control server on
+    /// `endpoint`; when it changed a Signal State Notification goes to
+    /// the bound clients (§15.2.5.2). Returns whether it changed.
+    pub fn appliance_signal_state(
+        &mut self,
+        endpoint: Endpoint,
+        state: appliance_control::SignalState,
+    ) -> Result<bool, ZclError> {
+        let c = self
+            .cluster_mut(endpoint, appliance_control::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        if !appliance_control::set_signal_state(c, state) {
+            return Ok(false);
+        }
+        let mut out = [0u8; 5];
+        let n = state.encode(&mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            appliance_control::ID,
+            appliance_control::CMD_SIGNAL_STATE_NOTIFICATION,
+            &out[..n],
+        )?;
+        Ok(true)
+    }
+
+    /// Records an alert change on the Appliance Events and Alerts
+    /// server of `endpoint` and notifies the bound clients of it
+    /// (§15.4.2.4.2).
+    pub fn appliance_alert(
+        &mut self,
+        endpoint: Endpoint,
+        alert: events_alerts::Alert,
+    ) -> Result<(), ZclError> {
+        let c = self
+            .cluster_mut(endpoint, events_alerts::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        events_alerts::record(c, alert).map_err(|_| ZclError::Busy)?;
+        let mut out = [0u8; 4];
+        let n = events_alerts::encode_alerts(&[alert], &mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            events_alerts::ID,
+            events_alerts::CMD_ALERTS_NOTIFICATION,
+            &out[..n],
+        )
+    }
+
+    /// Notifies the bound clients of the Appliance Events and Alerts
+    /// server on `endpoint` of `event` (Table 15-21, §15.4.2.4.3).
+    pub fn appliance_event(&mut self, endpoint: Endpoint, event: u8) -> Result<(), ZclError> {
+        self.cluster(endpoint, events_alerts::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let mut out = [0u8; 2];
+        let n = events_alerts::encode_event(event, &mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            events_alerts::ID,
+            events_alerts::CMD_EVENT_NOTIFICATION,
+            &out[..n],
+        )
+    }
+
+    /// Stores a statistics log on the Appliance Statistics server of
+    /// `endpoint` (time-stamped from a Time server on the endpoint when
+    /// present) and sends it to the bound clients as a Log Notification
+    /// (§15.5.2.2.1). Returns the Log ID.
+    pub fn appliance_log(&mut self, endpoint: Endpoint, payload: &[u8]) -> Result<u32, ZclError> {
+        let now = self.now;
+        let stamp = self
+            .endpoint(endpoint)
+            .and_then(|ep| ep.cluster(time::ID, Role::Server))
+            .and_then(|t| time::now(t, now))
+            .unwrap_or(statistics::NO_TIME);
+        let c = self
+            .cluster_mut(endpoint, statistics::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let log = statistics::queue_mut(c)
+            .push(stamp, payload)
+            .map_err(|_| ZclError::Busy)?;
+        let id = log.id;
+        let mut out = [0u8; 12 + statistics::MAX_LOG];
+        let n = log.encode(&mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            statistics::ID,
+            statistics::CMD_LOG_NOTIFICATION,
+            &out[..n],
+        )?;
+        Ok(id)
+    }
+
+    /// Tells the bound clients of the Appliance Statistics server on
+    /// `endpoint` which logs can be retrieved (§15.5.2.2.4).
+    pub fn appliance_statistics_available(&mut self, endpoint: Endpoint) -> Result<(), ZclError> {
+        let c = self
+            .cluster(endpoint, statistics::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        let ids = statistics::queue(c)
+            .map(statistics::LogQueue::ids)
+            .unwrap_or_default();
+        let mut out = [0u8; 1 + 4 * statistics::QUEUE];
+        let n = statistics::encode_ids(&ids, &mut out).map_err(|_| ZclError::TooLarge)?;
+        self.notify_bound(
+            endpoint,
+            statistics::ID,
+            statistics::CMD_STATISTICS_AVAILABLE,
+            &out[..n],
+        )
     }
 
     /// Sends a Door Lock event notification to the bound clients.
