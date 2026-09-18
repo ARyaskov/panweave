@@ -134,6 +134,27 @@ pub fn metering_server() -> Result<ClusterInstance<36>, ZclStatus> {
     Ok(c)
 }
 
+/// Adds the Supply Limit attribute set (D.3.2.2.7) to a metering
+/// server: demand limiting off, a single 30-minute demand interval, the
+/// 60 s arm duration, every required supply state UNCHANGED and the
+/// counter at zero. A meter with demand limiting or a contactor
+/// carries these; the driver keeps them current.
+pub fn add_supply_limit(c: &mut ClusterInstance<36>) -> Result<(), ZclStatus> {
+    use metering::supply_limit as sl;
+    c.add_attribute(sl::CURRENT_DEMAND_DELIVERED, &uint(3, 0))?;
+    c.add_attribute(sl::DEMAND_LIMIT, &uint(3, 0xFF_FFFF))?;
+    c.add_attribute(sl::DEMAND_INTEGRATION_PERIOD, &uint(1, 30))?;
+    c.add_attribute(sl::NUMBER_OF_DEMAND_SUBINTERVALS, &uint(1, 1))?;
+    c.add_attribute(sl::DEMAND_LIMIT_ARM_DURATION, &uint(2, 60))?;
+    let unchanged = Value::Enum8(metering::extended::supply_status::UNCHANGED);
+    c.add_attribute(sl::LOAD_LIMIT_SUPPLY_STATE, &unchanged)?;
+    c.add_attribute(sl::LOAD_LIMIT_COUNTER, &uint(1, 0))?;
+    c.add_attribute(sl::SUPPLY_TAMPER_STATE, &unchanged)?;
+    c.add_attribute(sl::SUPPLY_DEPLETION_STATE, &unchanged)?;
+    c.add_attribute(sl::SUPPLY_UNCONTROLLED_FLOW_STATE, &unchanged)?;
+    Ok(())
+}
+
 /// A DRLC client with the Table D-7 attributes at their defaults for
 /// a device of `device_class` bits.
 pub fn drlc_client_for(device_class: u16) -> Result<ClusterInstance<36>, ZclStatus> {

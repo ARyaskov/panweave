@@ -23,6 +23,7 @@ use panweave_smart_energy::clusters::metering::{
 use panweave_storage::Storage;
 use panweave_types::time::Instant;
 use panweave_types::{CryptoRng, Endpoint, ShortAddress};
+use panweave_zcl::Value;
 use panweave_zcl::ZclStatus;
 use panweave_zcl::frame::Direction;
 
@@ -509,6 +510,48 @@ impl MeteringServer {
         changed.map(|status| MeteringServerEvent::SupplyChanged { status })
     }
 
+    /// A `CurrentDemandDelivered` measurement (D.3.2.2.7.1): the
+    /// attribute is updated and, with demand limiting on, an excursion
+    /// over `DemandLimit` disconnects the supply and counts
+    /// (D.3.2.2.7.2–D.3.2.2.7.7).
+    pub fn demand_measured<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        demand: u32,
+    ) -> Option<MeteringServerEvent> {
+        if let Some(c) =
+            stack
+                .zcl
+                .cluster_mut(self.endpoint, metering::ID, panweave_zcl::Role::Server)
+        {
+            c.set(
+                metering::supply_limit::CURRENT_DEMAND_DELIVERED.id,
+                &Value::Uint {
+                    width: 3,
+                    value: u64::from(demand),
+                },
+            );
+        }
+        let now = utc_now(stack, self.endpoint, &self.clock);
+        let changed = self.supply.demand_measured(demand, now);
+        self.write_supply_attributes(stack);
+        changed.map(|status| MeteringServerEvent::SupplyChanged { status })
+    }
+
+    /// A flow measurement of a flow meter (D.3.3.3.1.15): a flow at or
+    /// above the uncontrolled-flow threshold for the stabilisation and
+    /// measurement periods is an uncontrolled-flow event.
+    pub fn flow_measured<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        flow: u16,
+    ) -> Option<MeteringServerEvent> {
+        let now = utc_now(stack, self.endpoint, &self.clock);
+        let changed = self.supply.flow_measured(flow, now);
+        self.write_supply_attributes(stack);
+        changed.map(|status| MeteringServerEvent::SupplyChanged { status })
+    }
+
     /// Mirrors the supply policy, counter and uncontrolled-flow
     /// configuration into the Supply Limit / Supply Control attributes
     /// the endpoint carries.
@@ -530,6 +573,18 @@ impl MeteringServer {
         c.set_u8(sl::SUPPLY_DEPLETION_STATE.id, p.depletion);
         c.set_u8(sl::SUPPLY_UNCONTROLLED_FLOW_STATE.id, p.uncontrolled_flow);
         c.set_u8(sl::LOAD_LIMIT_COUNTER.id, self.supply.load_limit_counter);
+        if let Some(d) = self.supply.demand_limiting {
+            c.set(
+                sl::DEMAND_LIMIT.id,
+                &Value::Uint {
+                    width: 3,
+                    value: u64::from(d.limit),
+                },
+            );
+            c.set_u8(sl::DEMAND_INTEGRATION_PERIOD.id, d.integration_period_min);
+            c.set_u8(sl::NUMBER_OF_DEMAND_SUBINTERVALS.id, d.subintervals);
+            c.set_u16(sl::DEMAND_LIMIT_ARM_DURATION.id, d.arm_duration_secs);
+        }
         if let Some(f) = self.supply.uncontrolled_flow {
             c.set_u16(sc::UNCONTROLLED_FLOW_THRESHOLD.id, f.threshold);
             c.set_u8(sc::UNCONTROLLED_FLOW_THRESHOLD_UNIT_OF_MEASURE.id, f.unit);
@@ -549,10 +604,15 @@ impl MeteringServer {
         _now: Instant,
     ) -> Option<MeteringServerEvent> {
         let now = utc_now(stack, self.endpoint, &self.clock);
+        if let Some(status) = self.supply.poll_demand_limit(now) {
+            self.write_supply_attributes(stack);
+            return Some(MeteringServerEvent::SupplyChanged { status });
+        }
         let ack = self.supply.poll(now)?;
         if let Some(r) = ack {
             self.send_supply_status(stack, &r);
         }
+        self.write_supply_attributes(stack);
         Some(MeteringServerEvent::SupplyChanged {
             status: self.supply.status,
         })

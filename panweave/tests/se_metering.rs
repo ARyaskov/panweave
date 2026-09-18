@@ -16,11 +16,14 @@ use panweave::mac::service::MacServiceConfig;
 use panweave::runtime::{JoinMode, StackConfig, StackEvent};
 use panweave::smart_energy::cluster as c;
 use panweave::smart_energy::clusters::metering::extended::{
-    ANY_CAUSE, ChangeSupply, GetSampledData, GetSnapshot, RequestFastPollMode, SetSupplyStatus,
-    SetUncontrolledFlowThreshold, StartSampling, SupplyEvent, sample_type, snapshot_cause,
-    snapshot_confirmation, snapshot_type, supply_control, supply_status,
+    ANY_CAUSE, ChangeSupply, DemandLimiting, GetSampledData, GetSnapshot, LocalChangeSupply,
+    RequestFastPollMode, SetSupplyStatus, SetUncontrolledFlowThreshold, StartSampling, SupplyEvent,
+    sample_type, snapshot_cause, snapshot_confirmation, snapshot_type, supply_control,
+    supply_status,
 };
-use panweave::smart_energy::clusters::metering::{GetProfile, IntervalPeriod, ProfileStatus};
+use panweave::smart_energy::clusters::metering::{
+    GetProfile, IntervalPeriod, ProfileStatus, supply_limit as sl,
+};
 use panweave::smart_energy::devices;
 use panweave::smart_energy_drivers::metering::{
     MeteringClient, MeteringEvent, MeteringServer, MeteringServerEvent,
@@ -50,11 +53,18 @@ fn node(role: LogicalDeviceType, ieee: ExtendedAddress, seed: u64) -> SimStack {
         MemoryStorage::new(),
     );
     se::apply_profile_to_stack(&mut n);
-    let (desc, ep) = if role == LogicalDeviceType::Coordinator {
+    let (desc, mut ep) = if role == LogicalDeviceType::Coordinator {
         se::device(EP, devices::ENERGY_SERVICE_INTERFACE, &[], &[c::METERING]).unwrap()
     } else {
         se::metering_device(EP).unwrap()
     };
+    if role != LogicalDeviceType::Coordinator {
+        // A meter with a contactor and demand limiting.
+        let m = ep
+            .cluster_mut(c::METERING, panweave::zcl::Role::Server)
+            .unwrap();
+        panweave::smart_energy::endpoints::add_supply_limit(m).unwrap();
+    }
     n.add_endpoint(desc, ep).unwrap();
     n
 }
@@ -462,6 +472,44 @@ fn meter_answers_profile_fast_poll_sampling_snapshot_supply_and_mirror() {
                 status: supply_status::OFF
             })
         );
+    }
+    // Demand limiting (D.3.2.2.7.2–D.3.2.2.7.5): the meter's own
+    // measurement over the limit disconnects the supply and counts; the
+    // driver's poll re-arms it after DemandLimitArmDuration.
+    {
+        let (stack, app) = sim.stack_and_app::<Meter>(m).unwrap();
+        let d = app.driver.as_mut().unwrap();
+        assert_eq!(
+            d.supply_event(stack, SupplyEvent::Tamper),
+            None,
+            "already off"
+        );
+        let _ = d.supply.local_change(&LocalChangeSupply {
+            proposed_status: supply_status::ON,
+        });
+        d.supply.status = supply_status::ON;
+        d.supply.demand_limiting = Some(DemandLimiting {
+            limit: 12_000,
+            integration_period_min: 30,
+            subintervals: 6,
+            arm_duration_secs: 30,
+        });
+        assert_eq!(d.demand_measured(stack, 11_000), None);
+        assert_eq!(
+            d.demand_measured(stack, 12_001),
+            Some(MeteringServerEvent::SupplyChanged {
+                status: supply_status::OFF_ARMED
+            }),
+            "the policy's load-limit state"
+        );
+        assert_eq!(d.supply.load_limit_counter, 3);
+        let c = stack
+            .zcl
+            .cluster(EP, c::METERING, panweave::zcl::Role::Server)
+            .unwrap();
+        assert_eq!(c.u64(sl::CURRENT_DEMAND_DELIVERED.id), Some(12_001));
+        assert_eq!(c.u64(sl::DEMAND_LIMIT.id), Some(12_000));
+        assert_eq!(c.u8(sl::LOAD_LIMIT_COUNTER.id), Some(3));
     }
     {
         let (stack, app) = sim.stack_and_app::<Esi>(e).unwrap();

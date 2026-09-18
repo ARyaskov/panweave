@@ -212,6 +212,18 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Metering demand limiting and uncontrolled-flow detection (SE 1.4a
+  D.3.2.2.7, D.3.3.3.1.15): `SupplyControl::demand_limiting`
+  (`DemandLimiting`, `DEMAND_LIMIT_OFF`), `demand_measured` (an
+  excursion over `DemandLimit` disconnects the supply into the
+  load-limit state, counts, and `poll_demand_limit` re-arms it after
+  `DemandLimitArmDuration`), `flow_measured` (a flow at or above the
+  uncontrolled-flow threshold for the stabilisation and measurement
+  periods raises the uncontrolled-flow event); the `MeteringServer`
+  driver's `demand_measured` / `flow_measured` keep
+  `CurrentDemandDelivered` and the Supply Limit attributes current, and
+  `panweave_smart_energy::endpoints::add_supply_limit` instantiates the
+  attribute set.
 * The ZDD's security state (ZD 1.1 §6.2, §6.3.1, §6.6):
   `panweave_direct::state::SecurityState` (Open to be provisioned for
   `NewZddProvisioningTimeout`, at least 60 s, held open by a provisioning

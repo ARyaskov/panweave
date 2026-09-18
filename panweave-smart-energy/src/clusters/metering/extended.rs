@@ -1421,6 +1421,44 @@ pub struct UncontrolledFlow {
     pub measurement_period: u16,
 }
 
+/// The meter's demand limiting (the Supply Limit attributes
+/// `DemandLimit`, `DemandLntegrationPeriod`, `NumberOfDemandSubintervals`
+/// and `DemandLimitArmDuration`, D.3.2.2.7.2–D.3.2.2.7.5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct DemandLimiting {
+    /// `DemandLimit` in the units of `CurrentDemandDelivered`;
+    /// [`DEMAND_LIMIT_OFF`] switches demand limiting off.
+    pub limit: u32,
+    /// `DemandIntegrationPeriod`, minutes (never 0).
+    pub integration_period_min: u8,
+    /// `NumberOfDemandSubintervals` (never 0).
+    pub subintervals: u8,
+    /// `DemandLimitArmDuration`, seconds the supply stays disconnected
+    /// after the limit was exceeded before the meter moves to ARMED.
+    pub arm_duration_secs: u16,
+}
+
+/// `DemandLimit` value that switches demand limiting off.
+pub const DEMAND_LIMIT_OFF: u32 = 0xFF_FFFF;
+
+impl DemandLimiting {
+    /// Whether demand limiting is on.
+    pub const fn enabled(&self) -> bool {
+        self.limit != DEMAND_LIMIT_OFF
+    }
+
+    /// The demand sub-interval, seconds (D.3.2.2.7.4).
+    pub const fn subinterval_secs(&self) -> u32 {
+        (self.integration_period_min as u32 * 60)
+            / (if self.subintervals == 0 {
+                1
+            } else {
+                self.subintervals as u32
+            })
+    }
+}
+
 /// A meter event the supply policy answers (D.3.2.2.7.6–D.3.2.2.7.10).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -1452,7 +1490,16 @@ pub struct SupplyControl {
     pub load_limit_counter: u8,
     /// Uncontrolled-flow detection, when configured.
     pub uncontrolled_flow: Option<UncontrolledFlow>,
+    /// Demand limiting, when the meter supports it.
+    pub demand_limiting: Option<DemandLimiting>,
     pending: Option<ChangeSupply>,
+    /// When the supply, disconnected over the demand limit, moves to
+    /// ARMED (D.3.2.2.7.5).
+    rearm_at: Option<u32>,
+    /// Since when the measured flow has been at or above the
+    /// uncontrolled-flow threshold (the stabilisation period runs
+    /// first, then the measurement period).
+    flow_over_since: Option<u32>,
 }
 
 impl SupplyControl {
@@ -1471,7 +1518,10 @@ impl SupplyControl {
             policy_event_id: None,
             load_limit_counter: 0,
             uncontrolled_flow: None,
+            demand_limiting: None,
             pending: None,
+            rearm_at: None,
+            flow_over_since: None,
         }
     }
 
@@ -1545,6 +1595,55 @@ impl SupplyControl {
         Some(required)
     }
 
+    /// A `CurrentDemandDelivered` measurement at `now` (D.3.2.2.7.1–
+    /// D.3.2.2.7.5): while demand limiting is on and the demand exceeds
+    /// `DemandLimit`, the supply is disconnected (the load-limit state:
+    /// `LoadLimitSupplyState`, or OFF when the policy leaves it
+    /// unchanged), `LoadLimitCounter` counts the excursion and the
+    /// supply moves to ARMED after `DemandLimitArmDuration`. Returns the
+    /// new supply status when it changed.
+    pub fn demand_measured(&mut self, demand: u32, now: u32) -> Option<u8> {
+        let d = self.demand_limiting.filter(DemandLimiting::enabled)?;
+        if demand <= d.limit || !self.capable {
+            return None;
+        }
+        if self.rearm_at.is_some() || self.status == supply_status::OFF_ARMED {
+            // Already disconnected over the limit.
+            return None;
+        }
+        let changed = self.on_event(SupplyEvent::LoadLimit);
+        let required = if changed.is_some() {
+            self.status
+        } else {
+            self.status = supply_status::OFF;
+            supply_status::OFF
+        };
+        self.rearm_at = Some(now.saturating_add(u32::from(d.arm_duration_secs)));
+        Some(required)
+    }
+
+    /// A flow measurement at `now` for a flow meter with an
+    /// uncontrolled-flow threshold (D.3.3.3.1.15): a flow at or above
+    /// the threshold for the stabilisation period plus the measurement
+    /// period is an uncontrolled-flow event (the supply takes
+    /// `SupplyUncontrolledFlowState`). `flow` is in the threshold's
+    /// units. Returns the new supply status when it changed.
+    pub fn flow_measured(&mut self, flow: u16, now: u32) -> Option<u8> {
+        let f = self.uncontrolled_flow.filter(|f| f.threshold != 0)?;
+        if flow < f.threshold {
+            self.flow_over_since = None;
+            return None;
+        }
+        let since = *self.flow_over_since.get_or_insert(now);
+        let window =
+            u32::from(f.stabilisation_period).div_ceil(10) + u32::from(f.measurement_period);
+        if now.saturating_sub(since) < window {
+            return None;
+        }
+        self.flow_over_since = None;
+        self.on_event(SupplyEvent::UncontrolledFlow)
+    }
+
     /// `ProposedChangeSupplyImplementationTime` (0 when none).
     pub fn proposed_implementation_time(&self) -> u32 {
         self.pending.map_or(0, |p| p.implementation_time)
@@ -1596,6 +1695,20 @@ impl SupplyControl {
         SupplyOutcome::Scheduled
     }
 
+    /// The supply disconnected over the demand limit moves to ARMED when
+    /// `DemandLimitArmDuration` has passed (D.3.2.2.7.5); the new status
+    /// when it changed.
+    pub fn poll_demand_limit(&mut self, now: u32) -> Option<u8> {
+        let at = self.rearm_at.filter(|at| *at <= now)?;
+        let _ = at;
+        self.rearm_at = None;
+        if self.status == supply_status::OFF_ARMED {
+            return None;
+        }
+        self.status = supply_status::OFF_ARMED;
+        Some(self.status)
+    }
+
     /// Applies a due delayed command; the response to send when it
     /// asked for one.
     pub fn poll(&mut self, now: u32) -> Option<Option<SupplyStatusResponse>> {
@@ -1614,9 +1727,12 @@ impl SupplyControl {
         )
     }
 
-    /// When the pending command is due.
+    /// When the pending command is due, or the supply re-arms.
     pub fn next_deadline(&self) -> Option<u32> {
-        self.pending.map(|p| p.implementation_time)
+        match (self.pending.map(|p| p.implementation_time), self.rearm_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Handles a Local Change Supply (D.3.3.3.1.13): only OFF/ARMED or
@@ -2380,6 +2496,67 @@ mod tests {
         );
         let mut gas = SupplyControl::new(supply_status::ON, false, false);
         assert_eq!(gas.change(&now_cmd, 1), SupplyOutcome::Unsupported);
+    }
+
+    #[test]
+    fn demand_limiting_and_flow_detection_drive_the_supply() {
+        let mut s = SupplyControl::new(supply_status::ON, true, true);
+        // Nothing without demand limiting; nothing while it is off.
+        assert_eq!(s.demand_measured(9_999, 100), None);
+        s.demand_limiting = Some(DemandLimiting {
+            limit: DEMAND_LIMIT_OFF,
+            integration_period_min: 30,
+            subintervals: 6,
+            arm_duration_secs: 60,
+        });
+        assert_eq!(s.demand_measured(9_999, 100), None);
+        assert_eq!(s.demand_limiting.unwrap().subinterval_secs(), 300);
+        // On, with the policy leaving the state unchanged: the supply
+        // goes OFF at the excursion, counts it, and arms after the arm
+        // duration; a second excursion while disconnected is nothing.
+        s.demand_limiting.as_mut().unwrap().limit = 5_000;
+        assert_eq!(s.demand_measured(5_000, 100), None);
+        assert_eq!(s.demand_measured(5_001, 100), Some(supply_status::OFF));
+        assert_eq!(s.load_limit_counter, 1);
+        assert_eq!(s.demand_measured(6_000, 110), None);
+        assert_eq!(s.next_deadline(), Some(160));
+        assert_eq!(s.poll_demand_limit(159), None);
+        assert_eq!(s.poll_demand_limit(160), Some(supply_status::OFF_ARMED));
+        assert_eq!(s.next_deadline(), None);
+        // Armed: the user reconnects locally, the next excursion follows
+        // the policy's load-limit state.
+        assert_eq!(
+            s.local_change(&LocalChangeSupply {
+                proposed_status: supply_status::ON
+            }),
+            SupplyOutcome::Applied(None)
+        );
+        s.policy.load_limit = supply_status::OFF_ARMED;
+        assert_eq!(
+            s.demand_measured(7_000, 200),
+            Some(supply_status::OFF_ARMED)
+        );
+        assert_eq!(s.load_limit_counter, 2);
+        // Uncontrolled flow: at or above the threshold for the
+        // stabilisation (2 s) plus measurement (30 s) periods.
+        let mut f = SupplyControl::new(supply_status::ON, true, true);
+        f.policy.uncontrolled_flow = supply_status::OFF;
+        assert_eq!(f.flow_measured(300, 0), None, "no threshold");
+        f.uncontrolled_flow = Some(UncontrolledFlow {
+            threshold: 250,
+            unit: 1,
+            multiplier: 1,
+            divisor: 10,
+            stabilisation_period: 20,
+            measurement_period: 30,
+        });
+        assert_eq!(f.flow_measured(300, 0), None);
+        assert_eq!(f.flow_measured(300, 31), None);
+        assert_eq!(f.flow_measured(100, 32), None, "dropped below: restart");
+        assert_eq!(f.flow_measured(300, 40), None);
+        assert_eq!(f.flow_measured(300, 71), None);
+        assert_eq!(f.flow_measured(250, 72), Some(supply_status::OFF));
+        assert_eq!(f.status, supply_status::OFF);
     }
 
     #[test]
