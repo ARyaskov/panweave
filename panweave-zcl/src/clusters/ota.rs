@@ -1036,6 +1036,12 @@ pub struct Client {
     pub requery_at: Option<Instant>,
     /// Unanswered wait-forever queries.
     pub requeries: u8,
+    /// How often an idle client asks the server for a new image
+    /// (§11.8.2: every application standard sets its own cadence);
+    /// `None` leaves polling to the application.
+    pub query_period: Option<Duration>,
+    /// When the next periodic query is due.
+    pub next_query_at: Option<Instant>,
 }
 
 /// Period of the wait-forever queries (§11.16: no more often than once
@@ -1056,7 +1062,18 @@ impl Client {
             downloaded_version: None,
             requery_at: None,
             requeries: 0,
+            query_period: None,
+            next_query_at: None,
         }
+    }
+
+    /// Polls the server every `period` while idle (§11.8.2, §11.13.4:
+    /// clients query periodically whether or not Image Notify is
+    /// used); the first query is due `period` after `now`.
+    pub fn with_query_period(mut self, period: Duration, now: Instant) -> Self {
+        self.query_period = Some(period);
+        self.next_query_at = Some(now + period);
+        self
     }
 
     /// The earliest instant [`Client::next`] has something to do.
@@ -1064,8 +1081,14 @@ impl Client {
         match self.phase {
             Phase::Downloading { .. } => Some(self.not_before),
             Phase::WaitingToUpgrade { at: None, .. } => self.requery_at,
+            Phase::Normal => self.next_query_at,
             _ => None,
         }
+    }
+
+    /// Re-arms the periodic query from `now`.
+    fn schedule_query(&mut self, now: Instant) {
+        self.next_query_at = self.query_period.map(|p| now + p);
     }
 
     /// The Query Next Image Request for this device.
@@ -1141,6 +1164,7 @@ impl Client {
                     || Some(image.file_version) == self.downloaded_version
                 {
                     self.phase = Phase::Normal;
+                    self.schedule_query(now);
                     return ClientAction::None;
                 }
                 self.phase = Phase::Downloading {
@@ -1153,6 +1177,7 @@ impl Client {
             }
             _ => {
                 self.phase = Phase::Normal;
+                self.schedule_query(now);
                 ClientAction::None
             }
         }
@@ -1243,6 +1268,11 @@ impl Client {
     /// the file is complete.
     pub fn next(&mut self, now: Instant) -> ClientAction<'static> {
         match self.phase {
+            // The periodic poll of an idle client (§11.8.2).
+            Phase::Normal if self.next_query_at.is_some_and(|t| now.has_reached(t)) => {
+                self.schedule_query(now);
+                self.start_query()
+            }
             Phase::Downloading {
                 image,
                 offset,
@@ -2041,6 +2071,38 @@ mod tests {
         );
         assert_eq!(client.next_deadline(), None);
         assert_eq!(client.next(t + REQUERY_PERIOD), ClientAction::None);
+    }
+
+    #[test]
+    fn an_idle_client_polls_the_server_periodically() {
+        let t0 = Instant::from_millis(0);
+        let period = Duration::from_secs(600);
+        let mut client = Client::new(ClientConfig {
+            manufacturer_code: 0x1234,
+            image_type: 1,
+            file_version: 0x0100_0000,
+            hardware_version: None,
+            max_data_size: 48,
+            activation_policy: activation_policy::SERVER,
+        })
+        .with_query_period(period, t0);
+        assert_eq!(client.next_deadline(), Some(t0 + period));
+        assert_eq!(client.next(t0), ClientAction::None);
+        let t1 = t0 + period;
+        assert_eq!(client.next(t1), ClientAction::Query(client.query()));
+        assert_eq!(client.phase, Phase::Querying);
+        // No image: back to idle, the next poll a period later.
+        let none = QueryNextImageResponse {
+            status: ZclStatus::NoImageAvailable,
+            image: None,
+            image_size: 0,
+        };
+        assert_eq!(client.on_query_response(&none, t1), ClientAction::None);
+        assert_eq!(client.next_deadline(), Some(t1 + period));
+        assert_eq!(
+            client.next(t1 + period),
+            ClientAction::Query(client.query())
+        );
     }
 
     #[test]

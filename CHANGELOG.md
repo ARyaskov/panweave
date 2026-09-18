@@ -212,6 +212,10 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* OTA client periodic polling (ZCL8 §11.8.2, §11.13.4):
+  `ota::Client::with_query_period` makes an idle client send Query Next
+  Image every period (the cadence each application standard sets),
+  re-armed after every answer.
 * Green Power (GP 1.1.2): the SelectedSender proxy switches to the GPD's
   transmit channel for up to 5 s after a GP Response for another
   channel, answers the Channel Request there with the queued Channel
