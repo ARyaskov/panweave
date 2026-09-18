@@ -989,6 +989,110 @@ impl<
         }
     }
 
+    /// Joins (or rejoins) a network through a parent reached over a
+    /// Trusted Link rather than the radio (a Zigbee Direct Virtual
+    /// Device's tunnel client, ZD 1.1 §7.7.4.3, §7.7.4.6, §8.4.3.3): the
+    /// ZDD `parent` at `parent_short` on the network `pan_id` /
+    /// `extended_pan_id` becomes the parent neighbour behind `link`, and
+    /// a Network Commissioning Request of the kind `params` say goes out
+    /// over the link (with the Device Capability Extension the ZDD
+    /// insists on, §7.7.4.8). The response is processed like a radio
+    /// one; the NLME-JOIN.confirm follows.
+    pub fn join_via_trusted_link(
+        &mut self,
+        link: u8,
+        parent: ExtendedAddress,
+        parent_short: ShortAddress,
+        pan_id: PanId,
+        extended_pan_id: ExtendedAddress,
+        params: JoinParams,
+    ) -> Result<(), NwkError> {
+        if self.join.is_some() || self.scan.is_some() {
+            return Err(NwkError::InvalidRequest);
+        }
+        if !params.rejoin && self.nib.joined {
+            return Err(NwkError::InvalidRequest);
+        }
+        let mut e = NeighborEntry::new(
+            parent,
+            parent_short,
+            if parent_short == ShortAddress::COORDINATOR {
+                LogicalDeviceType::Coordinator
+            } else {
+                LogicalDeviceType::Router
+            },
+            true,
+            Relationship::Parent,
+            255,
+        );
+        e.outgoing_cost = 1;
+        e.link = Some(link);
+        self.neighbors
+            .retain(|n| n.relationship != Relationship::Parent && n.extended != parent);
+        if !self.ensure_neighbor(e) {
+            return Err(NwkError::Busy);
+        }
+        self.nib.extended_pan_id = extended_pan_id;
+        let snapshot = ParentSnapshot {
+            short: parent_short,
+            extended: Some(parent),
+            pan_id,
+            extended_pan_id,
+            page: self.nib.channel_page,
+            channel: self.nib.channel,
+            r23: true,
+            update_id: self.nib.update_id,
+            lqa: 255,
+        };
+        let secure = params.secure;
+        let capability = params.capability;
+        let rejoin = params.rejoin;
+        self.join = Some(JoinState {
+            params,
+            secure,
+            candidates: Vec::new(),
+            next: 0,
+            pass: 0,
+            current: Some(snapshot),
+            phase: JoinPhase::SelectParent,
+            attempts: 0,
+            used_commissioning: true,
+        });
+        self.virtual_device = true;
+        self.send_commissioning_request(snapshot, rejoin, secure, capability);
+        Ok(())
+    }
+
+    /// A Zigbee Direct Virtual Device is authorized by its Basic
+    /// authorization key rather than the network key (R23.2
+    /// §4.6.3.2.2.4): the join completes without one; every frame it
+    /// exchanges is protected by the Trusted Link.
+    pub fn authorize_without_network_key(&mut self) {
+        if self.nib.joined && !self.nib.authenticated {
+            self.mark_authenticated();
+        }
+    }
+
+    fn mark_authenticated(&mut self) {
+        self.nib.authenticated = true;
+        if let Some(n) = self
+            .neighbors
+            .iter_mut()
+            .find(|n| n.relationship == Relationship::Parent)
+        {
+            n.security_timer_secs = 0;
+        }
+        if self
+            .join
+            .as_ref()
+            .is_some_and(|j| matches!(j.phase, JoinPhase::AwaitingKey { .. }))
+        {
+            self.join = None;
+            self.discovery.clear();
+        }
+        self.after_authenticated();
+    }
+
     fn send_commissioning_request(
         &mut self,
         p: ParentSnapshot,
@@ -1008,8 +1112,11 @@ impl<
             header = header.with_dst_ieee(e);
         }
         // Joiner Encapsulation with Fragmentation Parameters and, for initial
-        // joins, Supported Key Negotiation Methods (§3.4.14.3.3).
-        let mut tlvs = [0u8; 32];
+        // joins, Supported Key Negotiation Methods (§3.4.14.3.3); a
+        // virtual device declares itself (Device Capability Extension,
+        // ZD 1.1 §7.7.4.3).
+        let virtual_device = self.virtual_device;
+        let mut tlvs = [0u8; 40];
         let mut w = panweave_codec::Writer::new(&mut tlvs);
         let _ = tlv::write_encapsulation(&mut w, tlv::tag::JOINER_ENCAPSULATION, |w| {
             tlv::FragmentationParameters {
@@ -1018,13 +1125,19 @@ impl<
                 max_incoming_transfer_unit: 0x80,
             }
             .write(w)?;
-            if !rejoin {
+            if !rejoin || virtual_device {
                 tlv::SupportedKeyNegotiationMethods {
                     protocols: tlv::SupportedKeyNegotiationMethods::PROTO_STATIC_KEY_REQUEST
                         | tlv::SupportedKeyNegotiationMethods::PROTO_SPEKE_CURVE25519_AES_MMO,
                     secrets: tlv::SupportedKeyNegotiationMethods::SECRET_INSTALL_CODE,
                     source: Some(self.nib.ieee_address),
                 }
+                .write(w)?;
+            }
+            if virtual_device {
+                tlv::DeviceCapabilityExtension(
+                    tlv::DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE,
+                )
                 .write(w)?;
             }
             Ok(())
@@ -1226,25 +1339,7 @@ impl<
         self.maybe_reserve_counter();
         self.push_action(NwkAction::Persist);
         if self.nib.joined && !self.nib.authenticated {
-            self.nib.authenticated = true;
-            if let Some(n) = self
-                .neighbors
-                .iter_mut()
-                .find(|n| n.relationship == Relationship::Parent)
-            {
-                n.security_timer_secs = 0;
-            }
-            if self
-                .join
-                .as_ref()
-                .is_some_and(|j| matches!(j.phase, JoinPhase::AwaitingKey { .. }))
-            {
-                let rejoin = self.join.as_ref().is_some_and(|j| j.params.rejoin);
-                self.join = None;
-                self.discovery.clear();
-                let _ = rejoin;
-            }
-            self.after_authenticated();
+            self.mark_authenticated();
         }
     }
 

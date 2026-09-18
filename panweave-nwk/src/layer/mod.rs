@@ -691,6 +691,10 @@ pub struct Nwk<
     /// peer, whether it is to be treated as NWK-secured, and the frame's
     /// NWK source (a reply to it goes back over the link).
     pub(crate) rx_link: Option<(u8, ExtendedAddress, bool, ShortAddress)>,
+    /// This device is a Zigbee Direct Virtual Device on a network it
+    /// reaches through a Trusted Link only: it declares itself when
+    /// joining and never holds the network key.
+    pub(crate) virtual_device: bool,
     /// Rejoin flag of a local leave in progress.
     pub(crate) leaving_rejoin: Option<bool>,
     /// Statistics.
@@ -788,6 +792,7 @@ impl<
             distributed_network: false,
             trust_center: None,
             rx_link: None,
+            virtual_device: false,
             leaving_rejoin: None,
             stats: NwkStats::default(),
         }

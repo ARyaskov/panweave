@@ -118,5 +118,12 @@ specifications leave a few points to the implementation.
   network key itself.
 * Regular network traffic (link status, route requests) the ZDD emits is
   not copied to the link: only frames addressed to the ZVD or broadcasts.
-* A ZVD-side stack is not provided: a host receiving
-  `StackEvent::BasicAuthorizationKey` feeds its BLE session layer.
+* The stack can be the ZVD's own Zigbee stack (a ZVD-TS, ZD §8.4.3.3):
+  `Stack::join_via_trusted_link` makes the ZDD the parent behind a
+  Trusted Link, sends the Network Commissioning Request over it (with
+  the Device Capability Extension) and lets the Basic authorization key
+  complete the join in place of a network key
+  (`Nwk::authorize_without_network_key`); an rx-on end device then
+  reaches the network through the link alone (its broadcasts go to the
+  parent over the link). The host still receives
+  `StackEvent::BasicAuthorizationKey` for its BLE session layer.

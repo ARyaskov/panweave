@@ -212,6 +212,15 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* A panweave stack as a Zigbee Direct Virtual Device (ZD 1.1 §7.7.4.3,
+  §7.7.4.6, §8.4.3.3): `Stack::join_via_trusted_link` joins (initial
+  join, secured rejoin or Trust Center rejoin) through a ZDD's tunnel,
+  the ZDD becoming the parent behind the Trusted Link
+  (`Nwk::join_via_trusted_link`, the Network Commissioning Request
+  carrying the Device Capability Extension), the Basic authorization
+  key completing the join without a network key
+  (`Nwk::authorize_without_network_key`), and an end device's
+  broadcasts going to a parent behind a link over the link.
 * Generic Tunnel 0x0600, BACnet Protocol Tunnel 0x0601 and ISO 7816
   Protocol Tunnel 0x0615 (ZCL8 §9.2, §9.3, §9.5):
   `panweave_zcl::clusters::tunnels` with the Table 9-2 / 9-25

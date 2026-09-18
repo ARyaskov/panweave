@@ -2388,3 +2388,248 @@ fn the_zdd_security_state_follows_the_network_and_the_sessions() {
         Interface::OpenToBeProvisioned { .. }
     ));
 }
+
+/// A panweave stack as the ZVD's Zigbee stack (ZD 1.1 §8.4.3.3): an rx-on
+/// end device joins a ZDD's network through the tunnel with
+/// `join_via_trusted_link`, is authorized by the Basic key instead of a
+/// network key, talks ZDP to the Trust Center over the link, and comes
+/// back with a secured rejoin after the connection dropped.
+#[test]
+fn a_panweave_stack_joins_as_a_virtual_device_through_the_tunnel() {
+    use panweave::EndDevice;
+    use panweave::runtime::JoinMode;
+    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
+    let zvd_ieee = ExtendedAddress(0x00AD_0000_0000_0009);
+    let mut coord = Coordinator::new(zdd_ieee)
+        .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
+    let c = w.add(coord);
+    w.nodes[c]
+        .0
+        .stack
+        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    let (pan_id, epid) = (
+        w.nodes[c].0.stack.nwk.nib.pan_id,
+        w.nodes[c].0.stack.nwk.nib.extended_pan_id,
+    );
+    w.nodes[c].0.stack.permit_join_network(180).unwrap();
+    w.settle();
+    // The ZVD: a non-sleepy end device with no use for its radio.
+    let zvd =
+        EndDevice::new(zvd_ieee).build::<SoftwareAes, _, _>(TestRng::seed(9), MemoryStorage::new());
+    let v = w.add(zvd);
+    w.nodes[c].2.clear();
+    w.nodes[v].2.clear();
+
+    // The BLE connection: NPDUs the ZDD tunnels reach the ZVD's stack
+    // over its Trusted Link and vice versa.
+    let mut bridged = (0usize, 0usize);
+    let mut bridge = |w: &mut World, session: SessionKind| {
+        loop {
+            w.settle();
+            let mut moved = false;
+            let down: Vec<(bool, Vec<u8>)> = w.nodes[c]
+                .2
+                .iter()
+                .filter_map(|e| match e {
+                    Event::DirectTunnel { link: 1, tlv } => {
+                        let m = NpduMessage::parse(&tlv[2..]).unwrap();
+                        Some((m.assume_security, m.npdu.to_vec()))
+                    }
+                    _ => None,
+                })
+                .skip(bridged.0)
+                .collect();
+            bridged.0 += down.len();
+            for (secured, npdu) in down {
+                moved = true;
+                w.nodes[v]
+                    .0
+                    .stack
+                    .on_trusted_link_npdu(1, zdd_ieee, &npdu, secured);
+            }
+            let up: Vec<(bool, Vec<u8>)> = w.nodes[v]
+                .2
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Stack(StackEvent::TrustedLinkNpdu {
+                        link: 1,
+                        npdu,
+                        assume_security,
+                    }) => Some((*assume_security, npdu.to_vec())),
+                    _ => None,
+                })
+                .skip(bridged.1)
+                .collect();
+            bridged.1 += up.len();
+            for (secured, npdu) in up {
+                moved = true;
+                let mut tlv = [0u8; 200];
+                let t = NpduMessage {
+                    assume_security: secured,
+                    npdu: &npdu,
+                }
+                .encode(&mut tlv)
+                .unwrap();
+                let _ = w.nodes[c].0.on_tunnel_write(1, session, &tlv[..t]);
+            }
+            if !moved {
+                break;
+            }
+        }
+    };
+    let run = |w: &mut World,
+               bridge: &mut dyn FnMut(&mut World, SessionKind),
+               session,
+               secs: u64,
+               done: &dyn Fn(&World) -> bool|
+     -> bool {
+        for _ in 0..(secs * 4) {
+            bridge(w, session);
+            if done(w) {
+                return true;
+            }
+            w.run_until(Duration::from_millis(250), |_| false);
+        }
+        bridge(w, session);
+        done(w)
+    };
+
+    // 1. Initial join over the provisioning session.
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0042, zvd_ieee));
+    w.nodes[v]
+        .0
+        .stack
+        .join_via_trusted_link(
+            1,
+            0x0042,
+            zdd_ieee,
+            ShortAddress::COORDINATOR,
+            pan_id,
+            epid,
+            JoinMode::Association,
+        )
+        .unwrap();
+    assert!(
+        run(
+            &mut w,
+            &mut bridge,
+            SessionKind::ZvdProvisioning,
+            20,
+            &|w| {
+                w.nodes[v]
+                    .2
+                    .iter()
+                    .any(|e| matches!(e, Event::Stack(StackEvent::Joined { rejoin: false, .. })))
+            }
+        ),
+        "{:?}",
+        w.nodes[v].2
+    );
+    assert!(w.nodes[v].2.iter().any(|e| matches!(
+        e,
+        Event::Stack(StackEvent::BasicAuthorizationKey { source, .. }) if *source == zdd_ieee
+    )));
+    assert!(w.nodes[v].0.stack.is_operating());
+    assert!(w.nodes[c].2.iter().any(
+        |e| matches!(e, Event::Stack(StackEvent::DeviceAuthorized { ieee, .. }) if *ieee == zvd_ieee)
+    ));
+    let zvd_short = w.nodes[v].0.stack.short_address();
+    assert_eq!(
+        w.nodes[c]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(zvd_ieee)
+            .map(|n| n.short),
+        Some(zvd_short)
+    );
+    // No network key on the ZVD, and nothing on its radio.
+    assert!(
+        w.nodes[v]
+            .0
+            .stack
+            .nwk
+            .security
+            .keys
+            .get(w.nodes[v].0.stack.network_key_sequence())
+            .is_none()
+    );
+
+    // 2. ZDP over the tunnel on the authorized session: the ZVD asks the
+    //    Trust Center for its node descriptor.
+    w.nodes[v]
+        .0
+        .stack
+        .zdo
+        .request(
+            ShortAddress::COORDINATOR,
+            panweave::zdo::zdp::cluster::NODE_DESC_REQ,
+            &[0, 0],
+        )
+        .unwrap();
+    assert!(
+        run(&mut w, &mut bridge, SessionKind::Authorized, 10, &|w| {
+            w.nodes[v].2.iter().any(|e| matches!(
+            e,
+            Event::Stack(StackEvent::Zdp(z)) if z.cluster == panweave::types::ClusterId(0x8002)
+        ))
+        }),
+        "{:?}",
+        w.nodes[v].2
+    );
+
+    // 3. The connection drops; on a new one the ZVD rejoins secured.
+    w.nodes[c].0.close_tunnel(1);
+    w.nodes[v].0.stack.remove_trusted_link(1);
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0043, zvd_ieee));
+    w.nodes[v]
+        .0
+        .stack
+        .join_via_trusted_link(
+            1,
+            0x0043,
+            zdd_ieee,
+            ShortAddress::COORDINATOR,
+            pan_id,
+            epid,
+            JoinMode::SecuredRejoin,
+        )
+        .unwrap();
+    assert!(
+        run(&mut w, &mut bridge, SessionKind::Authorized, 20, &|w| {
+            w.nodes[v]
+                .2
+                .iter()
+                .any(|e| matches!(e, Event::Stack(StackEvent::Joined { rejoin: true, .. })))
+        }),
+        "{:?}",
+        w.nodes[v].2
+    );
+    assert_eq!(w.nodes[v].0.stack.short_address(), zvd_short);
+    assert!(
+        w.nodes[c]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(zvd_ieee)
+            .is_some_and(|n| n.link == Some(1))
+    );
+}

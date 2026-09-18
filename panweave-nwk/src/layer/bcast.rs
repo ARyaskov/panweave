@@ -54,6 +54,25 @@ impl<
             *plaintext.get(2).unwrap_or(&0xFF),
             *plaintext.get(3).unwrap_or(&0xFF),
         ]));
+        // An end device whose parent is behind a Trusted Link hands its
+        // broadcast to the parent over the link, plaintext, the link
+        // standing in for NWK security (a virtual device holds no key).
+        if self.nib.is_end_device()
+            && let Some(link) = self
+                .neighbors
+                .by_short(self.nib.parent_address)
+                .and_then(|n| n.link)
+        {
+            let frame = Self::link_copy(&plaintext)?;
+            let handle = self.alloc_mac_handle();
+            self.push_action(NwkAction::TrustedLinkData {
+                handle,
+                link,
+                frame,
+                assume_security: secure,
+            });
+            return Ok(());
+        }
         let on_air = match self.finalize_frame(&plaintext, header_len, secure) {
             Ok(f) => f,
             Err(NwkError::CounterPending) => {

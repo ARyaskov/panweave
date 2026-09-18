@@ -253,6 +253,53 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .is_ok()
     }
 
+    /// Joins a network as a Zigbee Direct Virtual Device through a ZDD's
+    /// tunnel (ZD 1.1 §7.7.4.3, §7.7.4.6, §8.4.3.3): the ZDD `zdd` at
+    /// `zdd_short` on the network `pan_id` / `extended_pan_id` becomes
+    /// the parent behind Trusted Link `link` (registered here when the
+    /// host has not), a Network Commissioning Request goes out over it
+    /// (an initial join, a secured rejoin, or a Trust Center rejoin) and
+    /// the Basic authorization key that answers it authorizes the device
+    /// without a network key. Only an rx-on end device or a router, one
+    /// join at a time.
+    pub fn join_via_trusted_link(
+        &mut self,
+        link: u8,
+        handle: u16,
+        zdd: ExtendedAddress,
+        zdd_short: ShortAddress,
+        pan_id: panweave_types::PanId,
+        extended_pan_id: ExtendedAddress,
+        mode: crate::JoinMode,
+    ) -> Result<(), NwkStatus> {
+        if matches!(
+            self.phase,
+            Phase::Discovering(_) | Phase::Joining(_) | Phase::Forming | Phase::AwaitingKey
+        ) || (mode == crate::JoinMode::Association && self.phase != Phase::Idle)
+            || self.config.role == LogicalDeviceType::Coordinator
+            || self.config.sleepy
+        {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        if self.nwk.interfaces.get(link).is_none() && !self.add_trusted_link(link, handle) {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let params = JoinParams {
+            extended_pan_id: Some(extended_pan_id),
+            rejoin: mode != crate::JoinMode::Association,
+            as_router: self.config.role == LogicalDeviceType::Router,
+            secure: mode == crate::JoinMode::SecuredRejoin,
+            capability: self.config.capability(),
+            require_permit: false,
+        };
+        self.nwk
+            .join_via_trusted_link(link, zdd, zdd_short, pan_id, extended_pan_id, params)
+            .map_err(|_| NwkStatus::InvalidRequest)?;
+        self.phase = Phase::Joining(mode);
+        self.pump();
+        Ok(())
+    }
+
     /// Removes a Trusted Link: its neighbours are forgotten.
     pub fn remove_trusted_link(&mut self, link: u8) {
         self.nwk.interfaces.remove(link);
@@ -1961,8 +2008,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         sequence,
                         source,
                     } => {
-                        // This stack is not a ZVD; a host running one on
-                        // top of it gets the key for its session layer.
+                        // A virtual device joining through a tunnel is
+                        // authorized by this key (R23.2 §4.6.3.2.2.4); the
+                        // host's session layer gets it either way.
+                        if matches!(self.phase, Phase::AwaitingKey | Phase::Joining(_)) {
+                            let rejoin = matches!(self.phase, Phase::Joining(m) if m != crate::JoinMode::Association)
+                                || (self.phase == Phase::AwaitingKey && self.awaiting_key_rejoin);
+                            self.awaiting_key_rejoin = false;
+                            self.network_key_sequence = sequence;
+                            self.nwk.authorize_without_network_key();
+                            self.complete_join(rejoin);
+                        }
                         self.push_event(StackEvent::BasicAuthorizationKey {
                             key,
                             sequence,
