@@ -268,6 +268,194 @@ pub mod top_up_result {
     pub const ACCEPTED_SUPPLY_ARMED: u8 = 0x12;
 }
 
+/// The alarm codes of the three alarm groups (Tables D-139 to D-142)
+/// and the alarm mask attribute that enables each (D.7.2.2.5.2): bit
+/// `code - group offset` of the group's mask.
+pub mod alarm_code {
+    use super::AttributeId;
+    use super::attr;
+
+    /// First code of the PrepayGenericAlarmGroup.
+    pub const GENERIC_GROUP: u8 = 0x00;
+    /// First code of the PrepaySwitchAlarmGroup.
+    pub const SWITCH_GROUP: u8 = 0x10;
+    /// First code of the PrepayEventAlarmGroup.
+    pub const EVENT_GROUP: u8 = 0x20;
+    /// First reserved code.
+    pub const RESERVED: u8 = 0x50;
+
+    /// Low credit (for all types of credit).
+    pub const LOW_CREDIT: u8 = 0x00;
+    /// No credit (zero credit).
+    pub const NO_CREDIT: u8 = 0x01;
+    /// Credit exhausted.
+    pub const CREDIT_EXHAUSTED: u8 = 0x02;
+    /// Emergency credit enabled.
+    pub const EMERGENCY_CREDIT_ENABLED: u8 = 0x03;
+    /// Emergency credit exhausted.
+    pub const EMERGENCY_CREDIT_EXHAUSTED: u8 = 0x04;
+    /// IHD low credit warning.
+    pub const IHD_LOW_CREDIT_WARNING: u8 = 0x05;
+    /// Event log cleared.
+    pub const EVENT_LOG_CLEARED: u8 = 0x06;
+
+    /// Supply ON.
+    pub const SUPPLY_ON: u8 = 0x10;
+    /// Supply ARM.
+    pub const SUPPLY_ARM: u8 = 0x11;
+    /// Supply OFF.
+    pub const SUPPLY_OFF: u8 = 0x12;
+    /// Disconnection failure (shut-off mechanism fail).
+    pub const DISCONNECTION_FAILURE: u8 = 0x13;
+    /// Disconnected due to tamper detected.
+    pub const DISCONNECTED_TAMPER: u8 = 0x14;
+    /// Disconnected due to cut-off value.
+    pub const DISCONNECTED_CUT_OFF_VALUE: u8 = 0x15;
+    /// Remote disconnected.
+    pub const REMOTE_DISCONNECTED: u8 = 0x16;
+
+    /// Physical attack on the prepay meter.
+    pub const PHYSICAL_ATTACK: u8 = 0x20;
+    /// Electronic attack on the prepay meter.
+    pub const ELECTRONIC_ATTACK: u8 = 0x21;
+    /// Discount applied.
+    pub const DISCOUNT_APPLIED: u8 = 0x22;
+    /// Credit adjustment.
+    pub const CREDIT_ADJUSTMENT: u8 = 0x23;
+    /// Credit adjustment fail.
+    pub const CREDIT_ADJUSTMENT_FAIL: u8 = 0x24;
+    /// Debt adjustment.
+    pub const DEBT_ADJUSTMENT: u8 = 0x25;
+    /// Debt adjustment fail.
+    pub const DEBT_ADJUSTMENT_FAIL: u8 = 0x26;
+    /// Mode change.
+    pub const MODE_CHANGE: u8 = 0x27;
+    /// Top-up code error.
+    pub const TOP_UP_CODE_ERROR: u8 = 0x28;
+    /// Top-up already used.
+    pub const TOP_UP_ALREADY_USED: u8 = 0x29;
+    /// Top-up code invalid.
+    pub const TOP_UP_CODE_INVALID: u8 = 0x2A;
+    /// Friendly credit in use.
+    pub const FRIENDLY_CREDIT_IN_USE: u8 = 0x2B;
+    /// Friendly credit period end warning.
+    pub const FRIENDLY_CREDIT_PERIOD_END_WARNING: u8 = 0x2C;
+    /// Friendly credit period end.
+    pub const FRIENDLY_CREDIT_PERIOD_END: u8 = 0x2D;
+    /// ErrorRegClear.
+    pub const ERROR_REG_CLEAR: u8 = 0x30;
+    /// AlarmRegClear.
+    pub const ALARM_REG_CLEAR: u8 = 0x31;
+    /// Prepay cluster not found.
+    pub const PREPAY_CLUSTER_NOT_FOUND: u8 = 0x32;
+    /// ModeCredit2Prepay.
+    pub const MODE_CREDIT_TO_PREPAY: u8 = 0x41;
+    /// ModePrepay2Credit.
+    pub const MODE_PREPAY_TO_CREDIT: u8 = 0x42;
+    /// ModeDefault.
+    pub const MODE_DEFAULT: u8 = 0x43;
+
+    /// The alarm mask attribute governing `code` and the bit of the mask
+    /// that enables it; `None` for a reserved code.
+    pub const fn mask_bit(code: u8) -> Option<(AttributeId, u16)> {
+        let (mask, offset) = if code < SWITCH_GROUP {
+            (attr::PREPAY_GENERIC_ALARM_MASK, GENERIC_GROUP)
+        } else if code < EVENT_GROUP {
+            (attr::PREPAY_SWITCH_ALARM_MASK, SWITCH_GROUP)
+        } else if code < RESERVED {
+            (attr::PREPAY_EVENT_ALARM_MASK, EVENT_GROUP)
+        } else {
+            return None;
+        };
+        let bit = code - offset;
+        if bit >= 16 {
+            return None;
+        }
+        Some((mask, 1 << bit))
+    }
+
+    /// Whether `code` is enabled by the masks `generic`, `switch` and
+    /// `event` (the three mask attributes' values).
+    pub const fn enabled(code: u8, generic: u16, switch: u16, event: u16) -> bool {
+        match mask_bit(code) {
+            Some((mask, bit)) => {
+                let value = if mask.0 == attr::PREPAY_GENERIC_ALARM_MASK.0 {
+                    generic
+                } else if mask.0 == attr::PREPAY_SWITCH_ALARM_MASK.0 {
+                    switch
+                } else {
+                    event
+                };
+                value & bit != 0
+            }
+            None => false,
+        }
+    }
+}
+
+/// The Historical Cost Consumption Information attribute set (Table
+/// D-143): the cost of consumption per day, week and month, with the
+/// formatting, unit, currency scaling and currency that apply to all of
+/// them (D.7.2.2.6.1-D.7.2.2.6.4).
+pub mod historical_cost {
+    use super::AttributeId;
+
+    /// `HistoricalCostConsumptionFormatting` (map8: digits left / right
+    /// of the decimal point).
+    pub const FORMATTING: AttributeId = AttributeId(0x0500);
+    /// `ConsumptionUnitofMeasurement` (enum8, Table D-26).
+    pub const CONSUMPTION_UNIT_OF_MEASUREMENT: AttributeId = AttributeId(0x0501);
+    /// `CurrencyScalingFactor` (enum8).
+    pub const CURRENCY_SCALING_FACTOR: AttributeId = AttributeId(0x0502);
+    /// `Currency` (uint16, ISO 4217).
+    pub const CURRENCY: AttributeId = AttributeId(0x0503);
+    /// `CurrentDayCostConsumptionDelivered` (uint48).
+    pub const CURRENT_DAY_DELIVERED: AttributeId = AttributeId(0x051C);
+    /// `CurrentDayCostConsumptionReceived` (uint48).
+    pub const CURRENT_DAY_RECEIVED: AttributeId = AttributeId(0x051D);
+    /// `CurrentWeekCostConsumptionDelivered` (uint48).
+    pub const CURRENT_WEEK_DELIVERED: AttributeId = AttributeId(0x0530);
+    /// `CurrentWeekCostConsumptionReceived` (uint48).
+    pub const CURRENT_WEEK_RECEIVED: AttributeId = AttributeId(0x0531);
+    /// `CurrentMonthCostConsumptionDelivered` (uint48).
+    pub const CURRENT_MONTH_DELIVERED: AttributeId = AttributeId(0x0540);
+    /// `CurrentMonthCostConsumptionReceived` (uint48).
+    pub const CURRENT_MONTH_RECEIVED: AttributeId = AttributeId(0x0541);
+    /// `HistoricalFreezeTime` (uint16).
+    pub const HISTORICAL_FREEZE_TIME: AttributeId = AttributeId(0x055C);
+    /// Previous days kept (PreviousDay, PreviousDay2-8).
+    pub const PREVIOUS_DAYS: u8 = 8;
+    /// Previous weeks kept (PreviousWeek, PreviousWeek2-5).
+    pub const PREVIOUS_WEEKS: u8 = 5;
+    /// Previous months kept (PreviousMonth, PreviousMonth2-13).
+    pub const PREVIOUS_MONTHS: u8 = 13;
+
+    /// `PreviousDay[n]CostConsumptionDelivered` / `Received` (n = 1 for
+    /// PreviousDay, 2-8 for PreviousDay2-8).
+    pub const fn previous_day(n: u8, received: bool) -> Option<AttributeId> {
+        if n == 0 || n > PREVIOUS_DAYS {
+            return None;
+        }
+        Some(AttributeId(0x051E + 2 * (n as u16 - 1) + received as u16))
+    }
+
+    /// `PreviousWeek[n]CostConsumptionDelivered` / `Received` (n = 1-5).
+    pub const fn previous_week(n: u8, received: bool) -> Option<AttributeId> {
+        if n == 0 || n > PREVIOUS_WEEKS {
+            return None;
+        }
+        Some(AttributeId(0x0532 + 2 * (n as u16 - 1) + received as u16))
+    }
+
+    /// `PreviousMonth[n]CostConsumptionDelivered` / `Received` (n = 1-13).
+    pub const fn previous_month(n: u8, received: bool) -> Option<AttributeId> {
+        if n == 0 || n > PREVIOUS_MONTHS {
+            return None;
+        }
+        Some(AttributeId(0x0542 + 2 * (n as u16 - 1) + received as u16))
+    }
+}
+
 /// Snapshot cause bits (Table D-151).
 pub mod snapshot_cause {
     /// General.
@@ -1582,6 +1770,42 @@ mod tests {
         let n = w.position();
         assert_eq!(&dec(&buf[..n]).unwrap(), v);
         n
+    }
+
+    #[test]
+    fn alarm_codes_map_to_their_masks_and_historical_costs_to_their_ids() {
+        use alarm_code as ac;
+        assert_eq!(
+            ac::mask_bit(ac::LOW_CREDIT),
+            Some((attr::PREPAY_GENERIC_ALARM_MASK, 1 << 0))
+        );
+        assert_eq!(
+            ac::mask_bit(ac::REMOTE_DISCONNECTED),
+            Some((attr::PREPAY_SWITCH_ALARM_MASK, 1 << 6))
+        );
+        assert_eq!(
+            ac::mask_bit(ac::FRIENDLY_CREDIT_PERIOD_END),
+            Some((attr::PREPAY_EVENT_ALARM_MASK, 1 << 13))
+        );
+        // Event codes beyond 0x2F have no bit in a 16-bit mask.
+        assert_eq!(ac::mask_bit(ac::PREPAY_CLUSTER_NOT_FOUND), None);
+        assert_eq!(ac::mask_bit(ac::MODE_DEFAULT), None);
+        assert_eq!(ac::mask_bit(0x50), None);
+        // Enabled when the group's mask has the bit set.
+        assert!(ac::enabled(ac::SUPPLY_OFF, 0, 1 << 2, 0));
+        assert!(!ac::enabled(ac::SUPPLY_OFF, 0xFFFF, 0, 0xFFFF));
+        assert!(ac::enabled(ac::TOP_UP_CODE_ERROR, 0, 0, 1 << 8));
+        assert!(!ac::enabled(0x60, 0xFFFF, 0xFFFF, 0xFFFF));
+
+        use historical_cost as hc;
+        assert_eq!(hc::previous_day(1, false), Some(AttributeId(0x051E)));
+        assert_eq!(hc::previous_day(1, true), Some(AttributeId(0x051F)));
+        assert_eq!(hc::previous_day(8, true), Some(AttributeId(0x052D)));
+        assert_eq!(hc::previous_day(9, false), None);
+        assert_eq!(hc::previous_week(5, true), Some(AttributeId(0x053B)));
+        assert_eq!(hc::previous_week(6, false), None);
+        assert_eq!(hc::previous_month(13, true), Some(AttributeId(0x055B)));
+        assert_eq!(hc::previous_month(0, false), None);
     }
 
     #[test]

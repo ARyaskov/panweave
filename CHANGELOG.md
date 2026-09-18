@@ -212,6 +212,12 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Prepayment alarm codes and historical costs (SE 1.4a D.7.2.2.5,
+  D.7.2.2.6): `prepayment::alarm_code` (the codes of Tables D-140 to
+  D-142 with `mask_bit` / `enabled` mapping each to its alarm mask
+  attribute and bit) and `prepayment::historical_cost` (the Table D-143
+  attribute set with `previous_day` / `previous_week` /
+  `previous_month`).
 * Metering block information snapshot sub-payloads (SE 1.4a Figures
   D-21 / D-22 / D-25 / D-26, payload types 2, 3, 6, 7): `BlockSnapshot`
   with the tier × block summations behind the "Number of Tiers and
