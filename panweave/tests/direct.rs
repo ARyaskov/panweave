@@ -1185,3 +1185,131 @@ fn an_out_of_band_join_updates_a_provisional_link_key_when_the_trust_center_answ
     fresh.restore_direct_admin_key().unwrap();
     assert_eq!(fresh.direct.admin_key, None);
 }
+
+/// The ZVD chooses the security model with the Trust Center Address TLV
+/// (ZD 1.1 §7.7.2.5, Table 36): a coordinator-capable ZDD forms a
+/// distributed network on request and a router joins it by association;
+/// a router-only ZDD refuses to form a centralized one.
+#[test]
+fn the_zvd_chooses_the_security_model_of_a_formed_network() {
+    use panweave_direct::commissioning::STATUS_FAILURE;
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let channel = Channel::new_2_4ghz(20).unwrap();
+    let mask = ChannelMask::EMPTY.with(channel);
+    let mut buf = [0u8; 128];
+
+    // A router-only ZDD cannot become a Trust Center.
+    let router = Router::new(ExtendedAddress(0x00DD_0000_0000_0002))
+        .build::<SoftwareAes, _, _>(TestRng::seed(2), MemoryStorage::new());
+    let r = w.add(router);
+    let mut zvd_r = Commissioning::new(Level::Provisioning, false);
+    let n = FormNetwork {
+        distributed: false,
+        channels: Some(mask),
+        ..FormNetwork::default()
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_r.write(&mut w.nodes[r].0, Characteristic::FormNetwork, &buf[..n]),
+        Access::Ok
+    );
+    let (_, code) = decode_status(&zvd_r.next_notification().unwrap()).unwrap();
+    assert_eq!(code, Some((Domain::FormNetwork as u8, STATUS_FAILURE)));
+    assert!(!w.nodes[r].0.stack.is_operating());
+
+    // A coordinator-capable ZDD forms the distributed network the ZVD
+    // asks for: no Trust Center, a stochastic address.
+    let coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
+        .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
+    let c = w.add(coord);
+    let mut zvd_c = Commissioning::new(Level::Provisioning, false);
+    let n = FormNetwork {
+        distributed: true,
+        pan_id: Some(PanId(0x2B73)),
+        channels: Some(mask),
+        network_key: Some(Key128::from_bytes([0x4c; 16])),
+        ..FormNetwork::default()
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_c.write(&mut w.nodes[c].0, Characteristic::FormNetwork, &buf[..n]),
+        Access::Ok
+    );
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        direct_done(w, c, Domain::FormNetwork).is_some()
+    }));
+    let note = report(&mut w, c, &mut zvd_c, Domain::FormNetwork);
+    let (rep, code) = decode_status(&note).unwrap();
+    assert!(code.is_none());
+    let rep = rep.unwrap();
+    assert_eq!(rep.status.joined, JoinedStatus::Commissioned);
+    assert!(!rep.status.centralized);
+    let info = rep.network.unwrap();
+    assert_eq!(info.trust_center, ExtendedAddress::BROADCAST);
+    assert_ne!(info.nwk_address, ShortAddress(0));
+    assert!(w.nodes[c].0.stack.config.distributed);
+    // No admin access without a provisioned Admin key on a distributed
+    // network (§7.7.2.7.1).
+    assert_eq!(
+        w.nodes[c]
+            .0
+            .admin_key_for(ExtendedAddress(0x00AA_0000_0000_0001)),
+        None
+    );
+    let epid = info.extended_pan_id;
+
+    // Opened by the ZVD, the router ZDD joins by association and gets
+    // the distributed global link key.
+    let mut admin_c = Commissioning::new(Level::Admin, true);
+    assert_eq!(
+        admin_c.write(&mut w.nodes[c].0, Characteristic::PermitJoining, &[120]),
+        Access::Ok
+    );
+    let _ = admin_c.next_notification();
+    w.settle();
+    let n = JoinNetwork {
+        method: JoiningMethod::Association,
+        extended_pan_id: Some(epid),
+        pan_id: None,
+        channels: Some(mask),
+        network_key: None,
+        link_key: None,
+        nwk_address: None,
+        trust_center: None,
+        update_id: None,
+        key_sequence: None,
+        admin_key: None,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_r.write(&mut w.nodes[r].0, Characteristic::JoinNetwork, &buf[..n]),
+        Access::Ok
+    );
+    assert!(
+        w.run_until(Duration::from_secs(120), |w| direct_done(
+            w,
+            r,
+            Domain::JoinNetwork
+        )
+        .is_some()),
+        "{:?}",
+        w.nodes[r].2
+    );
+    let note = report(&mut w, r, &mut zvd_r, Domain::JoinNetwork);
+    let (rep, code) = decode_status(&note).unwrap();
+    assert!(code.is_none(), "{code:?}");
+    let rep = rep.unwrap();
+    assert!(!rep.status.centralized);
+    let info = rep.network.unwrap();
+    assert_eq!(info.extended_pan_id, epid);
+    assert_eq!(info.trust_center, ExtendedAddress::BROADCAST);
+    assert!(w.nodes[r].0.stack.is_operating());
+}

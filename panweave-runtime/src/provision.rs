@@ -173,6 +173,45 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.resume()
     }
 
+    /// Selects the security model of the network this device forms or
+    /// joins next: distributed, or centralized with this device as the
+    /// Trust Center when it is a coordinator (ZD 1.1 §7.7.2.5: the ZVD
+    /// decides through the Trust Center Address TLV). Only while idle;
+    /// centralized security needs a coordinator.
+    pub fn set_security_model(&mut self, distributed: bool) -> Result<(), NwkStatus> {
+        if self.phase != Phase::Idle {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        let coordinator = self.config.role == LogicalDeviceType::Coordinator;
+        if !distributed && !coordinator {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        if self.config.distributed == distributed {
+            return Ok(());
+        }
+        self.config.distributed = distributed;
+        let is_tc = coordinator && !distributed;
+        self.aps.config.is_trust_center = is_tc;
+        self.aps.aib.designated_coordinator = is_tc;
+        let (partner, key, kind) = self.config.preconfigured_link_key.clone();
+        if is_tc {
+            self.aps.aib.trust_center_address = self.config.ieee;
+            self.aps.security.remove(partner);
+        } else {
+            self.aps.aib.trust_center_address = if distributed {
+                ExtendedAddress::BROADCAST
+            } else {
+                partner
+            };
+            if self.aps.security.entry(partner).is_none() {
+                let mut e = LinkKeyEntry::provisional(partner, key, kind);
+                e.attributes = KeyAttributes::ProvisionalKey;
+                let _ = self.aps.security.install(e);
+            }
+        }
+        Ok(())
+    }
+
     /// Whether the Trust Center link key is still provisional (not yet
     /// verified through an update).
     pub fn trust_center_link_key_is_provisional(&self) -> bool {

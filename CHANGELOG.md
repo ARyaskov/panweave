@@ -212,6 +212,13 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* The ZVD chooses the security model of a formed network (ZD 1.1
+  §7.7.2.5, Table 36): `Stack::set_security_model(distributed)` switches
+  an idle node between distributed security and, for a coordinator,
+  centralized security with itself as Trust Center; the ZDD's Form
+  Network follows the Trust Center Address TLV (a router-only ZDD refuses
+  a centralized network). A joiner's `StackConfig::distributed` now
+  follows the network it joined (learnt from the Transport Key).
 * Zigbee Direct out-of-band join follow-up (ZD 1.1 §7.7.2.7.4) and the
   Admin key hand-off (§6.3.2.1): `Stack::update_trust_center_link_key`
   runs the On-Network TCLK Update procedure on demand and

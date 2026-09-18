@@ -908,6 +908,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let _ = self
             .zdo
             .device_announce(short, self.config.ieee, self.config.capability());
+        // The security model is the network's, learnt from the Transport
+        // Key (BDB 3.1 §10.2.2 / §10.2.3), whatever was configured.
+        self.config.distributed = self.aps.aib.is_distributed();
         // On a centralized network the Trust Center is the coordinator
         // (network address 0x0000, §4.6.3.1): make the pair addressable.
         let tc = self.aps.aib.trust_center_address;

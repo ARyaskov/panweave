@@ -613,13 +613,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn can_be_coordinator(&self) -> bool {
-        self.stack.config.role == LogicalDeviceType::Coordinator && !self.stack.config.distributed
+        self.stack.config.role == LogicalDeviceType::Coordinator
     }
 
     fn form_network(&mut self, p: &FormNetwork) -> u8 {
-        // The security model (centralized or distributed) is fixed by the
-        // node's role; a mismatch is a Form Network error.
-        if p.distributed != self.stack.config.distributed {
+        // The ZVD chooses the security model (§7.7.2.5, Table 36); a
+        // centralized network needs a coordinator-capable ZDD.
+        if self.stack.set_security_model(p.distributed).is_err() {
             return STATUS_FAILURE;
         }
         if let Some(lk) = &p.link_key {
