@@ -212,6 +212,19 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* A ZVD operating as Trust Center and ZVD rejoins through the ZDD (ZD
+  1.1 §7.7.4.4, §7.7.4.6; ADR-0017 decisions 6–7): the Network
+  Commissioning Request of type Establish Trusted Link (R23.2 Table
+  3-64) attaches the configured Trust Center behind the Trusted Link as
+  a router neighbour at 0x0000 (`NwkEvent` / `StackEvent::TrustCenterLinked`,
+  no join indication, refused for anyone else or unsecured), neighbours
+  behind a link are exempt from Link Status aging and a reply to a frame
+  received over a link goes back over it; `Nwk::set_security_model`
+  replaces `set_distributed` and is kept in step by the runtime (so
+  unsecured rejoins on distributed networks are refused as §3.6.1.6.1.3
+  asks); the Trust Center admits a virtual device's secure rejoin
+  without a key transport and answers its Trust Center rejoin with a
+  fresh Basic key.
 * The ZVD chooses the security model of a formed network (ZD 1.1
   §7.7.2.5, Table 36): `Stack::set_security_model(distributed)` switches
   an idle node between distributed security and, for a coordinator,

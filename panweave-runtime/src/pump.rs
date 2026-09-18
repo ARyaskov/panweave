@@ -662,6 +662,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.aps.on_nwk_data_confirm(h, status);
                     }
                 }
+                NwkEvent::TrustCenterLinked { device, link } => {
+                    self.push_event(StackEvent::TrustCenterLinked { ieee: device, link });
+                }
                 NwkEvent::FormationConfirm { status } => {
                     if status.is_success() {
                         let short = self.nwk.nib.network_address;
@@ -673,6 +676,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         self.zcl.set_trust_center(
                             (!self.aps.aib.is_distributed()).then_some(ShortAddress::COORDINATOR),
                         );
+                        self.sync_security_model();
                         self.push_event(StackEvent::NetworkFormed {
                             pan_id: self.nwk.nib.pan_id,
                             extended_pan_id: self.nwk.nib.extended_pan_id,
@@ -911,6 +915,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         // The security model is the network's, learnt from the Transport
         // Key (BDB 3.1 §10.2.2 / §10.2.3), whatever was configured.
         self.config.distributed = self.aps.aib.is_distributed();
+        self.sync_security_model();
         // On a centralized network the Trust Center is the coordinator
         // (network address 0x0000, §4.6.3.1): make the pair addressable.
         let tc = self.aps.aib.trust_center_address;
@@ -1087,12 +1092,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         // A Zigbee Direct Virtual Device (Device Capability Extension
         // Global TLV, bit 0): never the network key (§4.6.3.2.2.4).
         let virtual_device = Self::joiner_is_virtual_device(joiner_tlvs);
-        let decision = self.config.trust_center_policy.evaluate_join(
-            kind,
-            self.aps.security.entry(device),
-            offers_dlk,
-            None,
-        );
+        let decision = if virtual_device
+            && kind == JoinKind::TrustCenterRejoin
+            && self.aps.security.entry(device).is_some()
+        {
+            // ZD 1.1 §7.7.4.6 / §9.1: a known ZVD that missed a network
+            // key rotation rejoins through the Trust Center to renew its
+            // Basic key; its link key stays provisional, as a ZVD never
+            // verifies it (ADR-0017 decision 6).
+            JoinDecision::TransportNetworkKey {
+                create_entry: false,
+            }
+        } else {
+            self.config.trust_center_policy.evaluate_join(
+                kind,
+                self.aps.security.entry(device),
+                offers_dlk,
+                None,
+            )
+        };
         if virtual_device {
             self.admit_virtual_device(device, short, parent, decision);
             return;
@@ -1164,10 +1182,24 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let admitted = self.config.trust_center_policy.allow_virtual_devices
             && matches!(
                 decision,
-                JoinDecision::TransportNetworkKey { .. } | JoinDecision::NegotiateKey { .. }
+                JoinDecision::TransportNetworkKey { .. }
+                    | JoinDecision::NegotiateKey { .. }
+                    | JoinDecision::Allow
             );
         if !admitted {
             let _ = self.nwk.leave(Some(device), false, false);
+            return;
+        }
+        if decision == JoinDecision::Allow {
+            // A secure rejoin (ZD 1.1 §7.7.4.6): the ZVD holds the
+            // current settings; nothing to transport.
+            self.virtual_devices.retain(|(d, _)| *d != device);
+            let _ = self.virtual_devices.push((device, parent));
+            self.nwk.authenticate_child(device);
+            self.push_event(StackEvent::DeviceAuthorized {
+                ieee: device,
+                short,
+            });
             return;
         }
         if self.aps.security.entry(device).is_none() {

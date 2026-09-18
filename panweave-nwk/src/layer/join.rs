@@ -1614,7 +1614,11 @@ impl<
         let initial = match req.kind {
             CommissioningType::InitialJoin => true,
             CommissioningType::Rejoin => false,
-            _ => return,
+            CommissioningType::EstablishTrustedLink => {
+                self.on_establish_trusted_link(ctx, device);
+                return;
+            }
+            CommissioningType::Other(_) => return,
         };
         if initial && ctx.secured {
             // §3.6.1.6.1.3: secured initial join is not allowed.
@@ -1775,7 +1779,7 @@ impl<
         }
         e.outgoing_cost = 1;
         // A joiner heard over a Trusted Link stays behind it.
-        e.link = self.rx_link.map(|(link, _, _)| link);
+        e.link = self.rx_link.map(|(link, _, _, _)| link);
         if !self.ensure_neighbor(e) {
             self.send_attach_response(
                 ctx,
@@ -1927,10 +1931,67 @@ impl<
         }
     }
 
-    /// Records the joiner TLVs and neighbor for a child attached via a
-    /// trusted link (Zigbee Direct); not used on plain radios.
-    pub fn set_distributed(&mut self, distributed: bool) {
+    /// Tells the NWK layer the security model of the network it is on:
+    /// unsecured rejoins are refused on a distributed network
+    /// (§3.6.1.6.1.3), and only `trust_center` may attach behind a
+    /// Trusted Link as 0x0000 (Establish Trusted Link, ZD 1.1 §7.7.4.4).
+    pub fn set_security_model(&mut self, distributed: bool, trust_center: Option<ExtendedAddress>) {
         self.distributed_network = distributed;
+        self.trust_center = if distributed { None } else { trust_center };
+    }
+
+    /// Network Commissioning Request of type Establish Trusted Link
+    /// (R23.2 Table 3-64; ZD 1.1 §7.7.4.4): a Trust Center behind a
+    /// Trusted Link (a ZVD operating as Trust Center) re-establishes its
+    /// connectivity. Accepted only over a Trusted Link, secured, from the
+    /// Trust Center itself, for network address 0x0000 on a centralized
+    /// network; anything else is refused without a state change. The
+    /// Trust Center becomes a router neighbour behind the link (no join
+    /// indication and no Update Device, §4.6.3.2.1).
+    fn on_establish_trusted_link(&mut self, ctx: &CommandContext, device: ExtendedAddress) {
+        let Some((link, _, _, _)) = self.rx_link else {
+            return;
+        };
+        if !ctx.secured {
+            return;
+        }
+        if ctx.src != ShortAddress::COORDINATOR || self.trust_center != Some(device) {
+            self.send_commissioning_response(
+                ctx,
+                device,
+                ctx.src,
+                MacStatus::PanAccessDenied,
+                None,
+            );
+            return;
+        }
+        // Whatever the capability field says, the peer is a router
+        // behind an always-on link.
+        let mut e = NeighborEntry::new(
+            device,
+            ShortAddress::COORDINATOR,
+            LogicalDeviceType::Router,
+            true,
+            Relationship::Sibling,
+            ctx.lqi,
+        );
+        e.outgoing_cost = 1;
+        e.link = Some(link);
+        let _ = self.neighbors.remove_extended(device);
+        if !self.ensure_neighbor(e) {
+            self.send_commissioning_response(ctx, device, ctx.src, MacStatus::PanAtCapacity, None);
+            return;
+        }
+        let _ = self.routes.remove(ShortAddress::COORDINATOR);
+        let _ = self.address_map.record(device, ShortAddress::COORDINATOR);
+        self.send_commissioning_response(
+            ctx,
+            device,
+            ShortAddress::COORDINATOR,
+            MacStatus::Success,
+            None,
+        );
+        self.push_event(NwkEvent::TrustCenterLinked { device, link });
     }
 
     // ------------------------------------------------------------------

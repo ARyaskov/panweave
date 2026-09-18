@@ -597,6 +597,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if self.phase != Phase::Operating {
             return Err(NwkStatus::InvalidRequest);
         }
+        self.sync_security_model();
         let nib = &self.nwk.nib;
         let (pan, page, channel, short) = (
             nib.pan_id,

@@ -76,7 +76,7 @@ impl<
             return RxOutcome::None;
         }
         let src = header.src;
-        self.rx_link = Some((link, peer, assume_security));
+        self.rx_link = Some((link, peer, assume_security, src));
         let out = self.on_mac_data(buf, src, u8::MAX, 0);
         self.rx_link = None;
         if let Some(n) = self.neighbors.by_extended_mut(peer) {
@@ -141,8 +141,8 @@ impl<
         // link's own protection stands in for the auxiliary header.
         let assumed = self
             .rx_link
-            .filter(|(_, _, assume)| *assume && !fc.security())
-            .map(|(_, peer, _)| peer);
+            .filter(|(_, _, assume, _)| *assume && !fc.security())
+            .map(|(_, peer, _, _)| peer);
         let (payload_start, payload_end) = if let Some(peer) = assumed {
             if !self.config.security_enabled {
                 return RxOutcome::None;

@@ -236,6 +236,15 @@ pub enum StackEvent {
         /// Its network address.
         short: ShortAddress,
     },
+    /// The Trust Center re-established its connectivity behind Trusted
+    /// Link `link` (a ZVD operating as Trust Center, ZD 1.1 §7.7.4.4): it
+    /// is reachable at 0x0000 through the link now.
+    TrustCenterLinked {
+        /// The Trust Center.
+        ieee: ExtendedAddress,
+        /// The Trusted Link index.
+        link: u8,
+    },
     /// The Trust Center link key was updated (verified).
     LinkKeyUpdated,
     /// The On-Network TCLK Update procedure (BDB 3.1 §10.2.4) ended

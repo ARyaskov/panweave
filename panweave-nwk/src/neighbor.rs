@@ -457,7 +457,13 @@ impl<const N: usize> NeighborTable<N> {
     /// during this tick.
     pub fn link_status_tick(&mut self, router_age_limit: u8) -> usize {
         let mut newly_stale = 0;
-        for e in self.entries.iter_mut().filter(|e| e.is_router()) {
+        // A router behind a Trusted Link sends no Link Status; the link's
+        // liveness is the host's (closing it removes the entry).
+        for e in self
+            .entries
+            .iter_mut()
+            .filter(|e| e.is_router() && e.link.is_none())
+        {
             e.age = e.age.saturating_add(1);
             e.router_age = e.router_age.saturating_add(1);
             e.router_outbound_activity = e.router_outbound_activity.saturating_sub(1);

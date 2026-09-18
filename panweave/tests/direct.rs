@@ -1313,3 +1313,421 @@ fn the_zvd_chooses_the_security_model_of_a_formed_network() {
     assert_eq!(info.trust_center, ExtendedAddress::BROADCAST);
     assert!(w.nodes[r].0.stack.is_operating());
 }
+
+/// A ZVD operating as Trust Center (ZD 1.1 §7.7.4.4): it commissions the
+/// ZDD out of band as the first router with its own EUI-64 as Trust
+/// Center, then re-establishes its connectivity through the tunnel with
+/// a Network Commissioning Request of type Establish Trusted Link; the
+/// ZDD answers with address 0x0000 and reaches the Trust Center over the
+/// link from then on. Anyone else asking is refused.
+#[test]
+fn a_zvd_acting_as_trust_center_attaches_behind_the_trusted_link() {
+    use panweave::codec::{Decode, Encode, Writer};
+    use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave::nwk::frame::{FrameType, Header};
+    use panweave::nwk::tlv::{
+        DeviceCapabilityExtension, FragmentationParameters, SupportedKeyNegotiationMethods, tag,
+        write_encapsulation,
+    };
+    use panweave::types::{MacCapability, MacStatus};
+    use panweave_direct::commissioning::LinkKey;
+    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+
+    fn joiner_tlvs() -> Vec<u8> {
+        let mut buf = [0u8; 48];
+        let mut w = Writer::new(&mut buf);
+        write_encapsulation(&mut w, tag::JOINER_ENCAPSULATION, |w| {
+            SupportedKeyNegotiationMethods {
+                protocols: 0x01,
+                secrets: 0x01,
+                source: None,
+            }
+            .write(w)?;
+            FragmentationParameters {
+                node: ShortAddress::COORDINATOR,
+                options: 0,
+                max_incoming_transfer_unit: 128,
+            }
+            .write(w)?;
+            DeviceCapabilityExtension(DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE)
+                .write(w)
+        })
+        .unwrap();
+        let n = w.position();
+        buf[..n].to_vec()
+    }
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let channel = Channel::new_2_4ghz(25).unwrap();
+    let mask = ChannelMask::EMPTY.with(channel);
+    let zvd = ExtendedAddress(0x00AA_0000_0000_0001);
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0003);
+    let zdd_short = ShortAddress(0x3344);
+    let router =
+        Router::new(zdd_ieee).build::<SoftwareAes, _, _>(TestRng::seed(3), MemoryStorage::new());
+    let r = w.add(router);
+    let mut zvd_r = Commissioning::new(Level::Provisioning, false);
+    let mut buf = [0u8; 160];
+    let n = JoinNetwork {
+        method: JoiningMethod::OutOfBand,
+        extended_pan_id: Some(ExtendedAddress(0x00EE_0000_0000_0002)),
+        pan_id: Some(PanId(0x3C84)),
+        channels: Some(mask),
+        network_key: Some(Key128::from_bytes([0x5a; 16])),
+        link_key: Some(LinkKey {
+            unique: true,
+            provisional: false,
+            key: Key128::from_bytes([0x11; 16]),
+        }),
+        nwk_address: Some(zdd_short),
+        trust_center: Some(zvd),
+        update_id: Some(0),
+        key_sequence: Some(0),
+        admin_key: None,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    assert_eq!(
+        zvd_r.write(&mut w.nodes[r].0, Characteristic::JoinNetwork, &buf[..n]),
+        Access::Ok
+    );
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        direct_done(w, r, Domain::JoinNetwork) == Some(0)
+    }));
+    // A verified unique key with the ZVD Trust Center: nothing to update.
+    assert!(!w.nodes[r].0.direct_tclk_update_pending());
+    w.settle();
+    w.nodes[r].2.clear();
+
+    // The tunnel opens on the authorized session; the ZVD sends the
+    // Establish Trusted Link request, NWK-secured over the link.
+    assert!(w.nodes[r].0.open_tunnel(2, 0x0043, zvd));
+    let tlvs = joiner_tlvs();
+    let capability = MacCapability(0)
+        .with_rx_on_when_idle(true)
+        .with_full_function_device(true);
+    let request = |seq: u8, src: ShortAddress, src_ieee: ExtendedAddress| {
+        let header = Header::new(FrameType::Command, zdd_short, src, 1, seq)
+            .with_src_ieee(src_ieee)
+            .with_dst_ieee(zdd_ieee);
+        let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+            kind: CommissioningType::EstablishTrustedLink,
+            capability,
+            tlvs: &tlvs,
+        });
+        let mut npdu = [0u8; 120];
+        let h = header.encode_to_slice(&mut npdu).unwrap();
+        let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+        npdu[..h + n].to_vec()
+    };
+    let write = |w: &mut World, npdu: &[u8], secured: bool| {
+        let mut tlv = [0u8; 160];
+        let t = NpduMessage {
+            assume_security: secured,
+            npdu,
+        }
+        .encode(&mut tlv)
+        .unwrap();
+        w.nodes[r]
+            .0
+            .on_tunnel_write(2, SessionKind::Authorized, &tlv[..t])
+            .unwrap();
+        w.settle();
+    };
+    let responses = |w: &World| -> Vec<(MacStatus, ShortAddress, bool)> {
+        w.nodes[r]
+            .2
+            .iter()
+            .filter_map(|e| match e {
+                Event::DirectTunnel { link: 2, tlv } => {
+                    Some(NpduMessage::parse(&tlv[2..]).unwrap())
+                }
+                _ => None,
+            })
+            .filter_map(|m| {
+                let (_, n) = Header::decode_prefix(m.npdu).ok()?;
+                match NwkCommand::decode_exact(&m.npdu[n..]).ok()? {
+                    NwkCommand::CommissioningResponse(r) => {
+                        Some((r.status, r.address, m.assume_security))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    };
+    // Unsecured: dropped. From another device: refused. Not as 0x0000:
+    // refused.
+    write(&mut w, &request(1, ShortAddress::COORDINATOR, zvd), false);
+    assert!(responses(&w).is_empty());
+
+    let other = ExtendedAddress(0x00AA_0000_0000_0002);
+    write(&mut w, &request(2, ShortAddress::COORDINATOR, other), true);
+    write(&mut w, &request(3, ShortAddress(0x0001), zvd), true);
+    assert_eq!(
+        responses(&w),
+        vec![
+            (MacStatus::PanAccessDenied, ShortAddress::COORDINATOR, true),
+            (MacStatus::PanAccessDenied, ShortAddress(0x0001), true),
+        ]
+    );
+    assert!(w.nodes[r].0.stack.nwk.neighbors.by_extended(zvd).is_none());
+    w.nodes[r].2.clear();
+    // The Trust Center itself: success at 0x0000, reachable over the link.
+    write(&mut w, &request(4, ShortAddress::COORDINATOR, zvd), true);
+    assert_eq!(
+        responses(&w),
+        vec![(MacStatus::Success, ShortAddress::COORDINATOR, true)]
+    );
+    assert!(w.nodes[r].2.iter().any(|e| matches!(
+        e,
+        Event::Stack(StackEvent::TrustCenterLinked { ieee, link: 2 }) if *ieee == zvd
+    )));
+    let n = w.nodes[r].0.stack.nwk.neighbors.by_extended(zvd).unwrap();
+    assert_eq!(
+        (n.short, n.link, n.is_router()),
+        (ShortAddress::COORDINATOR, Some(2), true)
+    );
+    assert!(
+        !w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::DeviceAnnounce { .. })))
+    );
+    w.nodes[r].2.clear();
+    // A ZDP request to the Trust Center leaves through the tunnel,
+    // NWK-secured, and the link is not aged out for want of Link Status.
+    w.nodes[r]
+        .0
+        .stack
+        .zdo
+        .request(
+            ShortAddress::COORDINATOR,
+            panweave::zdo::zdp::cluster::NODE_DESC_REQ,
+            &[0, 0],
+        )
+        .unwrap();
+    w.run_until(Duration::from_secs(120), |_| false);
+    let out: Vec<(ShortAddress, bool)> = w.nodes[r]
+        .2
+        .iter()
+        .filter_map(|e| match e {
+            Event::DirectTunnel { link: 2, tlv } => Some(NpduMessage::parse(&tlv[2..]).unwrap()),
+            _ => None,
+        })
+        .filter_map(|m| {
+            let (h, _) = Header::decode_prefix(m.npdu).ok()?;
+            (h.frame_control.frame_type() == FrameType::Data).then_some((h.dst, m.assume_security))
+        })
+        .collect();
+    // (APS retries the unanswered request.)
+    assert!(!out.is_empty());
+    assert!(out.iter().all(|o| *o == (ShortAddress::COORDINATOR, true)));
+    let n = w.nodes[r].0.stack.nwk.neighbors.by_extended(zvd).unwrap();
+    assert_eq!(n.outgoing_cost, 1);
+    // Closing the tunnel forgets the Trust Center's link.
+    w.nodes[r].0.close_tunnel(2);
+    assert!(w.nodes[r].0.stack.nwk.neighbors.by_extended(zvd).is_none());
+}
+
+/// A ZVD rejoining through the ZDD (ZD 1.1 §7.7.4.6): after its first
+/// join and a closed tunnel, a secure rejoin (Network Commissioning
+/// Request of type Rejoin, NWK-secured over the authorized session) is
+/// accepted without any key transport; a Trust Center rejoin (unsecured,
+/// over the provisioning session, after a missed key rotation) gets a
+/// fresh Basic authorization key under the key-load key.
+#[test]
+fn a_zvd_rejoins_through_the_tunnel() {
+    use panweave::codec::{Decode, Encode, Writer};
+    use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave::nwk::frame::{FrameType, Header};
+    use panweave::nwk::tlv::{
+        DeviceCapabilityExtension, FragmentationParameters, SupportedKeyNegotiationMethods, tag,
+        write_encapsulation,
+    };
+    use panweave::types::{MacCapability, MacStatus};
+    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+
+    fn joiner_tlvs() -> Vec<u8> {
+        let mut buf = [0u8; 48];
+        let mut w = Writer::new(&mut buf);
+        write_encapsulation(&mut w, tag::JOINER_ENCAPSULATION, |w| {
+            SupportedKeyNegotiationMethods {
+                protocols: 0x01,
+                secrets: 0x01,
+                source: None,
+            }
+            .write(w)?;
+            FragmentationParameters {
+                node: ShortAddress(0x4E21),
+                options: 0,
+                max_incoming_transfer_unit: 128,
+            }
+            .write(w)?;
+            DeviceCapabilityExtension(DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE)
+                .write(w)
+        })
+        .unwrap();
+        let n = w.position();
+        buf[..n].to_vec()
+    }
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
+    let mut coord = Coordinator::new(zdd_ieee)
+        .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
+    let c = w.add(coord);
+    w.nodes[c]
+        .0
+        .stack
+        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    w.nodes[c].0.stack.permit_join_network(180).unwrap();
+    w.settle();
+    let zvd = ExtendedAddress(0x00AD_0000_0000_0009);
+    let wanted = ShortAddress(0x4E21);
+    let tlvs = joiner_tlvs();
+    let capability = MacCapability(0)
+        .with_rx_on_when_idle(true)
+        .with_allocate_address(true);
+    let request = |seq: u8, kind: CommissioningType| {
+        let header = Header::new(
+            FrameType::Command,
+            ShortAddress::COORDINATOR,
+            wanted,
+            1,
+            seq,
+        )
+        .with_src_ieee(zvd)
+        .with_dst_ieee(zdd_ieee);
+        let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+            kind,
+            capability,
+            tlvs: &tlvs,
+        });
+        let mut npdu = [0u8; 120];
+        let h = header.encode_to_slice(&mut npdu).unwrap();
+        let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+        npdu[..h + n].to_vec()
+    };
+    let write = |w: &mut World, npdu: &[u8], secured: bool, session: SessionKind| {
+        let mut tlv = [0u8; 160];
+        let t = NpduMessage {
+            assume_security: secured,
+            npdu,
+        }
+        .encode(&mut tlv)
+        .unwrap();
+        w.nodes[c].0.on_tunnel_write(1, session, &tlv[..t]).unwrap();
+        w.run_until(Duration::from_secs(5), |_| false);
+    };
+    // Everything the ZDD tunnelled: commissioning responses and
+    // key-load-secured APS commands (Transport Key with a Basic key).
+    let tunnelled = |w: &World| -> (Vec<(MacStatus, ShortAddress)>, usize) {
+        let mut responses = Vec::new();
+        let mut key_loads = 0;
+        for e in &w.nodes[c].2 {
+            let Event::DirectTunnel { link: 1, tlv } = e else {
+                continue;
+            };
+            let m = NpduMessage::parse(&tlv[2..]).unwrap();
+            let Ok((h, n)) = Header::decode_prefix(m.npdu) else {
+                continue;
+            };
+            let body = &m.npdu[n..];
+            match h.frame_control.frame_type() {
+                FrameType::Command => {
+                    if let Ok(NwkCommand::CommissioningResponse(r)) = NwkCommand::decode_exact(body)
+                    {
+                        responses.push((r.status, r.address));
+                    }
+                }
+                FrameType::Data
+                    if body[0] & 0x23 == 0x21
+                        && (body[if body[0] & 0x80 != 0 { 3 } else { 2 }] >> 3) & 0x03 == 0x03 =>
+                {
+                    key_loads += 1;
+                }
+                _ => {}
+            }
+        }
+        (responses, key_loads)
+    };
+
+    // First join, then the tunnel closes: the ZDD forgets the ZVD, the
+    // Trust Center keeps its key-pair entry.
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0042, zvd));
+    w.nodes[c].2.clear();
+    write(
+        &mut w,
+        &request(1, CommissioningType::InitialJoin),
+        false,
+        SessionKind::ZvdProvisioning,
+    );
+    assert_eq!(tunnelled(&w), (vec![(MacStatus::Success, wanted)], 1));
+    w.nodes[c].0.close_tunnel(1);
+    assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());
+    assert!(w.nodes[c].0.stack.aps.security.entry(zvd).is_some());
+
+    // Secure rejoin on a new authorized session: accepted at the same
+    // address, no key transported, the ZVD is a child behind the link.
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0043, zvd));
+    w.nodes[c].2.clear();
+    write(
+        &mut w,
+        &request(2, CommissioningType::Rejoin),
+        true,
+        SessionKind::Authorized,
+    );
+    assert_eq!(tunnelled(&w), (vec![(MacStatus::Success, wanted)], 0));
+    assert!(w.nodes[c].2.iter().any(
+        |e| matches!(e, Event::Stack(StackEvent::DeviceAuthorized { ieee, .. }) if *ieee == zvd)
+    ));
+    let child = w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).unwrap();
+    assert_eq!((child.short, child.link), (wanted, Some(1)));
+    assert!(child.relationship.is_child());
+    w.nodes[c].0.close_tunnel(1);
+
+    // Trust Center rejoin after a missed key rotation: unsecured over the
+    // provisioning session; the answer is a Basic key derived from the
+    // current network key, never the network key.
+    w.nodes[c]
+        .0
+        .stack
+        .update_network_key(Key128::from_bytes([0x6b; 16]))
+        .unwrap();
+    w.run_until(Duration::from_secs(20), |_| false);
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0044, zvd));
+    w.nodes[c].2.clear();
+    write(
+        &mut w,
+        &request(3, CommissioningType::Rejoin),
+        false,
+        SessionKind::ZvdProvisioning,
+    );
+    assert_eq!(tunnelled(&w), (vec![(MacStatus::Success, wanted)], 1));
+    assert!(w.nodes[c].2.iter().any(
+        |e| matches!(e, Event::Stack(StackEvent::DeviceAuthorized { ieee, .. }) if *ieee == zvd)
+    ));
+    assert!(
+        !w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectTunnelDeclined { .. }))
+    );
+}

@@ -386,6 +386,38 @@ impl<
     /// counter reservation is pending the entry is parked and retried by
     /// [`Self::service_pending`].
     pub(crate) fn transmit_pending(&mut self, mut entry: PendingTx) -> Result<(), NwkError> {
+        // A next hop behind a Trusted Link gets the NPDU unsecured, with
+        // the link asked to stand in for NWK security
+        // (NLME-TRUSTEDLINK-POSTPROCESSING.request, §3.2.2.41); a reply
+        // to the frame being received over a link (a refused attach,
+        // say) goes back over that link even without a neighbour. The
+        // link is always on: nothing is held for a poll.
+        let link = self
+            .neighbors
+            .by_short(entry.next_hop)
+            .and_then(|n| n.link)
+            .or_else(|| {
+                self.rx_link
+                    .filter(|(_, _, _, src)| *src == entry.next_hop)
+                    .map(|(link, _, _, _)| link)
+            });
+        if let Some(link) = link {
+            let frame = Self::link_copy(&entry.frame)?;
+            let handle = self.alloc_mac_handle();
+            entry.mac_handle = Some(handle);
+            entry.awaiting_route = false;
+            entry.retry_at = None;
+            entry.indirect = false;
+            let assume_security = entry.secure;
+            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+            self.push_action(NwkAction::TrustedLinkData {
+                handle,
+                link,
+                frame,
+                assume_security,
+            });
+            return Ok(());
+        }
         if entry.indirect {
             // A sleepy child's frame is secured only when it polls
             // (§3.6.2.2 freshness: a counter taken now could be overtaken
@@ -397,26 +429,6 @@ impl<
             let dst = entry.next_hop;
             self.pending.push(entry).map_err(|_| NwkError::Busy)?;
             self.push_action(NwkAction::MacDataDeferred { handle, dst });
-            return Ok(());
-        }
-        // A next hop behind a Trusted Link gets the NPDU unsecured, with
-        // the link asked to stand in for NWK security
-        // (NLME-TRUSTEDLINK-POSTPROCESSING.request, §3.2.2.41).
-        let link = self.neighbors.by_short(entry.next_hop).and_then(|n| n.link);
-        if let Some(link) = link {
-            let frame = Self::link_copy(&entry.frame)?;
-            let handle = self.alloc_mac_handle();
-            entry.mac_handle = Some(handle);
-            entry.awaiting_route = false;
-            entry.retry_at = None;
-            let assume_security = entry.secure;
-            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
-            self.push_action(NwkAction::TrustedLinkData {
-                handle,
-                link,
-                frame,
-                assume_security,
-            });
             return Ok(());
         }
         let on_air = match self.finalize_frame(&entry.frame, entry.header_len, entry.secure) {

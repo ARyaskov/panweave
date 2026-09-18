@@ -164,6 +164,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             .set_network_key(p.key_sequence, p.key.clone(), true);
         self.aps.aib.trust_center_address = p.trust_center;
         self.config.distributed = p.trust_center == ExtendedAddress::BROADCAST;
+        self.sync_security_model();
         self.nwk.warm_start();
         self.aps
             .set_network_state(short, DeviceState::JoinedAuthorized);
@@ -210,6 +211,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         Ok(())
+    }
+
+    /// Hands the NWK layer the security model and the Trust Center of
+    /// the network this device is on.
+    pub(crate) fn sync_security_model(&mut self) {
+        let distributed = self.aps.aib.is_distributed();
+        self.nwk
+            .set_security_model(distributed, Some(self.aps.aib.trust_center_address));
     }
 
     /// Whether the Trust Center link key is still provisional (not yet

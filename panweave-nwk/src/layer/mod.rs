@@ -361,6 +361,16 @@ pub enum NwkEvent {
         /// Whether the attach was secured (no key transport expected).
         secured: bool,
     },
+    /// The Trust Center re-established its connectivity behind a Trusted
+    /// Link (Network Commissioning Request of type Establish Trusted
+    /// Link, R23.2 Table 3-64; ZD 1.1 §7.7.4.4): it is reachable at
+    /// 0x0000 through `link` now, without a join indication.
+    TrustCenterLinked {
+        /// The Trust Center.
+        device: ExtendedAddress,
+        /// The Trusted Link index.
+        link: u8,
+    },
     /// A child joined or rejoined (NLME-JOIN.indication).
     JoinIndication {
         /// Child extended address.
@@ -673,9 +683,14 @@ pub struct Nwk<
     pub(crate) pending_joiner_tlvs: Option<Vec<u8, MAX_JOINER_TLVS>>,
     /// The network uses distributed security (no Trust Center).
     pub(crate) distributed_network: bool,
+    /// The Trust Center's IEEE address on a centralized network: the only
+    /// device allowed to attach behind a Trusted Link as 0x0000 (R23.2
+    /// Table 3-64 Establish Trusted Link, ZD 1.1 §7.7.4.4).
+    pub(crate) trust_center: Option<ExtendedAddress>,
     /// The Trusted Link the frame being received arrived over, with its
-    /// peer and whether it is to be treated as NWK-secured.
-    pub(crate) rx_link: Option<(u8, ExtendedAddress, bool)>,
+    /// peer, whether it is to be treated as NWK-secured, and the frame's
+    /// NWK source (a reply to it goes back over the link).
+    pub(crate) rx_link: Option<(u8, ExtendedAddress, bool, ShortAddress)>,
     /// Rejoin flag of a local leave in progress.
     pub(crate) leaving_rejoin: Option<bool>,
     /// Statistics.
@@ -771,6 +786,7 @@ impl<
             timeout_request_deadline: None,
             pending_joiner_tlvs: None,
             distributed_network: false,
+            trust_center: None,
             rx_link: None,
             leaving_rejoin: None,
             stats: NwkStats::default(),
