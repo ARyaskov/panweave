@@ -212,6 +212,8 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* `SeCommissioning` leaves the network when Key Establishment ends with
+  UNKNOWN_ISSUER (SE 1.4a §5.4.7.1) instead of retrying.
 * Smart Energy key refresh policies (SE 1.4a §5.4.4, §5.4.5):
   `Aps::{mark_key_stale, clear_key_stale, is_key_stale}` retire a link
   key from data traffic (secured data frames dropped without an

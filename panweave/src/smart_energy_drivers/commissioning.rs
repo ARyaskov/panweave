@@ -13,6 +13,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_smart_energy::PROFILE_ID;
 use panweave_smart_energy::commissioning::{Action, Event, LeaveSource, Lifecycle, Phase};
 use panweave_smart_energy::key_establishment::{Ecmqv, IssuerPolicy, Status, Timing};
+use panweave_smart_energy::security::{AfterKeyEstablishment, after_key_establishment};
 use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
@@ -44,8 +45,9 @@ pub enum SeCommissioningEvent {
     Joined,
     /// The link key with the Trust Center was established.
     KeyEstablished,
-    /// Key Establishment failed (the machine retries or pauses); the
-    /// Terminate status when the peer sent one.
+    /// Key Establishment failed (the machine retries or pauses, or
+    /// leaves the network on UNKNOWN_ISSUER, §5.4.7.1); the Terminate
+    /// status when the peer sent one.
     KeyEstablishmentFailed {
         /// The Terminate status (`None` on a timeout).
         status: Option<Status>,
@@ -526,9 +528,15 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
                 Some(SeCommissioningEvent::KeyEstablished)
             }
             CbkeOutcome::Failed { status, .. } => {
-                let a = self
-                    .lifecycle
-                    .on_event(Event::KeyEstablishmentFailed, now, random(stack));
+                // §5.4.7.1: a Trust Center whose certificate issuer is
+                // unknown is not one to stay with; any other failure is
+                // retried per the §5.5.5 life cycle.
+                let event = match after_key_establishment(Err(status.unwrap_or(Status::BadMessage)))
+                {
+                    AfterKeyEstablishment::Leave => Event::Leave(LeaveSource::User),
+                    _ => Event::KeyEstablishmentFailed,
+                };
+                let a = self.lifecycle.on_event(event, now, random(stack));
                 self.apply(stack, a);
                 Some(SeCommissioningEvent::KeyEstablishmentFailed { status })
             }

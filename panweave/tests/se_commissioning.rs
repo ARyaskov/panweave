@@ -19,7 +19,7 @@ use panweave::runtime::{StackConfig, StackEvent};
 use panweave::smart_energy::cluster as c;
 use panweave::smart_energy::clusters::price::PublishPrice;
 use panweave::smart_energy::commissioning::Phase;
-use panweave::smart_energy::key_establishment::{Ecmqv, EcmqvError, Suite, Timing};
+use panweave::smart_energy::key_establishment::{Ecmqv, EcmqvError, Status, Suite, Timing};
 use panweave::smart_energy_drivers::commissioning::{SeCommissioning, SeCommissioningEvent};
 use panweave::smart_energy_drivers::price::{PriceClient, PriceEvent, PriceServer};
 use panweave::smart_energy_endpoints as se;
@@ -442,4 +442,86 @@ fn the_display_follows_a_trust_center_swap_out() {
             )
         })
     }));
+}
+
+#[test]
+fn the_display_leaves_a_trust_center_with_an_unknown_issuer() {
+    // §5.4.7.1: the ESI's certificate names an issuer the display does
+    // not trust; Key Establishment ends with UNKNOWN_ISSUER and the
+    // display leaves instead of retrying.
+    let mut sim = Simulator::new();
+    let e = sim.add_stack(
+        "esi",
+        node(LogicalDeviceType::Coordinator, ESI_IEEE, 111),
+        Box::new(Esi {
+            cbke: CbkeDriver::new(
+                Vectors {
+                    cert: &CERT_V,
+                    ephemeral: &QEV,
+                },
+                EP,
+                ISSUER,
+                TIMING,
+            ),
+            price: PriceServer::new(EP),
+        }),
+    );
+    let i = sim.add_stack(
+        "ihd",
+        node(LogicalDeviceType::Router, IHD_IEEE, 112),
+        Box::new(Ihd {
+            driver: SeCommissioning::new(
+                Vectors {
+                    cert: &CERT_U,
+                    ephemeral: &QEU,
+                },
+                EP,
+                ExtendedAddress(0x0102_0304_0506_0708),
+                TIMING,
+                &[c::PRICE],
+                Duration::from_mins(3 * 60),
+                Duration::from_mins(60),
+            ),
+            price: PriceClient::new(EP),
+            events: Vec::new(),
+            prices: Vec::new(),
+        }),
+    );
+    sim.stack(e).form_network_with_key(NETWORK_KEY).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |x| {
+        x.events(e)
+            .iter()
+            .any(|ev| matches!(ev, StackEvent::NetworkFormed { .. }))
+    }));
+    sim.stack(e).permit_join_network(254).unwrap();
+    {
+        let (stack, app) = sim.stack_and_app::<Ihd>(i).unwrap();
+        app.driver.start(stack);
+    }
+    assert!(
+        sim.run_until(Duration::from_secs(120), |x| {
+            x.app::<Ihd>(i).unwrap().events.contains(
+                &SeCommissioningEvent::KeyEstablishmentFailed {
+                    status: Some(Status::UnknownIssuer),
+                },
+            )
+        }),
+        "{:?}",
+        sim.app::<Ihd>(i).unwrap().events
+    );
+    assert!(
+        sim.run_until(Duration::from_secs(30), |x| {
+            x.events(i)
+                .iter()
+                .any(|ev| matches!(ev, StackEvent::Left { .. }))
+        }),
+        "{:?}",
+        sim.app::<Ihd>(i).unwrap().events
+    );
+    assert!(
+        !sim.app::<Ihd>(i)
+            .unwrap()
+            .events
+            .contains(&SeCommissioningEvent::KeyEstablished)
+    );
 }
