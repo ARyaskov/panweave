@@ -654,6 +654,19 @@ pub enum StackEvent {
         /// The device.
         ieee: ExtendedAddress,
     },
+    /// An NPDU for a neighbour behind Trusted Link `link`
+    /// (NLME-TRUSTEDLINK-POSTPROCESSING.request, R23.2 §3.2.2.41): the
+    /// host carries it over the link (for Zigbee Direct, as an NPDU
+    /// Message TLV on the tunnel characteristic); `assume_security`
+    /// is the TLV's SecurityEnable flag.
+    TrustedLinkNpdu {
+        /// The link.
+        link: u8,
+        /// The unsecured NPDU.
+        npdu: panweave_nwk::layer::NpduBuf,
+        /// The peer treats the NPDU as NWK-secured.
+        assume_security: bool,
+    },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.
     TrustCenterLost,

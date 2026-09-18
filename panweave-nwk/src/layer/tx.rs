@@ -83,6 +83,19 @@ impl<
         Self::build_npdu(header, payload.get(..n).unwrap_or(&[]))
     }
 
+    /// The Trusted Link form of a plaintext NPDU: a copy with the
+    /// security sub-field of the frame control cleared and no auxiliary
+    /// header (Zigbee Direct §7.7.3.6).
+    pub(crate) fn link_copy(plaintext: &[u8]) -> Result<NpduBuf, NwkError> {
+        let mut out = NpduBuf::new();
+        out.extend_from_slice(plaintext)
+            .map_err(|_| NwkError::FrameTooLong)?;
+        if let Some(b) = out.get_mut(1) {
+            *b &= !0x02;
+        }
+        Ok(out)
+    }
+
     /// Produces the on-air form of a plaintext NPDU: secured if `secure`,
     /// otherwise a verbatim copy.
     pub(crate) fn finalize_frame(
@@ -384,6 +397,26 @@ impl<
             let dst = entry.next_hop;
             self.pending.push(entry).map_err(|_| NwkError::Busy)?;
             self.push_action(NwkAction::MacDataDeferred { handle, dst });
+            return Ok(());
+        }
+        // A next hop behind a Trusted Link gets the NPDU unsecured, with
+        // the link asked to stand in for NWK security
+        // (NLME-TRUSTEDLINK-POSTPROCESSING.request, §3.2.2.41).
+        let link = self.neighbors.by_short(entry.next_hop).and_then(|n| n.link);
+        if let Some(link) = link {
+            let frame = Self::link_copy(&entry.frame)?;
+            let handle = self.alloc_mac_handle();
+            entry.mac_handle = Some(handle);
+            entry.awaiting_route = false;
+            entry.retry_at = None;
+            let assume_security = entry.secure;
+            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+            self.push_action(NwkAction::TrustedLinkData {
+                handle,
+                link,
+                frame,
+                assume_security,
+            });
             return Ok(());
         }
         let on_air = match self.finalize_frame(&entry.frame, entry.header_len, entry.secure) {

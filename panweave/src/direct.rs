@@ -4,7 +4,10 @@
 //! `panweave_direct::commissioning::Commissioning` and drive the stack
 //! with them (ZD 1.1 §7.7.2). Operation results surface as
 //! [`Event::Direct`], which the host forwards to
-//! `Commissioning::report` to notify the ZVD.
+//! `Commissioning::report` to notify the ZVD. The Tunnel Service (§7.7.3)
+//! is bound by [`Node::open_tunnel`] / [`Node::on_tunnel_write`] /
+//! [`Node::close_tunnel`] and [`Event::DirectTunnel`]: the ZVD is a NWK
+//! neighbour behind a Trusted Link of the stack.
 
 use panweave_bdb::Outcome;
 use panweave_direct::commissioning::{
@@ -13,6 +16,7 @@ use panweave_direct::commissioning::{
     StatusReport, Zdd,
 };
 use panweave_direct::rotation::PastNetworkKeys;
+use panweave_direct::tunnel::{self, NpduMessage, SessionKind, TunnelError};
 use panweave_runtime::{AdoptParams, FormationParams, JoinMode, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::LinkKeyKind;
@@ -43,6 +47,8 @@ pub struct DirectState {
     /// open a Limited Authorization session and Trust Center rejoin.
     /// Recorded on every key switch and persisted.
     pub past_network_keys: PastNetworkKeys<PAST_NETWORK_KEYS>,
+    /// Open tunnels: the Trusted Link index and the ZVD behind it.
+    pub tunnels: heapless::Vec<(u8, ExtendedAddress), 4>,
 }
 
 /// Past network keys kept for Limited Authorization sessions.
@@ -83,6 +89,80 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             self.direct.past_network_keys = PastNetworkKeys::decode(buf.get(..n).unwrap_or(&[]));
         }
         Ok(())
+    }
+
+    /// Opens the Tunnel Service for the ZVD `peer` connected over BLE
+    /// connection `handle`: Trusted Link `link` is registered with the
+    /// stack (§7.7.4). Fails when the interface table is full.
+    pub fn open_tunnel(&mut self, link: u8, handle: u16, peer: ExtendedAddress) -> bool {
+        if !self.stack.add_trusted_link(link, handle) {
+            return false;
+        }
+        self.direct.tunnels.retain(|(l, _)| *l != link);
+        self.direct.tunnels.push((link, peer)).is_ok()
+    }
+
+    /// Closes a tunnel: the link and the ZVD's neighbour entry go.
+    pub fn close_tunnel(&mut self, link: u8) {
+        self.stack.remove_trusted_link(link);
+        self.direct.tunnels.retain(|(l, _)| *l != link);
+    }
+
+    /// A decrypted write to the tunnel NPDU characteristic on `link`
+    /// (§7.7.4.2, §7.7.3.6.2): every NPDU Message TLV is handed to the
+    /// stack as received from the ZVD over the link; `session` applies
+    /// the provisioning-session rule. Returns the first tunnel error.
+    pub fn on_tunnel_write(
+        &mut self,
+        link: u8,
+        session: SessionKind,
+        payload: &[u8],
+    ) -> Result<(), TunnelError> {
+        let peer = self
+            .direct
+            .tunnels
+            .iter()
+            .find(|(l, _)| *l == link)
+            .map(|(_, p)| *p)
+            .ok_or(TunnelError::Malformed)?;
+        let mut first_error = None;
+        for item in tunnel::preprocess(payload, session) {
+            match item {
+                Ok(m) => self
+                    .stack
+                    .on_trusted_link_npdu(link, peer, m.npdu, m.assume_security),
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+        self.collect();
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Turns a stack NPDU for a Trusted Link into the tunnel TLV
+    /// (§7.7.4.1).
+    pub(crate) fn direct_tunnel_out(&mut self, event: &StackEvent) -> Option<Event> {
+        let StackEvent::TrustedLinkNpdu {
+            link,
+            npdu,
+            assume_security,
+        } = event
+        else {
+            return None;
+        };
+        if !self.direct.tunnels.iter().any(|(l, _)| l == link) {
+            return None;
+        }
+        let mut buf = [0u8; tunnel::MAX_VALUE_LEN + 2];
+        let n = NpduMessage {
+            assume_security: *assume_security,
+            npdu,
+        }
+        .encode(&mut buf)
+        .ok()?;
+        let tlv = heapless::Vec::from_slice(buf.get(..n)?).ok()?;
+        Some(Event::DirectTunnel { link: *link, tlv })
     }
 
     /// Maps a stack event onto the completion of a pending Zigbee

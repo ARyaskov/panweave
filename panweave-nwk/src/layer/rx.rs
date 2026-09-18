@@ -53,6 +53,38 @@ impl<
     const BTT: usize,
 > Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
 {
+    /// An NPDU received over a Trusted Link `link` from `peer`
+    /// (NLME-TRUSTEDLINK-PREPROCESSING.confirm, R23.2 §3.2.2.44): the
+    /// frame carries no NWK security; `assume_security` treats it as
+    /// secured by the link. The peer is recorded as a neighbour on that
+    /// link so that frames back to it use the link too.
+    pub fn on_trusted_link_data<'a>(
+        &mut self,
+        link: u8,
+        peer: ExtendedAddress,
+        buf: &'a mut [u8],
+        assume_security: bool,
+    ) -> RxOutcome<'a> {
+        let Ok((header, _)) = Header::decode_prefix(buf) else {
+            self.stats.malformed = self.stats.malformed.saturating_add(1);
+            return RxOutcome::None;
+        };
+        if header.frame_control.security() {
+            // §7.7.3.6 (Zigbee Direct): the tunnelled NPDU never carries
+            // the auxiliary header.
+            self.stats.malformed = self.stats.malformed.saturating_add(1);
+            return RxOutcome::None;
+        }
+        let src = header.src;
+        self.rx_link = Some((link, peer, assume_security));
+        let out = self.on_mac_data(buf, src, u8::MAX, 0);
+        self.rx_link = None;
+        if let Some(n) = self.neighbors.by_extended_mut(peer) {
+            n.link = Some(link);
+        }
+        out
+    }
+
     /// Processes an MCPS-DATA.indication. `buf` holds the NPDU and is
     /// decrypted in place; `mac_src` is the MAC source address of the
     /// frame; `lqi` the link quality and `rssi_dbm` the received power
@@ -104,7 +136,20 @@ impl<
         let my_short = self.nib.network_address;
         let for_me = dst == my_short || dst.is_broadcast();
         let mut secured_by: Option<ExtendedAddress> = None;
-        let (payload_start, payload_end) = if fc.security() {
+        // A frame from a Trusted Link peer to be treated as NWK-secured
+        // (NLME-TRUSTEDLINK-PREPROCESSING assumeSecurity, §3.2.2.43): the
+        // link's own protection stands in for the auxiliary header.
+        let assumed = self
+            .rx_link
+            .filter(|(_, _, assume)| *assume && !fc.security())
+            .map(|(_, peer, _)| peer);
+        let (payload_start, payload_end) = if let Some(peer) = assumed {
+            if !self.config.security_enabled {
+                return RxOutcome::None;
+            }
+            secured_by = Some(peer);
+            (header_len, buf.len())
+        } else if fc.security() {
             if !self.config.security_enabled {
                 return RxOutcome::None;
             }
@@ -147,7 +192,7 @@ impl<
             }
             (header_len, buf.len())
         };
-        let secured = fc.security();
+        let secured = fc.security() || assumed.is_some();
 
         // --- Address bookkeeping (§3.6.1.10.2) ------------------------------
         if let Some(e) = src_ieee {

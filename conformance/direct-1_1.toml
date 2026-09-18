@@ -72,9 +72,9 @@ section = "§7.7.3, §7.7.4"
 summary = "Tunnel service NPDU characteristic, NPDU message TLV, trusted-link pre/post processing in the NWK layer, joining centralized/distributed networks on behalf of the ZVD, ZVD as trust center, ZVD rejoin/forming"
 level = "mandatory"
 status = "partially-implemented"
-module = "panweave-direct::tunnel"
-tests = ["npdu_message_round_trip_and_session_rule"]
-notes = "NPDU Message TLV codec and the trusted-link pre-/post-processing of §7.7.4.1-7.7.4.2 including the ZVD-provisioning-session drop rule of §7.7.3.6.2 are implemented; the NWK-layer trusted-link interface (NLME-TRUSTEDLINK-*), joining on behalf of the ZVD, ZVD as Trust Center and ZVD rejoin/forming through the ZDD are not (TODO(PW-ZD-TRUSTEDLINK))."
+module = "panweave-direct::tunnel,panweave-nwk::layer,panweave::direct"
+tests = ["npdu_message_round_trip_and_session_rule", "a_virtual_device_joins_and_exchanges_data_over_a_trusted_link", "zvd_joins_and_talks_through_the_tunnel"]
+notes = "NPDU Message TLV codec and the trusted-link pre-/post-processing of §7.7.4.1-7.7.4.2 including the ZVD-provisioning-session drop rule of §7.7.3.6.2; the NWK-layer Trusted Link interface (R23.2 NLME-TRUSTEDLINK-PREPROCESSING / POSTPROCESSING): an NPDU received over the link is processed as from that neighbour without an auxiliary header, treated as NWK-secured when SecurityEnable is set, a joiner heard over the link is kept as a neighbour behind it, and unicasts to it and copies of broadcasts leave as plaintext NPDUs with the SecurityEnable flag telling the peer whether NWK security would have applied. Joining a centralized network on behalf of the ZVD (§7.7.4.3) works end to end in the facade: the Network Commissioning Request over the provisioning session, the response and the Trust Center's Transport Key back over the tunnel, then frames on the authorized session (a ZDP request answered through the link). Not done: the Trust Center transporting a basic authorization key derived for the ZVD instead of the network key (the stack's Trust Center transports the network key like for any joiner; ZD-KEY-001), the ZVD acting as Trust Center (§7.7.4.4), joining a distributed network (§7.7.4.5), ZVD rejoin and forming through the ZDD (§7.7.4.6-7.7.4.7) (TODO(PW-ZD-TRUSTEDLINK))."
 [[requirement]]
 id = "PW-ZD-ZVD-001"
 section = "§8"

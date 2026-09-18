@@ -445,3 +445,177 @@ fn zdd_keeps_past_network_keys_for_limited_authorization() {
         Forwarding::Decline
     );
 }
+
+/// A ZVD joins through the Tunnel Service (ZD 1.1 §7.7.4.3): its Network
+/// Commissioning Request arrives as an NPDU Message TLV, the response
+/// and the Trust Center's key transport go back over the tunnel, and
+/// afterwards the ZVD exchanges NWK frames with the network as a
+/// neighbour behind the Trusted Link.
+#[test]
+fn zvd_joins_and_talks_through_the_tunnel() {
+    use panweave::aps::frame::{Addressing, Header as ApsHeader};
+    use panweave::codec::{Decode, Encode};
+    use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave::nwk::frame::{FrameType, Header};
+    use panweave::types::{ClusterId, Endpoint, MacCapability, MacStatus, ProfileId};
+    use panweave_direct::tunnel::{NpduMessage, SessionKind};
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
+    let mut coord = Coordinator::new(zdd_ieee)
+        .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    let c = w.add(coord);
+    w.nodes[c]
+        .0
+        .stack
+        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    w.nodes[c].0.stack.permit_join_network(180).unwrap();
+    w.settle();
+    w.nodes[c].2.clear();
+    // The tunnel opens for the ZVD on BLE connection 0x0042 as link 1.
+    let zvd = ExtendedAddress(0x00AD_0000_0000_0009);
+    let wanted = ShortAddress(0x4E21);
+    assert!(w.nodes[c].0.open_tunnel(1, 0x0042, zvd));
+    // Network Commissioning Request, unsecured, over the provisioning
+    // session.
+    let header = Header::new(FrameType::Command, ShortAddress::COORDINATOR, wanted, 1, 1)
+        .with_src_ieee(zvd)
+        .with_dst_ieee(zdd_ieee);
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::InitialJoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &[],
+    });
+    let mut npdu = [0u8; 64];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    let mut tlv = [0u8; 96];
+    let t = NpduMessage {
+        assume_security: false,
+        npdu: &npdu[..h + n],
+    }
+    .encode(&mut tlv)
+    .unwrap();
+    w.nodes[c]
+        .0
+        .on_tunnel_write(1, SessionKind::ZvdProvisioning, &tlv[..t])
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(5), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .filter(|e| matches!(e, Event::DirectTunnel { link: 1, .. }))
+            .count()
+            >= 2
+    }));
+    let out: Vec<NpduMessage<'_>> = w.nodes[c]
+        .2
+        .iter()
+        .filter_map(|e| match e {
+            Event::DirectTunnel { tlv, .. } => Some(tlv),
+            _ => None,
+        })
+        .map(|tlv| NpduMessage::parse(&tlv[2..]).unwrap())
+        .collect();
+    // 1. The Network Commissioning Response, unsecured like the request.
+    let (rh, rn) = Header::decode_prefix(out[0].npdu).unwrap();
+    assert!(!out[0].assume_security && !rh.frame_control.security());
+    let NwkCommand::CommissioningResponse(r) =
+        NwkCommand::decode_exact(&out[0].npdu[rn..]).unwrap()
+    else {
+        panic!("not a commissioning response");
+    };
+    assert_eq!((r.status, r.address), (MacStatus::Success, wanted));
+    // 2. The Trust Center's Transport Key (APS command, NWK-unsecured).
+    let (kh, kn) = Header::decode_prefix(out[1].npdu).unwrap();
+    assert!(!out[1].assume_security);
+    assert_eq!(kh.dst, wanted);
+    assert_eq!(out[1].npdu[kn] & 0x03, 0x01, "an APS command frame");
+    assert!(w.nodes[c].2.iter().any(
+        |e| matches!(e, Event::Stack(StackEvent::DeviceAuthorized { ieee, .. }) if *ieee == zvd)
+    ));
+    let child = w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).unwrap();
+    assert_eq!(child.link, Some(1));
+    // A secured NPDU is dropped on a provisioning session, but on the
+    // authorized session the ZVD's NWK_addr_req (assumed secured) is
+    // answered over the tunnel with the link standing in for security.
+    w.nodes[c].2.clear();
+    let mut apdu = [0u8; 32];
+    let aps = ApsHeader::data(
+        Addressing::Endpoint(Endpoint(0)),
+        ClusterId(0x0000),
+        ProfileId::ZDP,
+        Endpoint(0),
+        1,
+    );
+    let a = aps.encode_to_slice(&mut apdu).unwrap();
+    apdu[a] = 0x33;
+    apdu[a + 1..a + 9].copy_from_slice(&zdd_ieee.0.to_le_bytes());
+    apdu[a + 9] = 0;
+    apdu[a + 10] = 0;
+    let header =
+        Header::new(FrameType::Data, ShortAddress::COORDINATOR, wanted, 1, 2).with_src_ieee(zvd);
+    let mut npdu = [0u8; 64];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    npdu[h..h + a + 11].copy_from_slice(&apdu[..a + 11]);
+    let t = NpduMessage {
+        assume_security: true,
+        npdu: &npdu[..h + a + 11],
+    }
+    .encode(&mut tlv)
+    .unwrap();
+    assert!(
+        w.nodes[c]
+            .0
+            .on_tunnel_write(1, SessionKind::ZvdProvisioning, &tlv[..t])
+            .is_err()
+    );
+    w.nodes[c]
+        .0
+        .on_tunnel_write(1, SessionKind::Authorized, &tlv[..t])
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(5), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectTunnel { link: 1, .. }))
+    }));
+    let rsp = w.nodes[c]
+        .2
+        .iter()
+        .find_map(|e| match e {
+            Event::DirectTunnel { tlv, .. } => Some(NpduMessage::parse(&tlv[2..]).unwrap()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(rsp.assume_security);
+    let (dh, dn) = Header::decode_prefix(rsp.npdu).unwrap();
+    assert!(!dh.frame_control.security());
+    assert_eq!(dh.dst, wanted);
+    // NWK_addr_rsp: APS data, ZDP cluster 0x8000, seq 0x33, SUCCESS, the
+    // coordinator's IEEE and address 0x0000.
+    let (ah, an) = ApsHeader::decode_prefix(&rsp.npdu[dn..]).unwrap();
+    assert_eq!(ah.cluster, Some(ClusterId(0x8000)));
+    let zdp = &rsp.npdu[dn + an..];
+    assert_eq!(zdp[0], 0x33);
+    assert_eq!(zdp[1], 0x00);
+    assert_eq!(&zdp[2..10], &zdd_ieee.0.to_le_bytes());
+    assert_eq!(&zdp[10..12], &[0x00, 0x00]);
+    // Closing the tunnel forgets the ZVD.
+    w.nodes[c].0.close_tunnel(1);
+    assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());
+}

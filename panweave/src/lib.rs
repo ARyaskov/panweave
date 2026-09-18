@@ -96,6 +96,16 @@ pub enum Event {
         /// Its status code (0 = SUCCESS).
         status: u8,
     },
+    /// An NPDU Message TLV for the ZVD behind Trusted Link `link`
+    /// (ZD 1.1 §7.7.4.1): the host encrypts it for the session and
+    /// sends it as a GATT indication of the tunnel NPDU characteristic.
+    #[cfg(feature = "direct")]
+    DirectTunnel {
+        /// The link.
+        link: u8,
+        /// The TLV.
+        tlv: heapless::Vec<u8, { panweave_direct::tunnel::MAX_VALUE_LEN + 2 }>,
+    },
 }
 
 /// A device: the stack plus its commissioning machine.
@@ -283,6 +293,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             #[cfg(feature = "direct")]
             if let Some(d) = self.direct_outcome(&e) {
                 self.push(d);
+            }
+            #[cfg(feature = "direct")]
+            if let Some(t) = self.direct_tunnel_out(&e) {
+                self.push(t);
             }
             #[cfg(feature = "direct")]
             if let StackEvent::NetworkKeySwitched { previous, .. } = &e {

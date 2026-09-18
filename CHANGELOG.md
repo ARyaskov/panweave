@@ -212,6 +212,20 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Trusted Links (R23.2 §3.2.2.41–§3.2.2.44) and the Zigbee Direct
+  Tunnel Service binding (ZD 1.1 §7.7.3–§7.7.4): `NeighborEntry::link`
+  marks a neighbour reached over a Trusted Link, `Nwk::on_trusted_link_data`
+  processes an NPDU received over it (no auxiliary header; treated as
+  NWK-secured when `assume_security`; a joiner heard over the link stays
+  behind it), unicasts to such neighbours and copies of broadcasts leave
+  as `NwkAction::TrustedLinkData` (plaintext, security bit clear, the
+  link asked to stand in for NWK security); the runtime exposes
+  `Stack::{add_trusted_link, remove_trusted_link, on_trusted_link_npdu}`
+  and `StackEvent::TrustedLinkNpdu`; the facade (feature `direct`) binds
+  the tunnel with `Node::{open_tunnel, on_tunnel_write, close_tunnel}`
+  and `Event::DirectTunnel`. A ZVD joins with a Network Commissioning
+  Request over the tunnel and exchanges NWK frames with the network
+  through the ZDD.
 * OTA client periodic polling (ZCL8 §11.8.2, §11.13.4):
   `ota::Client::with_query_period` makes an idle client send Query Next
   Image every period (the cadence each application standard sets),

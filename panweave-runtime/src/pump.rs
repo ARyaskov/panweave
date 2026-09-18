@@ -15,6 +15,7 @@ use panweave_codec::tlv::TlvSet;
 use panweave_mac::frame::{FrameType as MacFrameType, MacAddress};
 use panweave_mac::radio::RxMetadata;
 use panweave_mac::service::{MacEvent, RxDisposition, TxStatus};
+use panweave_nwk::interface::{InterfaceType, MacInterfaceEntry};
 use panweave_nwk::layer::{JoinMethod, JoinParams};
 use panweave_nwk::layer::{NwkAction, NwkEvent, RxOutcome};
 use panweave_nwk::tlv::{GlobalTlvs, SupportedKeyNegotiationMethods};
@@ -177,32 +178,85 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 let Ok(mut npdu) = Vec::<u8, NPDU_BUF>::from_slice(frame.payload) else {
                     return;
                 };
-                let owned = match self.nwk.on_mac_data(&mut npdu, mac_src, lqi, rssi) {
-                    RxOutcome::Data {
-                        src,
-                        dst,
-                        src_ieee,
-                        secured,
-                        lqi,
-                        payload,
-                        ..
-                    } => {
-                        let Ok(mut apdu) = Vec::<u8, APDU_BUF>::from_slice(payload) else {
-                            return;
-                        };
-                        let view = AddrView(&self.nwk);
-                        self.aps
-                            .on_nwk_data(&mut apdu, src, dst, src_ieee, secured, lqi, &view)
-                            .as_ref()
-                            .and_then(OwnedIndication::from)
-                    }
-                    RxOutcome::None | RxOutcome::InterPan { .. } => None,
-                };
-                if let Some(ind) = owned {
-                    self.dispatch_indication(&ind);
-                }
+                let outcome = self.nwk.on_mac_data(&mut npdu, mac_src, lqi, rssi);
+                self.deliver_rx_outcome(outcome);
             }
         }
+    }
+
+    /// Hands a NWK data outcome to the APS layer and the application.
+    fn deliver_rx_outcome(&mut self, outcome: RxOutcome<'_>) {
+        let owned = match outcome {
+            RxOutcome::Data {
+                src,
+                dst,
+                src_ieee,
+                secured,
+                lqi,
+                payload,
+                ..
+            } => {
+                let Ok(mut apdu) = Vec::<u8, APDU_BUF>::from_slice(payload) else {
+                    return;
+                };
+                let view = AddrView(&self.nwk);
+                self.aps
+                    .on_nwk_data(&mut apdu, src, dst, src_ieee, secured, lqi, &view)
+                    .as_ref()
+                    .and_then(OwnedIndication::from)
+            }
+            RxOutcome::None | RxOutcome::InterPan { .. } => None,
+        };
+        if let Some(ind) = owned {
+            self.dispatch_indication(&ind);
+        }
+    }
+
+    /// An NPDU received over Trusted Link `link` from `peer` (the
+    /// pre-processed NPDU Message of a Zigbee Direct tunnel, R23.2
+    /// §3.2.2.43): processed as if received from that neighbour,
+    /// treated as NWK-secured when `assume_security`. The link must be
+    /// registered with [`Stack::add_trusted_link`].
+    pub fn on_trusted_link_npdu(
+        &mut self,
+        link: u8,
+        peer: ExtendedAddress,
+        npdu: &[u8],
+        assume_security: bool,
+    ) {
+        if !self
+            .nwk
+            .interfaces
+            .get(link)
+            .is_some_and(|e| e.kind == InterfaceType::TrustedLink && e.state)
+        {
+            return;
+        }
+        let Ok(mut buf) = Vec::<u8, NPDU_BUF>::from_slice(npdu) else {
+            return;
+        };
+        let outcome = self
+            .nwk
+            .on_trusted_link_data(link, peer, &mut buf, assume_security);
+        self.deliver_rx_outcome(outcome);
+        self.pump();
+    }
+
+    /// Registers a Trusted Link interface (nwkMacInterfaceTable entry
+    /// of type Trusted Link, R23.2 Table 3-69) carrying `handle` (for
+    /// Zigbee Direct the BLE connection handle). NPDUs for neighbours
+    /// behind it are reported as [`StackEvent::TrustedLinkNpdu`].
+    pub fn add_trusted_link(&mut self, link: u8, handle: u16) -> bool {
+        self.nwk
+            .interfaces
+            .insert(MacInterfaceEntry::trusted_link(link, handle))
+            .is_ok()
+    }
+
+    /// Removes a Trusted Link: its neighbours are forgotten.
+    pub fn remove_trusted_link(&mut self, link: u8) {
+        self.nwk.interfaces.remove(link);
+        self.nwk.neighbors.retain(|n| n.link != Some(link));
     }
 
     fn dispatch_indication(&mut self, ind: &OwnedIndication) {
@@ -448,6 +502,22 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             .nwk
                             .on_mac_data_confirm(handle, TxStatus::ChannelAccessFailure),
                     }
+                }
+                NwkAction::TrustedLinkData {
+                    handle,
+                    link,
+                    frame,
+                    assume_security,
+                } => {
+                    // The Trusted Link transport is the host's (a BLE
+                    // connection for Zigbee Direct): the NPDU is handed
+                    // out as an event and counted as delivered.
+                    self.push_event(StackEvent::TrustedLinkNpdu {
+                        link,
+                        npdu: frame,
+                        assume_security,
+                    });
+                    self.nwk.on_mac_data_confirm(handle, TxStatus::Success);
                 }
                 NwkAction::MacDataDeferred { handle, dst } => {
                     match self.mac.data_request_deferred(MacAddress::Short(dst)) {

@@ -192,6 +192,11 @@ pub struct NeighborEntry {
     /// negotiation, §3.4.13.7); volatile.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub last_rssi_dbm: Option<i8>,
+    /// The Trusted Link (nwkMacInterfaceTable index) the neighbour is
+    /// reached over instead of the radio (R23.2 §3.2.2.41, Zigbee Direct
+    /// §7.7.4); volatile.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub link: Option<u8>,
 }
 
 impl NeighborEntry {
@@ -226,6 +231,7 @@ impl NeighborEntry {
             router_inbound_activity: 0,
             last_key_sequence: None,
             last_rssi_dbm: None,
+            link: None,
         }
     }
 

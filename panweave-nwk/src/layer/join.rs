@@ -1774,6 +1774,8 @@ impl<
                 u16::try_from(constants::SECURITY_TIMEOUT.as_secs()).unwrap_or(10);
         }
         e.outgoing_cost = 1;
+        // A joiner heard over a Trusted Link stays behind it.
+        e.link = self.rx_link.map(|(link, _, _)| link);
         if !self.ensure_neighbor(e) {
             self.send_attach_response(
                 ctx,

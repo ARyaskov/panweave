@@ -40,6 +40,8 @@ struct Node {
     assoc_rsp: Option<(ExtendedAddress, ShortAddress, MacStatus)>,
     /// Frames queued for indirect delivery (this node is a parent).
     indirect: Vec<(ShortAddress, Vec<u8>, panweave_mac::service::TxHandle)>,
+    /// NPDUs handed to a Trusted Link: (link, npdu, assume_security).
+    tunnel: Vec<(u8, Vec<u8>, bool)>,
 }
 
 impl Node {
@@ -58,6 +60,7 @@ impl Node {
             events: Vec::new(),
             assoc_rsp: None,
             indirect: Vec::new(),
+            tunnel: Vec::new(),
         }
     }
 }
@@ -254,6 +257,25 @@ impl Net {
                         );
                     }
                 }
+            }
+            NwkAction::TrustedLinkData {
+                handle,
+                link,
+                frame,
+                assume_security,
+            } => {
+                // The link transport is the harness: the NPDU is kept for
+                // the test and counted as delivered.
+                self.log.push(format!(
+                    "{i}: TrustedLinkData link={link} len={} assume={assume_security}",
+                    frame.len()
+                ));
+                self.nodes[i]
+                    .tunnel
+                    .push((link, frame.to_vec(), assume_security));
+                self.nodes[i]
+                    .nwk
+                    .on_mac_data_confirm(handle, TxStatus::Success);
             }
             NwkAction::MacDataDeferred { handle, dst } => {
                 // Held without a frame until the child polls.
@@ -861,4 +883,140 @@ fn pan_id_conflicts_are_counted_and_changes_are_explicit() {
         evs.iter()
             .any(|e| matches!(e, NwkEvent::PanIdChanged { pan_id } if *pan_id == staged))
     );
+}
+
+/// A Zigbee Virtual Device behind a Trusted Link (Zigbee Direct): it
+/// joins with a Network Commissioning Request over the link and talks
+/// to the network through the coordinator without ever using the radio.
+#[test]
+fn a_virtual_device_joins_and_exchanges_data_over_a_trusted_link() {
+    use panweave_codec::{Decode, Encode};
+    use panweave_nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave_nwk::frame::{FrameType, Header};
+    use panweave_nwk::interface::MacInterfaceEntry;
+
+    let mut net = Net::new();
+    let ci = form_coordinator(&mut net);
+    net.nodes[ci]
+        .nwk
+        .interfaces
+        .insert(MacInterfaceEntry::trusted_link(1, 0x0042))
+        .unwrap();
+    let zvd = ExtendedAddress(0x005D_0000_0000_0001);
+    let wanted = ShortAddress(0x1234);
+    // Network Commissioning Request, initial join, unsecured (§7.7.4.3).
+    let coord_ieee = net.nodes[ci].ieee;
+    let header = Header::new(FrameType::Command, ShortAddress::COORDINATOR, wanted, 1, 1)
+        .with_src_ieee(zvd)
+        .with_dst_ieee(coord_ieee);
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::InitialJoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &[],
+    });
+    let mut npdu = [0u8; 64];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    net.nodes[ci]
+        .nwk
+        .on_trusted_link_data(1, zvd, &mut npdu[..h + n], false);
+    net.settle();
+    // The response went back over the link, unsecured like the request.
+    let (link, rsp, assume) = net.nodes[ci].tunnel.remove(0);
+    assert_eq!(link, 1);
+    assert!(!assume);
+    let (rh, rn) = Header::decode_prefix(&rsp).unwrap();
+    assert!(!rh.frame_control.security());
+    assert_eq!(rh.dst, wanted);
+    let NwkCommand::CommissioningResponse(r) = NwkCommand::decode_exact(&rsp[rn..]).unwrap() else {
+        panic!("not a commissioning response");
+    };
+    assert_eq!(r.status, MacStatus::Success);
+    assert_eq!(r.address, wanted);
+    let child = net.nodes[ci].nwk.neighbors.by_extended(zvd).unwrap();
+    assert_eq!(child.link, Some(1));
+    assert_eq!(child.short, wanted);
+    let evs = net.take_events(ci);
+    assert!(
+        evs.iter()
+            .any(|e| matches!(e, NwkEvent::JoinIndication { device, .. } if *device == zvd)),
+        "{evs:?}"
+    );
+    // Data to the ZVD leaves as plaintext with the link asked to secure
+    // it; the radio sees nothing.
+    let before = net.log.len();
+    net.nodes[ci]
+        .nwk
+        .data_request(wanted, b"hello", None, true, true)
+        .unwrap();
+    net.settle();
+    let (link, data, assume) = net.nodes[ci].tunnel.remove(0);
+    assert_eq!(link, 1);
+    assert!(assume);
+    let (dh, dn) = Header::decode_prefix(&data).unwrap();
+    assert!(!dh.frame_control.security());
+    assert_eq!(dh.dst, wanted);
+    assert_eq!(&data[dn..], b"hello");
+    assert!(
+        net.log[before..]
+            .iter()
+            .all(|l| !l.starts_with(&format!("{ci}: MacData")))
+    );
+    let evs = net.take_events(ci);
+    assert!(evs.iter().any(|e| matches!(
+        e,
+        NwkEvent::DataConfirm {
+            status: NwkStatus::Success,
+            ..
+        }
+    )));
+    // Data from the ZVD, assumed secured, is delivered as such.
+    let header =
+        Header::new(FrameType::Data, ShortAddress::COORDINATOR, wanted, 1, 2).with_src_ieee(zvd);
+    let mut npdu = [0u8; 64];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    npdu[h..h + 5].copy_from_slice(b"world");
+    let out = net.nodes[ci]
+        .nwk
+        .on_trusted_link_data(1, zvd, &mut npdu[..h + 5], true);
+    match out {
+        RxOutcome::Data {
+            src,
+            secured,
+            payload,
+            ..
+        } => {
+            assert_eq!(src, wanted);
+            assert!(secured);
+            assert_eq!(payload, b"world");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A secured-looking NPDU (auxiliary header present) is refused.
+    let mut header = Header::new(FrameType::Data, ShortAddress::COORDINATOR, wanted, 1, 3);
+    header.frame_control = header.frame_control.with_security(true);
+    let mut npdu = [0u8; 64];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let malformed = net.nodes[ci].nwk.stats.malformed;
+    assert!(matches!(
+        net.nodes[ci]
+            .nwk
+            .on_trusted_link_data(1, zvd, &mut npdu[..h], true),
+        RxOutcome::None
+    ));
+    assert_eq!(net.nodes[ci].nwk.stats.malformed, malformed + 1);
+    // A broadcast reaches the link as a plaintext copy too.
+    net.nodes[ci]
+        .nwk
+        .data_request(ShortAddress::BROADCAST_ALL, b"bcast", None, false, true)
+        .unwrap();
+    net.settle();
+    let (link, data, assume) = net.nodes[ci].tunnel.remove(0);
+    assert_eq!(link, 1);
+    assert!(assume);
+    let (bh, bn) = Header::decode_prefix(&data).unwrap();
+    assert_eq!(bh.dst, ShortAddress::BROADCAST_ALL);
+    assert_eq!(&data[bn..], b"bcast");
 }

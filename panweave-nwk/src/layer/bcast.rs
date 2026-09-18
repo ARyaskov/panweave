@@ -141,6 +141,33 @@ impl<
             ack: false,
             indirect: false,
         });
+        // Neighbours behind Trusted Links hear no radio broadcast: each
+        // link gets an unsecured copy of the plaintext on the first
+        // transmission (originated or relayed), the link standing in for
+        // NWK security (§3.2.2.41).
+        if first && let Some((plaintext, _, secure)) = &own {
+            let mut links: Vec<u8, 4> = Vec::new();
+            for n in self.neighbors.iter() {
+                if let Some(l) = n.link
+                    && n.short != src
+                    && !links.contains(&l)
+                {
+                    let _ = links.push(l);
+                }
+            }
+            for link in links {
+                let Ok(frame) = Self::link_copy(plaintext) else {
+                    continue;
+                };
+                let handle = self.alloc_mac_handle();
+                self.push_action(NwkAction::TrustedLinkData {
+                    handle,
+                    link,
+                    frame,
+                    assume_security: *secure,
+                });
+            }
+        }
         // Unicast copies for sleepy end-device children (§3.6.6, all
         // devices broadcast only).
         let mut sleepy: Vec<ShortAddress, 8> = Vec::new();

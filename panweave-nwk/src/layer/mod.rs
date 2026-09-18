@@ -202,6 +202,21 @@ pub enum NwkAction {
         /// Queue for indirect transmission to a sleepy child.
         indirect: bool,
     },
+    /// Send an NPDU to a neighbour over a Trusted Link
+    /// (NLME-TRUSTEDLINK-POSTPROCESSING.request, R23.2 §3.2.2.41): the
+    /// frame carries no NWK security; `assume_security` tells the peer
+    /// to treat it as secured. Confirmed like [`NwkAction::MacData`]
+    /// through [`Nwk::on_mac_data_confirm`].
+    TrustedLinkData {
+        /// Internal identifier echoed in [`Nwk::on_mac_data_confirm`].
+        handle: TxHandle,
+        /// The nwkMacInterfaceTable index of the link.
+        link: u8,
+        /// The unsecured NPDU.
+        frame: NpduBuf,
+        /// The NPDU would have been NWK-secured on the radio.
+        assume_security: bool,
+    },
     /// Register an indirect transaction for a sleepy child without the
     /// frame (`MacService::data_request_deferred`); the frame follows as
     /// a direct [`NwkAction::MacData`] with the same `handle` once the
@@ -658,6 +673,9 @@ pub struct Nwk<
     pub(crate) pending_joiner_tlvs: Option<Vec<u8, MAX_JOINER_TLVS>>,
     /// The network uses distributed security (no Trust Center).
     pub(crate) distributed_network: bool,
+    /// The Trusted Link the frame being received arrived over, with its
+    /// peer and whether it is to be treated as NWK-secured.
+    pub(crate) rx_link: Option<(u8, ExtendedAddress, bool)>,
     /// Rejoin flag of a local leave in progress.
     pub(crate) leaving_rejoin: Option<bool>,
     /// Statistics.
@@ -753,6 +771,7 @@ impl<
             timeout_request_deadline: None,
             pending_joiner_tlvs: None,
             distributed_network: false,
+            rx_link: None,
             leaving_rejoin: None,
             stats: NwkStats::default(),
         }
