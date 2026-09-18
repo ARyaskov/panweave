@@ -71,6 +71,13 @@ pub struct StackConfig {
     /// Trust Center's IEEE address, or `ExtendedAddress::BROADCAST` when
     /// unknown), key and kind. Defaults to the well-known global key.
     pub preconfigured_link_key: (ExtendedAddress, Key128, LinkKeyKind),
+    /// Whether a Trust Center honours the Zigbee Direct Virtual Device
+    /// flag of a joiner's Device Capability Extension (R23.2
+    /// §4.6.3.2.2.4). `false` makes it behave like a Trust Center that
+    /// predates Zigbee Direct (network keys for everyone), which a ZDD
+    /// then serves through the legacy-network procedures of ZD 1.1 §10;
+    /// for interoperability testing only.
+    pub zigbee_direct_aware: bool,
     /// Form / join a distributed security network.
     pub distributed: bool,
     /// Channels used for formation and discovery.
@@ -114,6 +121,7 @@ impl StackConfig {
                 Key128::WELL_KNOWN_GLOBAL_TCLK,
                 LinkKeyKind::Global,
             ),
+            zigbee_direct_aware: true,
             distributed: false,
             channels: ChannelMask::BDB_PRIMARY,
             scan_duration: 3,
@@ -701,6 +709,14 @@ pub enum StackEvent {
         sequence: KeySequenceNumber,
         /// The Trust Center.
         source: ExtendedAddress,
+    },
+    /// An ephemeral authorization key for this device as a Zigbee
+    /// Direct Virtual Device on a legacy network (ZD 1.1 §10): the host's
+    /// ZVD updates its Trust Center link key (through the global or its
+    /// unique one) before anything else.
+    EphemeralAuthorizationKey {
+        /// The global Trust Center link key applies.
+        global: bool,
     },
     /// Three successive keep-alive reads of the Trust Center failed
     /// (ZCL8 §3.18.4): it is no longer reachable.

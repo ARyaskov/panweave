@@ -339,6 +339,14 @@ pub enum TransportedKey {
         /// This device requested the key.
         initiator: bool,
     },
+    /// An ephemeral authorization key (0xB0 global / 0xB1 unique, ZD 1.1
+    /// §10) for this device as a Zigbee Direct Virtual Device on a
+    /// legacy network: update the Trust Center link key (through the
+    /// global or the unique one) before anything else.
+    EphemeralAuthorization {
+        /// The global Trust Center link key applies.
+        global: bool,
+    },
     /// A Basic authorization key (0xB2) for this device as a Zigbee
     /// Direct Virtual Device; the stack does not install it (a ZVD's
     /// BLE session layer uses it).

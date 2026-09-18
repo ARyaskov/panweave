@@ -25,6 +25,7 @@ pub mod advertisement;
 pub mod auth;
 pub mod commissioning;
 pub mod gatt;
+pub mod legacy;
 pub mod rotation;
 pub mod secure;
 pub mod session;

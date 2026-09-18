@@ -37,6 +37,13 @@ specifications leave a few points to the implementation.
    Trust Center behind a Trusted Link may hold network address 0x0000
    and gets no Update Device (§4.6.3.2.1); ZD §7.7.4.4 gives the ZVD
    side. Neither says how the ZDD represents the Trust Center.
+7. **Legacy networks.** ZD §10 has the ZDD send Transport Key messages
+   "encrypted with the default trust center link key under the key-load
+   key" with the Trust Center's network address as source, and says the
+   ephemeral authorization key has "the Key Descriptor field absent"
+   (which, in R23.2 §4.4.11.1.3, holds the key itself); it does not say
+   how the Basic key of a Trust Center rejoin (§10 item 3) is secured,
+   nor how the ZDD's own address appears in the auxiliary header.
 
 ## Decision
 
@@ -87,6 +94,20 @@ specifications leave a few points to the implementation.
    link's liveness is the host's; closing the tunnel removes it). A
    refusal is answered over the link the request arrived on, even
    though the requester is no neighbour.
+8. On a legacy network the ZDD keeps a key-pair entry for the ZVD under
+   the well-known key in its own key-pair set and secures every
+   authorization key it sends (ephemeral and Basic, for the initial join
+   and the Trust Center rejoin alike) with that entry's key-load
+   derivative, its own IEEE address in the auxiliary header's extended
+   nonce and the NWK source aliased to 0x0000, unacknowledged. The
+   ephemeral Transport Key is StandardKeyType 0xB0 / 0xB1 followed by
+   nothing. A receiving APS accepts a Transport Key carrying a
+   StandardKeyType 0xB0–0xB2 key from any partner as long as it is
+   secured under a key-load key: the sender is the ZDD, not the Trust
+   Center. The ZDD's watch for the Trust Center's key-load and data-key
+   secured messages ignores frames whose auxiliary header names the
+   ZDD itself. Securing the rejoin's Basic key under the well-known key
+   is an interpretation (`requires-clarification`).
 
 ## Consequences
 

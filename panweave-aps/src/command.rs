@@ -132,6 +132,15 @@ pub enum KeyDescriptor<'a> {
         /// The Trust Center (or ZDD on a distributed network).
         source: ExtendedAddress,
     },
+    /// An ephemeral authorization key for a Zigbee Direct Virtual Device
+    /// on a legacy network (StandardKeyType 0xB0 global / 0xB1 unique,
+    /// ZD 1.1 §10): no key descriptor at all, the ZVD is told which
+    /// Trust Center link key to update through.
+    EphemeralAuthorization {
+        /// The global (well-known) Trust Center link key applies (0xB0)
+        /// rather than the ZVD's unique one (0xB1).
+        global: bool,
+    },
 }
 
 /// Transport Key command (§4.4.11.1).
@@ -149,6 +158,8 @@ impl TransportKey<'_> {
             KeyDescriptor::NetworkKey { .. } => KeyType::StandardNetworkKey,
             KeyDescriptor::ApplicationLinkKey { .. } => KeyType::ApplicationLinkKey,
             KeyDescriptor::BasicAuthorizationKey { .. } => KeyType::BasicAuthorization,
+            KeyDescriptor::EphemeralAuthorization { global: true } => KeyType::EphemeralGlobal,
+            KeyDescriptor::EphemeralAuthorization { global: false } => KeyType::EphemeralUnique,
         }
     }
 }
@@ -160,6 +171,16 @@ pub const LINK_KEY_FEATURE_FRAME_COUNTER_SYNC: u8 = 0x01;
 impl<'a> Decode<'a> for TransportKey<'a> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, CodecError> {
         let key_type = KeyType::from_raw(r.u8()?);
+        if matches!(
+            key_type,
+            KeyType::EphemeralGlobal | KeyType::EphemeralUnique
+        ) {
+            return Ok(TransportKey {
+                descriptor: KeyDescriptor::EphemeralAuthorization {
+                    global: key_type == KeyType::EphemeralGlobal,
+                },
+            });
+        }
         let key = Key128::from_bytes(r.array::<16>()?);
         let descriptor = match key_type {
             KeyType::TrustCenterLinkKey => {
@@ -214,14 +235,14 @@ impl<'a> Decode<'a> for TransportKey<'a> {
 
 impl Encode for TransportKey<'_> {
     fn encoded_len(&self) -> usize {
-        1 + 16
-            + match &self.descriptor {
-                KeyDescriptor::TrustCenterLinkKey { tlvs, .. } => 8 + 8 + tlvs.len(),
-                KeyDescriptor::NetworkKey { .. } | KeyDescriptor::BasicAuthorizationKey { .. } => {
-                    1 + 8 + 8
-                }
-                KeyDescriptor::ApplicationLinkKey { tlvs, .. } => 8 + 1 + tlvs.len(),
+        1 + match &self.descriptor {
+            KeyDescriptor::TrustCenterLinkKey { tlvs, .. } => 16 + 8 + 8 + tlvs.len(),
+            KeyDescriptor::NetworkKey { .. } | KeyDescriptor::BasicAuthorizationKey { .. } => {
+                16 + 1 + 8 + 8
             }
+            KeyDescriptor::ApplicationLinkKey { tlvs, .. } => 16 + 8 + 1 + tlvs.len(),
+            KeyDescriptor::EphemeralAuthorization { .. } => 0,
+        }
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), CodecError> {
@@ -266,6 +287,7 @@ impl Encode for TransportKey<'_> {
                 w.u8(u8::from(*initiator))?;
                 w.bytes(tlvs)
             }
+            KeyDescriptor::EphemeralAuthorization { .. } => Ok(()),
         }
     }
 }

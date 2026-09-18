@@ -212,6 +212,24 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* Zigbee Direct legacy-network support (ZD 1.1 §10, ADR-0017 decision
+  8): `panweave_direct::legacy` (APS frame shape, the well-known-key
+  probe, the ephemeral authorization session with its §10.1 filter,
+  watch and timeout), `KeyDescriptor::EphemeralAuthorization` (0xB0 /
+  0xB1, no descriptor) with `TransportedKey` /
+  `StackEvent::EphemeralAuthorizationKey`,
+  `Aps::transport_authorization_key_as_trust_center` (NWK source
+  aliased to 0x0000, key-load under the well-known key); a ZDD whose
+  Trust Center is not Zigbee Direct aware swallows the tunnelled network
+  key, sends a global or unique ephemeral key, passes only the ZVD's
+  exchange with the Trust Center, routes on its behalf as for an end
+  device, sends the Basic key once the Trust Center's key-load and
+  data-key secured messages were seen (`Node::direct_legacy_session`),
+  drops a ZVD that never authenticates
+  (`Event::DirectAuthorizationTimeout`) and answers a Trust Center
+  rejoin with a Basic key derived from the active network key.
+  `StackConfig::zigbee_direct_aware = false` makes a Trust Center behave
+  like one predating Zigbee Direct, for interoperability tests.
 * A ZVD operating as Trust Center and ZVD rejoins through the ZDD (ZD
   1.1 §7.7.4.4, §7.7.4.6; ADR-0017 decisions 6–7): the Network
   Commissioning Request of type Establish Trusted Link (R23.2 Table

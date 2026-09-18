@@ -115,6 +115,15 @@ pub enum Event {
         /// The link.
         link: u8,
     },
+    /// A ZVD in an ephemeral authorization session on a legacy network
+    /// showed no proof of end-to-end authentication with the Trust
+    /// Center within `apsSecurityTimeOutPeriod` (ZD 1.1 §10.1): the ZDD
+    /// forgot it and the host closes the BLE connection.
+    #[cfg(feature = "direct")]
+    DirectAuthorizationTimeout {
+        /// The link.
+        link: u8,
+    },
 }
 
 /// A device: the stack plus its commissioning machine.

@@ -182,6 +182,16 @@ set to the reported value.
   are secured with the key-transport key, closing the connection instead
   (ZD 1.1 §9). Tunnelled Network Commissioning Requests without the ZVD
   flag are dropped before the stack sees them (§7.7.4.8).
+* On a legacy network (a Trust Center that predates Zigbee Direct, §10)
+  the ZDD is the security enforcement point: the network key the Trust
+  Center tunnels is swallowed, the ZVD gets an ephemeral authorization
+  key and only its exchange with the Trust Center crosses the link until
+  the ZDD has seen the Trust Center's key-load and data-key secured
+  messages to it; only then does the ZDD derive and send the Basic key,
+  on the Trust Center's behalf, under the key-load derivative of the
+  well-known key (§10.1). A ZVD that shows no such proof within
+  `apsSecurityTimeOutPeriod` is forgotten and the host told to
+  disconnect.
 
 BLE transport is abstract. `panweave-direct` treats every GATT write as
 untrusted, performs session establishment before any commissioning or tunnel

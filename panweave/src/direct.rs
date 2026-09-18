@@ -9,6 +9,7 @@
 //! [`Node::close_tunnel`] and [`Event::DirectTunnel`]: the ZVD is a NWK
 //! neighbour behind a Trusted Link of the stack.
 
+use panweave_aps::command::KeyDescriptor;
 use panweave_bdb::Outcome;
 use panweave_codec::Decode;
 use panweave_direct::commissioning::{
@@ -16,9 +17,10 @@ use panweave_direct::commissioning::{
     LeaveNetwork, ManageJoiners, NetworkInfo, NetworkStatus, STATUS_FAILURE, STATUS_SUCCESS,
     StatusReport, Zdd,
 };
+use panweave_direct::legacy::{self, Direction, EphemeralSession, Observation};
 use panweave_direct::rotation::{Forwarding, PastNetworkKeys, forwarding_decision};
 use panweave_direct::tunnel::{self, NpduMessage, SessionKind, TunnelError};
-use panweave_nwk::command::{CommissioningRequest, NwkCommandId};
+use panweave_nwk::command::{CommissioningRequest, CommissioningType, NwkCommandId};
 use panweave_nwk::frame::{FrameType as NwkFrameType, Header as NwkHeader};
 use panweave_nwk::tlv::{DeviceCapabilityExtension, GlobalTlvs};
 use panweave_runtime::EndpointError;
@@ -55,6 +57,20 @@ pub struct DirectState {
     pub past_network_keys: PastNetworkKeys<PAST_NETWORK_KEYS>,
     /// Open tunnels: the Trusted Link index and the ZVD behind it.
     pub tunnels: heapless::Vec<(u8, ExtendedAddress), 4>,
+    /// Per tunnel, the kind of the last Network Commissioning Request
+    /// the ZVD sent through it (an initial join or a rejoin) with the
+    /// session it came on: tells a provisioning session from a Limited
+    /// Authorization one when a legacy Trust Center's network key
+    /// arrives (§10).
+    last_join: heapless::Vec<(u8, CommissioningType, SessionKind), 4>,
+    /// Ephemeral authorization sessions of ZVDs on a legacy network
+    /// (§10.1), per tunnel, with whether the ZVD is router-capable (it
+    /// is routed on behalf of like an end device while ephemeral,
+    /// §10.1.1).
+    pub legacy: heapless::Vec<(u8, EphemeralSession, bool), 4>,
+    /// Whether the last declined Transport Key was secured with the
+    /// well-known key (§10 step 2.1: the global ephemeral key applies).
+    legacy_probe_global: bool,
     /// The Zigbee Direct interface is enabled (ZD 1.1 §11.3.5.4.3);
     /// persistent.
     pub interface_enabled: bool,
@@ -85,6 +101,9 @@ impl Default for DirectState {
             admin_key: None,
             past_network_keys: PastNetworkKeys::default(),
             tunnels: heapless::Vec::new(),
+            last_join: heapless::Vec::new(),
+            legacy: heapless::Vec::new(),
+            legacy_probe_global: false,
             interface_enabled: true,
             anonymous_join_timeout: direct_configuration::ANONYMOUS_JOIN_DEFAULT,
             anonymous_join_until: None,
@@ -353,6 +372,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Retries the owed link key update when its time has come and the
     /// key is still provisional.
     pub(crate) fn direct_poll(&mut self, now: panweave_types::time::Instant) {
+        self.legacy_poll(now);
         if let Some(at) = self.direct.tclk_update_retry
             && now.has_reached(at)
         {
@@ -402,6 +422,244 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     pub fn close_tunnel(&mut self, link: u8) {
         self.stack.remove_trusted_link(link);
         self.direct.tunnels.retain(|(l, _)| *l != link);
+        self.direct.last_join.retain(|(l, _, _)| *l != link);
+        self.direct.legacy.retain(|(l, _, _)| *l != link);
+    }
+
+    /// The legacy-network authorization session of the ZVD on `link`
+    /// (ZD 1.1 §10.1), when the Trust Center predates Zigbee Direct.
+    pub fn direct_legacy_session(&self, link: u8) -> Option<EphemeralSession> {
+        self.direct
+            .legacy
+            .iter()
+            .find(|(l, _, _)| *l == link)
+            .map(|(_, s, _)| *s)
+    }
+
+    fn tunnel_peer(&self, link: u8) -> Option<ExtendedAddress> {
+        self.direct
+            .tunnels
+            .iter()
+            .find(|(l, _)| *l == link)
+            .map(|(_, p)| *p)
+    }
+
+    /// Remembers the kind of Network Commissioning Request the ZVD
+    /// sent on `link`.
+    fn note_join_request(&mut self, link: u8, session: SessionKind, npdu: &[u8]) {
+        let Ok((header, n)) = NwkHeader::decode_prefix(npdu) else {
+            return;
+        };
+        if header.frame_control.frame_type() != NwkFrameType::Command {
+            return;
+        }
+        let payload = npdu.get(n..).unwrap_or(&[]);
+        if payload.first().copied().map(NwkCommandId::from_raw)
+            != Some(NwkCommandId::CommissioningRequest)
+        {
+            return;
+        }
+        let Ok(req) = CommissioningRequest::decode_exact(payload.get(1..).unwrap_or(&[])) else {
+            return;
+        };
+        self.direct.last_join.retain(|(l, _, _)| *l != link);
+        let _ = self.direct.last_join.push((link, req.kind, session));
+    }
+
+    /// §10.1: whether an NPDU from the ZVD on `link` may enter the
+    /// network during an ephemeral authorization session.
+    fn legacy_allows_in(&self, link: u8, npdu: &[u8]) -> bool {
+        let Some(session) = self.direct_legacy_session(link) else {
+            return true;
+        };
+        let Ok((header, n)) = NwkHeader::decode_prefix(npdu) else {
+            return false;
+        };
+        session.allows(
+            Direction::FromZvd,
+            header.frame_control.frame_type() == NwkFrameType::Command,
+            header.dst == ShortAddress::COORDINATOR,
+            npdu.get(n..).unwrap_or(&[]),
+        )
+    }
+
+    /// §10: a legacy Trust Center's network key (a Transport Key the
+    /// APSME declined) never reaches the ZVD on `link`; the ZDD proves
+    /// the ZVD's authorization itself. An initial join gets an ephemeral
+    /// authorization key (global when the Trust Center secured the key
+    /// with the well-known key, unique otherwise) and opens an ephemeral
+    /// session; a Trust Center rejoin gets a Basic key derived from the
+    /// active network key (§9.1). Returns whether the frame was handled.
+    fn legacy_on_declined(&mut self, link: u8) -> bool {
+        if self.direct.trust_center_aware != Some(false) {
+            return false;
+        }
+        let Some(zvd) = self.tunnel_peer(link) else {
+            return false;
+        };
+        let Some(short) = self.stack.nwk.neighbors.by_extended(zvd).map(|n| n.short) else {
+            return false;
+        };
+        let join = self
+            .direct
+            .last_join
+            .iter()
+            .find(|(l, _, _)| *l == link)
+            .map(|(_, kind, session)| (*kind, *session));
+        match join {
+            Some((CommissioningType::InitialJoin, SessionKind::ZvdProvisioning)) => {
+                if self.direct_legacy_session(link).is_some() {
+                    // Already in an ephemeral session: a repeat of the
+                    // network key changes nothing.
+                    return true;
+                }
+                let global = self.direct.legacy_probe_global;
+                self.legacy_install_well_known_entry(zvd);
+                let seq = self.stack.nwk.nib.next_sequence();
+                let _ = self.stack.aps.transport_authorization_key_as_trust_center(
+                    zvd,
+                    short,
+                    KeyDescriptor::EphemeralAuthorization { global },
+                    seq,
+                );
+                let deadline = self.stack.now() + self.stack.aps.aib.security_timeout_period;
+                // §10.1.1: routed on behalf of like an end device child
+                // while ephemeral.
+                let mut router = false;
+                if let Some(n) = self.stack.nwk.neighbors.by_extended_mut(zvd) {
+                    router = n.is_router();
+                    n.device_type = LogicalDeviceType::EndDevice;
+                }
+                let _ = self
+                    .direct
+                    .legacy
+                    .push((link, EphemeralSession::new(deadline), router));
+                self.stack.nwk.refresh_child_security_timer(zvd);
+                self.stack.flush();
+                true
+            }
+            Some((CommissioningType::Rejoin, SessionKind::ZvdProvisioning)) => {
+                self.legacy_send_basic_key(zvd, short);
+                self.stack.nwk.authenticate_child(zvd);
+                self.stack.flush();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The ZDD's own key-pair entry for the ZVD under the well-known
+    /// key, which secures the authorization keys it sends (§10).
+    fn legacy_install_well_known_entry(&mut self, zvd: ExtendedAddress) {
+        if self.stack.aps.security.entry(zvd).is_none() {
+            let e = panweave_security::material::LinkKeyEntry::provisional(
+                zvd,
+                Key128::WELL_KNOWN_GLOBAL_TCLK,
+                LinkKeyKind::Global,
+            );
+            let _ = self.stack.aps.install_link_key(e);
+        }
+    }
+
+    /// Sends the ZVD its Basic authorization key derived from the active
+    /// network key, on the Trust Center's behalf (§10, §10.1).
+    fn legacy_send_basic_key(&mut self, zvd: ExtendedAddress, short: ShortAddress) {
+        let sequence = self.stack.network_key_sequence();
+        let Some(nwk_key) = self
+            .stack
+            .nwk
+            .security
+            .keys
+            .get(sequence)
+            .map(|s| s.key.clone())
+        else {
+            return;
+        };
+        let key = panweave_security::authorization::basic_key::<C>(zvd, &nwk_key);
+        self.legacy_install_well_known_entry(zvd);
+        let seq = self.stack.nwk.nib.next_sequence();
+        let _ = self.stack.aps.transport_authorization_key_as_trust_center(
+            zvd,
+            short,
+            KeyDescriptor::BasicAuthorizationKey {
+                key,
+                sequence,
+                destination: zvd,
+                source: self.stack.aps.aib.trust_center_address,
+            },
+            seq,
+        );
+    }
+
+    /// §10.1 on the way out: the ephemeral filter for NPDUs to the ZVD
+    /// and the watch for the Trust Center's key-load and data-key
+    /// secured messages that end the ephemeral session with the Basic
+    /// key. Returns whether the NPDU may be tunnelled.
+    fn legacy_allows_out(&mut self, link: u8, npdu: &[u8]) -> bool {
+        let Some(i) = self.direct.legacy.iter().position(|(l, _, _)| *l == link) else {
+            return true;
+        };
+        let Ok((header, n)) = NwkHeader::decode_prefix(npdu) else {
+            return false;
+        };
+        let nwk_command = header.frame_control.frame_type() == NwkFrameType::Command;
+        let from_tc = header.src == ShortAddress::COORDINATOR;
+        let aps = npdu.get(n..).unwrap_or(&[]);
+        let Some((_, session, router)) = self.direct.legacy.get_mut(i) else {
+            return true;
+        };
+        let router = *router;
+        if !session.allows(Direction::ToZvd, nwk_command, from_tc, aps) {
+            return false;
+        }
+        if !from_tc || nwk_command || legacy::aux_source(aps) == Some(self.stack.config.ieee) {
+            // Not the Trust Center's (the ZDD's own aliased Transport
+            // Keys carry its address in the auxiliary header).
+            return true;
+        }
+        if session.observe_from_trust_center(aps) == Observation::DataKey {
+            // The authentication sequence completed: the Basic key
+            // follows this frame, and the ZVD is a child (or sibling
+            // router) from now on.
+            if let Some(zvd) = self.tunnel_peer(link) {
+                let short = self.stack.nwk.neighbors.by_extended(zvd).map(|n| n.short);
+                if let Some(short) = short {
+                    self.legacy_send_basic_key(zvd, short);
+                }
+                self.stack.nwk.authenticate_child(zvd);
+                if router && let Some(n) = self.stack.nwk.neighbors.by_extended_mut(zvd) {
+                    n.device_type = LogicalDeviceType::Router;
+                }
+                self.stack.flush();
+            }
+        }
+        true
+    }
+
+    /// §10.1 timekeeping: an ephemeral session keeps the ZVD's
+    /// unauthenticated-child entry alive, and expires when the Trust
+    /// Center gave no proof of end-to-end authentication in time.
+    fn legacy_poll(&mut self, now: panweave_types::time::Instant) {
+        let mut expired: heapless::Vec<u8, 4> = heapless::Vec::new();
+        for (link, session, _) in self.direct.legacy.iter() {
+            if session.is_ephemeral() {
+                if session.timed_out(now) {
+                    let _ = expired.push(*link);
+                } else if let Some(peer) = self
+                    .direct
+                    .tunnels
+                    .iter()
+                    .find(|(l, _)| l == link)
+                    .map(|(_, p)| *p)
+                {
+                    self.stack.nwk.refresh_child_security_timer(peer);
+                }
+            }
+        }
+        for link in expired {
+            self.close_tunnel(link);
+            self.push(Event::DirectAuthorizationTimeout { link });
+        }
     }
 
     /// A decrypted write to the tunnel NPDU characteristic on `link`
@@ -421,6 +679,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             .find(|(l, _)| *l == link)
             .map(|(_, p)| *p)
             .ok_or(TunnelError::Malformed)?;
+        // §10.1: an ephemeral authorization session elevates the
+        // provisioning session; its own filter governs.
+        let session = if self.direct_legacy_session(link).is_some() {
+            SessionKind::Authorized
+        } else {
+            session
+        };
         let mut first_error = None;
         for item in tunnel::preprocess(payload, session) {
             match item {
@@ -432,6 +697,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                         first_error.get_or_insert(TunnelError::Dropped);
                         continue;
                     }
+                    if !self.legacy_allows_in(link, m.npdu) {
+                        // §10.1: an ephemeral session passes only the
+                        // exchange with the Trust Center.
+                        first_error.get_or_insert(TunnelError::Dropped);
+                        continue;
+                    }
+                    self.note_join_request(link, session, m.npdu);
                     self.stack
                         .on_trusted_link_npdu(link, peer, m.npdu, m.assume_security);
                 }
@@ -490,12 +762,23 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
             return None;
         }
         // §9: a data frame conveying an active or prospective network
-        // key never reaches the ZVD; the connection is closed instead.
+        // key never reaches the ZVD; on a legacy network the ZDD answers
+        // in the Trust Center's stead (§10), otherwise the connection is
+        // closed.
         if let Ok((header, n)) = NwkHeader::decode_prefix(npdu)
             && header.frame_control.frame_type() == NwkFrameType::Data
             && forwarding_decision(npdu.get(n..).unwrap_or(&[])) == Forwarding::Decline
         {
+            let aps = npdu.get(n..).unwrap_or(&[]);
+            self.direct.legacy_probe_global =
+                legacy::secured_with_well_known_key::<C>(aps, self.stack.aps.config.security_level);
+            if self.legacy_on_declined(*link) {
+                return None;
+            }
             return Some(Event::DirectTunnelDeclined { link: *link });
+        }
+        if !self.legacy_allows_out(*link, npdu) {
+            return None;
         }
         let mut buf = [0u8; tunnel::MAX_VALUE_LEN + 2];
         let n = NpduMessage {

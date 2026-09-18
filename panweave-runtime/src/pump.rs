@@ -1091,7 +1091,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 });
         // A Zigbee Direct Virtual Device (Device Capability Extension
         // Global TLV, bit 0): never the network key (§4.6.3.2.2.4).
-        let virtual_device = Self::joiner_is_virtual_device(joiner_tlvs);
+        let virtual_device =
+            self.config.zigbee_direct_aware && Self::joiner_is_virtual_device(joiner_tlvs);
         let decision = if virtual_device
             && kind == JoinKind::TrustCenterRejoin
             && self.aps.security.entry(device).is_some()
@@ -1967,6 +1968,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             sequence,
                             source,
                         });
+                    }
+                    TransportedKey::EphemeralAuthorization { global } => {
+                        self.push_event(StackEvent::EphemeralAuthorizationKey { global });
                     }
                 },
                 ApsEvent::SwitchKey { sequence, .. } => {

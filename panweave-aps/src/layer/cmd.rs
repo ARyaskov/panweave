@@ -272,6 +272,60 @@ impl<
         self.finish_command(id, ApsCommandId::TransportKey)
     }
 
+    /// A ZDD on a legacy network transports an authorization key to a
+    /// ZVD on the Trust Center's behalf (ZD 1.1 §10, §10.1): an
+    /// ephemeral authorization key or the ZVD's Basic key, NWK source
+    /// aliased to 0x0000 (`alias_sequence` is the NWK sequence number to
+    /// use), APS-secured under the key-load derivative of the well-known
+    /// key held in the key-pair entry for `device`, NWK-unsecured and
+    /// unacknowledged (an aliased frame cannot be acknowledged).
+    pub fn transport_authorization_key_as_trust_center(
+        &mut self,
+        device: ExtendedAddress,
+        short: ShortAddress,
+        descriptor: KeyDescriptor<'_>,
+        alias_sequence: u8,
+    ) -> Result<RequestId, ApsError> {
+        if self.state == DeviceState::NotJoined {
+            return Err(ApsError::NotJoined);
+        }
+        if !matches!(
+            descriptor,
+            KeyDescriptor::EphemeralAuthorization { .. }
+                | KeyDescriptor::BasicAuthorizationKey { .. }
+        ) {
+            return Err(ApsError::InvalidParameter);
+        }
+        let partner = self.link_key_for(device).ok_or(ApsError::NoKey)?;
+        let cmd = ApsCommand::TransportKey(TransportKey { descriptor });
+        let payload = Self::encode_command(&cmd)?;
+        let id = self.alloc_request();
+        let counter = self.next_counter();
+        let header = Header::command(counter, false)
+            .with_ack_request(false)
+            .secured(true);
+        self.queue_tx(
+            TxParams {
+                request: id,
+                kind: TxKind::Command(ApsCommandId::TransportKey),
+                dst: short,
+                partner: Some(partner),
+                key_id: KeyIdentifier::KeyLoad,
+                extended_nonce: true,
+                header,
+                nwk_secure: false,
+                radius: Some(1),
+                alias: Some((ShortAddress::COORDINATOR, alias_sequence)),
+                ack: false,
+                post: None,
+                wrap: None,
+            },
+            &payload,
+            false,
+        )?;
+        self.finish_command(id, ApsCommandId::TransportKey)
+    }
+
     /// APSME-TRANSPORT-KEY.request with a Zigbee Direct Virtual Device's
     /// Basic authorization key (§4.6.3.2.2.4): sent in place of the
     /// network key, APS-secured with the key-load key derived from the
@@ -936,7 +990,25 @@ impl<
         depth: u8,
     ) -> Option<DataIndication<'a>> {
         let id = buf.get(start).map(|b| ApsCommandId::from_raw(*b))?;
-        if !self.command_allowed(id, &ctx, &sec, view) {
+        // A Zigbee Direct authorization key (StandardKeyType 0xB0-0xB2)
+        // comes from the ZDD rather than the Trust Center on a legacy
+        // network (ZD 1.1 §10): the key-load security the handler
+        // insists on is its authorization, not the sender's identity.
+        let authorization_key = id == ApsCommandId::TransportKey
+            && sec.key_id == KeyIdentifier::KeyLoad
+            && sec.partner.is_some()
+            && buf
+                .get(start + 1)
+                .map(|t| KeyType::from_raw(*t))
+                .is_some_and(|t| {
+                    matches!(
+                        t,
+                        KeyType::EphemeralGlobal
+                            | KeyType::EphemeralUnique
+                            | KeyType::BasicAuthorization
+                    )
+                });
+        if !authorization_key && !self.command_allowed(id, &ctx, &sec, view) {
             self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
             return None;
         }
@@ -1178,6 +1250,19 @@ impl<
                         partner: *partner,
                         initiator: *initiator,
                     },
+                    authorizes: false,
+                });
+            }
+            KeyDescriptor::EphemeralAuthorization { global } => {
+                // ZD 1.1 §10: from the ZDD, under the key-load derivative
+                // of the well-known key; a ZVD's session layer acts on it.
+                if !aps_secured || sec.key_id != KeyIdentifier::KeyLoad {
+                    self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
+                    return;
+                }
+                self.push_event(ApsEvent::TransportKey {
+                    src: ctx.src_ieee.unwrap_or(self.aib.trust_center_address),
+                    key: TransportedKey::EphemeralAuthorization { global: *global },
                     authorizes: false,
                 });
             }

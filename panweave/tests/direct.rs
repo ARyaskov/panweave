@@ -1731,3 +1731,521 @@ fn a_zvd_rejoins_through_the_tunnel() {
             .any(|e| matches!(e, Event::DirectTunnelDeclined { .. }))
     );
 }
+
+/// A ZDD on a legacy network (ZD 1.1 §10, class II): the Trust Center
+/// predates Zigbee Direct and tunnels the network key to the joining
+/// ZVD; the ZDD swallows it, sends a global ephemeral authorization key
+/// instead, lets only the ZVD's exchange with the Trust Center through
+/// (§10.1), watches for the Trust Center's key-load and data-key secured
+/// messages and only then hands the ZVD its Basic key on the Trust
+/// Center's behalf. A ZVD that never authenticates is dropped after
+/// `apsSecurityTimeOutPeriod`.
+#[test]
+fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
+    use panweave::aps::command::KeyDescriptor;
+    use panweave::aps::layer::{
+        ApsAction, ApsConfig, ApsEvent, DeviceState, NwkView, TransportedKey,
+    };
+    use panweave::aps::{Aps, command::RequestKeyType};
+    use panweave::codec::{Encode, Writer};
+    use panweave::nwk::command::{CommissioningRequest, CommissioningType, NwkCommand};
+    use panweave::nwk::frame::{FrameType, Header};
+    use panweave::nwk::tlv::{
+        DeviceCapabilityExtension, FragmentationParameters, SupportedKeyNegotiationMethods, tag,
+        write_encapsulation,
+    };
+    use panweave::security::authorization::basic_key;
+    use panweave::security::material::{LinkKeyEntry, LinkKeyKind};
+    use panweave::types::{KeyType, MacCapability, NwkStatus};
+    use panweave_direct::legacy::Phase;
+    use panweave_direct::tunnel::{NpduMessage, SessionKind, TunnelError};
+
+    /// What the test-side ZVD knows of the network's addresses.
+    struct View {
+        tc: ExtendedAddress,
+        zdd: (ExtendedAddress, ShortAddress),
+    }
+    impl NwkView for View {
+        fn ieee_of(&self, short: ShortAddress) -> Option<ExtendedAddress> {
+            if short == ShortAddress::COORDINATOR {
+                Some(self.tc)
+            } else if short == self.zdd.1 {
+                Some(self.zdd.0)
+            } else {
+                None
+            }
+        }
+        fn short_of(&self, ieee: ExtendedAddress) -> Option<ShortAddress> {
+            if ieee == self.tc {
+                Some(ShortAddress::COORDINATOR)
+            } else if ieee == self.zdd.0 {
+                Some(self.zdd.1)
+            } else {
+                None
+            }
+        }
+        fn unauthenticated_child(&self, _ieee: ExtendedAddress) -> Option<ShortAddress> {
+            None
+        }
+    }
+
+    fn joiner_tlvs(node: ShortAddress) -> Vec<u8> {
+        let mut buf = [0u8; 48];
+        let mut w = Writer::new(&mut buf);
+        write_encapsulation(&mut w, tag::JOINER_ENCAPSULATION, |w| {
+            SupportedKeyNegotiationMethods {
+                protocols: 0x01,
+                secrets: 0x01,
+                source: None,
+            }
+            .write(w)?;
+            FragmentationParameters {
+                node,
+                options: 0,
+                max_incoming_transfer_unit: 128,
+            }
+            .write(w)?;
+            DeviceCapabilityExtension(DeviceCapabilityExtension::ZIGBEE_DIRECT_VIRTUAL_DEVICE)
+                .write(w)
+        })
+        .unwrap();
+        let n = w.position();
+        buf[..n].to_vec()
+    }
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let tc_ieee = ExtendedAddress(0x00DD_0000_0000_0001);
+    let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
+    let nwk_key = Key128::from_bytes([0x5a; 16]);
+    // A Trust Center from before Zigbee Direct: no Configuration client,
+    // network keys for everyone.
+    let mut coord = Coordinator::new(tc_ieee)
+        .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.config.zigbee_direct_aware = false;
+    let c = w.add(coord);
+    w.nodes[c]
+        .0
+        .stack
+        .form_network_with_key(nwk_key.clone())
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
+    }));
+    w.nodes[c].0.stack.permit_join_network(254).unwrap();
+    // The ZDD router joins and learns that its Trust Center is not
+    // Zigbee Direct aware (§6.2.3).
+    let router =
+        Router::new(zdd_ieee).build::<SoftwareAes, _, _>(TestRng::seed(8), MemoryStorage::new());
+    let r = w.add(router);
+    w.nodes[r].0.steer().unwrap();
+    assert!(w.run_until(Duration::from_secs(120), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::Stack(StackEvent::Joined { .. })))
+    }));
+    w.run_until(Duration::from_secs(5), |_| false);
+    assert!(w.nodes[r].0.check_direct_aware());
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[r].0.direct.trust_center_aware.is_some()
+    }));
+    assert_eq!(w.nodes[r].0.direct.trust_center_aware, Some(false));
+    let zdd_short = w.nodes[r].0.stack.short_address();
+    w.nodes[c].2.clear();
+    w.nodes[r].2.clear();
+
+    // The ZVD: a BLE peer with an APS layer of its own, holding the
+    // well-known key for the Trust Center (and for the ZDD, which
+    // secures the authorization keys it sends with it).
+    let zvd_ieee = ExtendedAddress(0x00AD_0000_0000_0009);
+    let zvd_short = ShortAddress(0x4E21);
+    let view = View {
+        tc: tc_ieee,
+        zdd: (zdd_ieee, zdd_short),
+    };
+    let mut zvd: Aps<SoftwareAes, 4, 4, 4, 4> = Aps::new(zvd_ieee, ApsConfig::default());
+    zvd.aib.trust_center_address = tc_ieee;
+    for partner in [tc_ieee, zdd_ieee] {
+        zvd.install_link_key(LinkKeyEntry::provisional(
+            partner,
+            Key128::WELL_KNOWN_GLOBAL_TCLK,
+            LinkKeyKind::Global,
+        ))
+        .unwrap();
+    }
+    zvd.set_network_state(zvd_short, DeviceState::JoinedAuthorized);
+    assert!(w.nodes[r].0.open_tunnel(1, 0x0042, zvd_ieee));
+
+    // The ZVD's NPDUs: a NWK data frame around an APS frame.
+    let wrap = |dst: ShortAddress, seq: u8, aps: &[u8]| -> Vec<u8> {
+        let header = Header::new(FrameType::Data, dst, zvd_short, 30, seq).with_src_ieee(zvd_ieee);
+        let mut npdu = [0u8; 160];
+        let h = header.encode_to_slice(&mut npdu).unwrap();
+        npdu[h..h + aps.len()].copy_from_slice(aps);
+        npdu[..h + aps.len()].to_vec()
+    };
+    let write = |w: &mut World, npdu: &[u8], secured: bool| -> Result<(), TunnelError> {
+        let mut tlv = [0u8; 200];
+        let t = NpduMessage {
+            assume_security: secured,
+            npdu,
+        }
+        .encode(&mut tlv)
+        .unwrap();
+        let res = w.nodes[r]
+            .0
+            .on_tunnel_write(1, SessionKind::ZvdProvisioning, &tlv[..t]);
+        w.run_until(Duration::from_secs(3), |_| false);
+        res
+    };
+    // Everything the ZDD tunnelled since the last call, fed to the ZVD's
+    // APS layer; the ZVD's own output goes back through the tunnel.
+    let mut fed = 0usize;
+    let mut zvd_seq = 10u8;
+    let mut pump = |w: &mut World, zvd: &mut Aps<SoftwareAes, 4, 4, 4, 4>| -> Vec<ApsEvent> {
+        let mut events = Vec::new();
+        loop {
+            while let Some(a) = zvd.next_action() {
+                match a {
+                    ApsAction::NwkData {
+                        handle,
+                        dst,
+                        secure,
+                        frame,
+                        ..
+                    } => {
+                        zvd_seq = zvd_seq.wrapping_add(1);
+                        let _ = write(w, &wrap(dst, zvd_seq, &frame), secure);
+                        zvd.on_nwk_data_confirm(handle, NwkStatus::Success);
+                    }
+                    ApsAction::CounterReservation {
+                        partner,
+                        reservation,
+                    } => zvd.commit_counter_reservation(partner, reservation),
+                    ApsAction::Persist(_) => {}
+                }
+            }
+            let npdus: Vec<(Vec<u8>, bool)> = w.nodes[r]
+                .2
+                .iter()
+                .filter_map(|e| match e {
+                    Event::DirectTunnel { link: 1, tlv } => {
+                        let m = NpduMessage::parse(&tlv[2..]).unwrap();
+                        Some((m.npdu.to_vec(), m.assume_security))
+                    }
+                    _ => None,
+                })
+                .skip(fed)
+                .collect();
+            if npdus.is_empty() {
+                break;
+            }
+            fed += npdus.len();
+            for (npdu, secured) in npdus {
+                let (h, n) = Header::decode_prefix(&npdu).unwrap();
+                if h.frame_control.frame_type() != FrameType::Data {
+                    continue;
+                }
+                let mut aps = npdu[n..].to_vec();
+                let _ = zvd.on_nwk_data(&mut aps, h.src, h.dst, h.src_ieee, secured, 255, &view);
+                while let Some(e) = zvd.next_event() {
+                    events.push(e);
+                }
+            }
+        }
+        events
+    };
+
+    // 1. Initial join over the provisioning session.
+    let tlvs = joiner_tlvs(zvd_short);
+    let header = Header::new(FrameType::Command, zdd_short, zvd_short, 1, 1)
+        .with_src_ieee(zvd_ieee)
+        .with_dst_ieee(zdd_ieee);
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::InitialJoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &tlvs,
+    });
+    let mut npdu = [0u8; 120];
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    write(&mut w, &npdu[..h + n], false).unwrap();
+    // The Trust Center tunnelled the network key; the ZVD got a global
+    // ephemeral authorization key instead and nothing else.
+    let events = pump(&mut w, &mut zvd);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            ApsEvent::TransportKey {
+                key: TransportedKey::EphemeralAuthorization { global: true },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        ApsEvent::TransportKey {
+            key: TransportedKey::Network { .. },
+            ..
+        }
+    )));
+    let session = w.nodes[r].0.direct_legacy_session(1).unwrap();
+    assert_eq!(
+        session.phase,
+        Phase::Ephemeral {
+            authenticated: false
+        }
+    );
+    assert!(w.nodes[r].0.stack.aps.security.entry(zvd_ieee).is_some());
+    // No network key ever crossed the link.
+    let leaked = w.nodes[r].2.iter().any(|e| match e {
+        Event::DirectTunnel { tlv, .. } => {
+            let m = NpduMessage::parse(&tlv[2..]).unwrap();
+            let (_, n) = Header::decode_prefix(m.npdu).unwrap();
+            panweave_direct::rotation::forwarding_decision(&m.npdu[n..])
+                == panweave_direct::rotation::Forwarding::Decline
+        }
+        _ => false,
+    });
+    assert!(!leaked);
+    assert!(
+        !w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectTunnelDeclined { .. }))
+    );
+
+    // 2. The ephemeral filter: an unsecured APS frame to the Trust
+    //    Center, or anything to someone else, is dropped.
+    let unsecured_zdp = [0x00u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x01, 0x02];
+    assert_eq!(
+        write(
+            &mut w,
+            &wrap(ShortAddress::COORDINATOR, 2, &unsecured_zdp),
+            true
+        ),
+        Err(TunnelError::Dropped)
+    );
+    assert_eq!(
+        write(&mut w, &wrap(zdd_short, 3, &unsecured_zdp), true),
+        Err(TunnelError::Dropped)
+    );
+
+    // 3. The ZVD updates its Trust Center link key: Request Key
+    //    (APS-secured, passes) -> Transport Key under the key-load key
+    //    (end-to-end authentication) -> Verify Key (unsecured, passes
+    //    now) -> Confirm Key under the data key -> the ZDD sends the
+    //    Basic key and the ZVD is a child.
+    zvd.request_key(
+        ShortAddress::COORDINATOR,
+        RequestKeyType::TrustCenterLinkKey,
+        None,
+    )
+    .unwrap();
+    let events = pump(&mut w, &mut zvd);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            ApsEvent::TransportKey {
+                key: TransportedKey::TrustCenterLink { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert_eq!(
+        w.nodes[r].0.direct_legacy_session(1).unwrap().phase,
+        Phase::Ephemeral {
+            authenticated: true
+        }
+    );
+    zvd.verify_key(
+        tc_ieee,
+        ShortAddress::COORDINATOR,
+        KeyType::TrustCenterLinkKey,
+    )
+    .unwrap();
+    let events = pump(&mut w, &mut zvd);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ApsEvent::ConfirmKey { .. })),
+        "{events:?}"
+    );
+    let basic = events.iter().find_map(|e| match e {
+        ApsEvent::TransportKey {
+            key: TransportedKey::BasicAuthorization { key, source, .. },
+            ..
+        } => Some((key.clone(), *source)),
+        _ => None,
+    });
+    assert_eq!(
+        basic,
+        Some((basic_key::<SoftwareAes>(zvd_ieee, &nwk_key), tc_ieee)),
+        "{events:?}"
+    );
+    assert_eq!(
+        w.nodes[r].0.direct_legacy_session(1).unwrap().phase,
+        Phase::Basic
+    );
+    let child = w.nodes[r]
+        .0
+        .stack
+        .nwk
+        .neighbors
+        .by_extended(zvd_ieee)
+        .unwrap();
+    assert!(child.relationship.is_authenticated_child());
+    // The Basic key was the ZDD's doing: its own address is in the
+    // auxiliary header of the frame that carried it.
+    let carrier = w.nodes[r].2.iter().rev().find_map(|e| match e {
+        Event::DirectTunnel { link: 1, tlv } => {
+            let m = NpduMessage::parse(&tlv[2..]).unwrap();
+            let (_, n) = Header::decode_prefix(m.npdu).ok()?;
+            let aps = &m.npdu[n..];
+            (aps[0] & 0x03 == 0x01 && aps.get(2).is_some_and(|c| (c >> 3) & 0x03 == 0x03))
+                .then(|| panweave_direct::legacy::aux_source(aps))
+                .flatten()
+        }
+        _ => None,
+    });
+    assert_eq!(carrier, Some(zdd_ieee));
+    let _ = KeyDescriptor::EphemeralAuthorization { global: true };
+
+    // 4. Later the ZVD comes back after a missed key rotation: a Trust
+    //    Center rejoin over a Limited Authorization session; the legacy
+    //    Trust Center tunnels the network key again, the ZDD answers
+    //    with a Basic key derived from the active network key instead.
+    w.nodes[r].0.close_tunnel(1);
+    w.nodes[c]
+        .0
+        .stack
+        .update_network_key(Key128::from_bytes([0x6b; 16]))
+        .unwrap();
+    w.run_until(Duration::from_secs(20), |_| false);
+    assert!(w.nodes[r].0.open_tunnel(1, 0x0044, zvd_ieee));
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::Rejoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &tlvs,
+    });
+    let header = Header::new(FrameType::Command, zdd_short, zvd_short, 1, 9)
+        .with_src_ieee(zvd_ieee)
+        .with_dst_ieee(zdd_ieee);
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    write(&mut w, &npdu[..h + n], false).unwrap();
+    let events = pump(&mut w, &mut zvd);
+    let basic = events.iter().find_map(|e| match e {
+        ApsEvent::TransportKey {
+            key: TransportedKey::BasicAuthorization { key, sequence, .. },
+            ..
+        } => Some((key.clone(), *sequence)),
+        _ => None,
+    });
+    assert_eq!(
+        basic,
+        Some((
+            basic_key::<SoftwareAes>(zvd_ieee, &Key128::from_bytes([0x6b; 16])),
+            panweave::types::KeySequenceNumber(1)
+        )),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        ApsEvent::TransportKey {
+            key: TransportedKey::Network { .. },
+            ..
+        }
+    )));
+    assert!(w.nodes[r].0.direct_legacy_session(1).is_none());
+    let child = w.nodes[r]
+        .0
+        .stack
+        .nwk
+        .neighbors
+        .by_extended(zvd_ieee)
+        .unwrap();
+    assert!(child.relationship.is_authenticated_child());
+
+    // 5. A second ZVD that never authenticates is dropped after
+    //    apsSecurityTimeOutPeriod, and the host told to disconnect.
+    let other = ExtendedAddress(0x00AD_0000_0000_000A);
+    let other_short = ShortAddress(0x4E22);
+    assert!(w.nodes[r].0.open_tunnel(2, 0x0043, other));
+    let tlvs = joiner_tlvs(other_short);
+    let header = Header::new(FrameType::Command, zdd_short, other_short, 1, 1)
+        .with_src_ieee(other)
+        .with_dst_ieee(zdd_ieee);
+    let cmd = NwkCommand::CommissioningRequest(CommissioningRequest {
+        kind: CommissioningType::InitialJoin,
+        capability: MacCapability(0)
+            .with_rx_on_when_idle(true)
+            .with_allocate_address(true),
+        tlvs: &tlvs,
+    });
+    let h = header.encode_to_slice(&mut npdu).unwrap();
+    let n = cmd.encode_to_slice(&mut npdu[h..]).unwrap();
+    let mut tlv = [0u8; 200];
+    let t = NpduMessage {
+        assume_security: false,
+        npdu: &npdu[..h + n],
+    }
+    .encode(&mut tlv)
+    .unwrap();
+    w.nodes[r]
+        .0
+        .on_tunnel_write(2, SessionKind::ZvdProvisioning, &tlv[..t])
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(10), |w| {
+        w.nodes[r].0.direct_legacy_session(2).is_some()
+    }));
+    assert!(
+        w.nodes[r]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(other)
+            .is_some()
+    );
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[r]
+            .2
+            .iter()
+            .any(|e| matches!(e, Event::DirectAuthorizationTimeout { link: 2 }))
+    }));
+    assert!(w.nodes[r].0.direct_legacy_session(2).is_none());
+    assert!(
+        w.nodes[r]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(other)
+            .is_none()
+    );
+    // The first ZVD is unaffected.
+    assert!(
+        w.nodes[r]
+            .0
+            .stack
+            .nwk
+            .neighbors
+            .by_extended(zvd_ieee)
+            .is_some_and(|n| n.relationship.is_authenticated_child())
+    );
+}
