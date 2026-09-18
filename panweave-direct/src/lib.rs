@@ -29,6 +29,7 @@ pub mod legacy;
 pub mod rotation;
 pub mod secure;
 pub mod session;
+pub mod state;
 pub mod tlv;
 pub mod tunnel;
 pub mod zvd;

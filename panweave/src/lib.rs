@@ -124,6 +124,15 @@ pub enum Event {
         /// The link.
         link: u8,
     },
+    /// The Zigbee Direct advertisement is to start or stop (ZD 1.1 §6.2:
+    /// the un-provisioned ZDD's provisioning window closed, the ZDD
+    /// joined or left a network, or the Configuration cluster switched
+    /// the interface).
+    #[cfg(feature = "direct")]
+    DirectAdvertising {
+        /// Advertise (true) or stop advertising.
+        enabled: bool,
+    },
 }
 
 /// A device: the stack plus its commissioning machine.
@@ -321,6 +330,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 self.direct_on_configured(&e);
                 self.direct_on_aware_answer(&e);
                 self.direct_on_tclk_update(&e);
+                self.direct_on_security_event(&e);
             }
             #[cfg(feature = "direct")]
             if let StackEvent::NetworkKeySwitched { previous, .. } = &e {
@@ -357,6 +367,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         self.restore_direct_config()?;
         #[cfg(feature = "direct")]
         self.restore_direct_admin_key()?;
+        #[cfg(feature = "direct")]
+        self.direct_power_up();
         if restored == Restored::OnNetwork {
             self.bdb.set_on_network(true);
             if self.stack.config.role == LogicalDeviceType::EndDevice {

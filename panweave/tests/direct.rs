@@ -2249,3 +2249,142 @@ fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
             .is_some_and(|n| n.relationship.is_authenticated_child())
     );
 }
+
+/// The ZDD's security state (ZD 1.1 §6.2, §6.3.1, §6.6) at the facade:
+/// an un-provisioned ZDD advertises for `NEW_ZDD_PROVISIONING_TIMEOUT`,
+/// admits only provisioning sessions, then stops advertising until
+/// woken again; a provisioned one admits authorized ZVDs, new ones only
+/// while the network is open, and no provisioning session from a ZVD
+/// holding an authorization session; leaving reopens provisioning.
+#[test]
+fn the_zdd_security_state_follows_the_network_and_the_sessions() {
+    use panweave::direct::NEW_ZDD_PROVISIONING_TIMEOUT;
+    use panweave_direct::state::{Interface, Refusal};
+    use panweave_direct::tlv::Psk;
+
+    let mut w = World {
+        medium: VirtualMedium::new(),
+        clock: VirtualClock::new(),
+        nodes: Vec::new(),
+    };
+    let zvd = ExtendedAddress(0x00AA_0000_0000_0001);
+    let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
+        .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
+    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.initialize().unwrap();
+    let c = w.add(coord);
+    w.settle();
+    let advertising = |w: &World| -> Vec<bool> {
+        w.nodes[c]
+            .2
+            .iter()
+            .filter_map(|e| match e {
+                Event::DirectAdvertising { enabled } => Some(*enabled),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(advertising(&w), vec![true]);
+    assert!(matches!(
+        w.nodes[c].0.direct.security.interface(),
+        Interface::OpenToBeProvisioned { .. }
+    ));
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::BasicAuthorization),
+        Err(Refusal::NotProvisioned)
+    );
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::Anonymous),
+        Ok(Level::Provisioning)
+    );
+    // Nobody provisions it: the advertisement stops.
+    w.run_until(
+        NEW_ZDD_PROVISIONING_TIMEOUT + Duration::from_secs(1),
+        |_| false,
+    );
+    assert_eq!(advertising(&w), vec![true, false]);
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::Anonymous),
+        Err(Refusal::InterfaceOff)
+    );
+    // A user action wakes it; a provisioning session opens and the
+    // ZVD forms the network through it.
+    w.nodes[c].0.direct_power_up();
+    w.settle();
+    assert_eq!(advertising(&w), vec![true, false, true]);
+    w.nodes[c].0.direct_session_opened(zvd, Level::Provisioning);
+    w.run_until(
+        NEW_ZDD_PROVISIONING_TIMEOUT + Duration::from_secs(1),
+        |_| false,
+    );
+    assert_eq!(
+        advertising(&w),
+        vec![true, false, true],
+        "held by the session"
+    );
+    w.nodes[c]
+        .0
+        .form_network_with_key(Key128::from_bytes([0x5a; 16]))
+        .unwrap();
+    assert!(w.run_until(Duration::from_secs(30), |w| {
+        w.nodes[c].0.direct.security.is_provisioned()
+    }));
+    assert_eq!(
+        w.nodes[c].0.direct.security.interface(),
+        Interface::OpenToConnect
+    );
+    w.nodes[c].0.direct_session_closed(zvd);
+    // Provisioned: authorized ZVDs at any time, new ones only while the
+    // network is open (the anonymous secret while the countdown runs).
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::AdminAuthorization),
+        Ok(Level::Admin)
+    );
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::InstallCode),
+        Err(Refusal::NetworkClosed)
+    );
+    w.nodes[c].0.stack.permit_join_network(60).unwrap();
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::InstallCode),
+        Ok(Level::Provisioning)
+    );
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::Anonymous),
+        Ok(Level::Provisioning)
+    );
+    w.nodes[c].0.direct_session_opened(zvd, Level::Basic);
+    assert_eq!(
+        w.nodes[c].0.direct_admit(zvd, Psk::Anonymous),
+        Err(Refusal::AuthorizationSessionActive)
+    );
+    assert_eq!(
+        w.nodes[c]
+            .0
+            .direct_admit(ExtendedAddress(0x00AA_0000_0000_0002), Psk::Anonymous),
+        Ok(Level::Provisioning)
+    );
+    // The countdown ran out: anonymous provisioning ends, others go on.
+    w.run_until(Duration::from_secs(3601), |_| false);
+    w.nodes[c].0.stack.permit_join_network(60).unwrap();
+    assert_eq!(
+        w.nodes[c]
+            .0
+            .direct_admit(ExtendedAddress(0x00AA_0000_0000_0002), Psk::Anonymous),
+        Err(Refusal::AnonymousJoinExpired)
+    );
+    assert_eq!(
+        w.nodes[c]
+            .0
+            .direct_admit(ExtendedAddress(0x00AA_0000_0000_0002), Psk::Passcode),
+        Ok(Level::Provisioning)
+    );
+    // Leaving the network reopens provisioning.
+    w.nodes[c].0.factory_reset().unwrap();
+    w.run_until(Duration::from_secs(5), |_| false);
+    assert!(!w.nodes[c].0.direct.security.is_provisioned());
+    assert!(matches!(
+        w.nodes[c].0.direct.security.interface(),
+        Interface::OpenToBeProvisioned { .. }
+    ));
+}

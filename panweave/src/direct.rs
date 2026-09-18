@@ -12,6 +12,7 @@
 use panweave_aps::command::KeyDescriptor;
 use panweave_bdb::Outcome;
 use panweave_codec::Decode;
+use panweave_direct::auth::Level;
 use panweave_direct::commissioning::{
     DeviceType, Domain, FindingBinding, FormNetwork, JoinNetwork, JoinedStatus, JoiningMethod,
     LeaveNetwork, ManageJoiners, NetworkInfo, NetworkStatus, STATUS_FAILURE, STATUS_SUCCESS,
@@ -19,6 +20,8 @@ use panweave_direct::commissioning::{
 };
 use panweave_direct::legacy::{self, Direction, EphemeralSession, Observation};
 use panweave_direct::rotation::{Forwarding, PastNetworkKeys, forwarding_decision};
+use panweave_direct::state::{Refusal, SecurityState, Transition};
+use panweave_direct::tlv::Psk;
 use panweave_direct::tunnel::{self, NpduMessage, SessionKind, TunnelError};
 use panweave_nwk::command::{CommissioningRequest, CommissioningType, NwkCommandId};
 use panweave_nwk::frame::{FrameType as NwkFrameType, Header as NwkHeader};
@@ -71,6 +74,9 @@ pub struct DirectState {
     /// Whether the last declined Transport Key was secured with the
     /// well-known key (§10 step 2.1: the global ephemeral key applies).
     legacy_probe_global: bool,
+    /// The security state machine of §6.2 (provisioning window,
+    /// interface, sessions).
+    pub security: SecurityState,
     /// The Zigbee Direct interface is enabled (ZD 1.1 §11.3.5.4.3);
     /// persistent.
     pub interface_enabled: bool,
@@ -104,6 +110,7 @@ impl Default for DirectState {
             last_join: heapless::Vec::new(),
             legacy: heapless::Vec::new(),
             legacy_probe_global: false,
+            security: SecurityState::new(NEW_ZDD_PROVISIONING_TIMEOUT),
             interface_enabled: true,
             anonymous_join_timeout: direct_configuration::ANONYMOUS_JOIN_DEFAULT,
             anonymous_join_until: None,
@@ -129,6 +136,11 @@ pub const PAST_NETWORK_KEYS: usize = 4;
 
 /// Format octet of the `Kind::DirectConfig` record.
 const DIRECT_CONFIG_FORMAT: u8 = 1;
+
+/// `NewZddProvisioningTimeout` (ZD 1.1 §6.2.2, at least 60 s): how long
+/// an un-provisioned ZDD advertises for provisioning after power-up.
+pub const NEW_ZDD_PROVISIONING_TIMEOUT: panweave_types::time::Duration =
+    panweave_types::time::Duration::from_secs(180);
 
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Keeps the network key a key switch retires (ZD §9.1) and
@@ -372,6 +384,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Retries the owed link key update when its time has come and the
     /// key is still provisional.
     pub(crate) fn direct_poll(&mut self, now: panweave_types::time::Instant) {
+        let t = self.direct.security.poll(now);
+        self.direct_transition(t);
         self.legacy_poll(now);
         if let Some(at) = self.direct.tclk_update_retry
             && now.has_reached(at)
@@ -382,6 +396,69 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 self.direct.tclk_update_retry = None;
             }
         }
+    }
+
+    /// Power-up of the Zigbee Direct interface (§6.2; also the user
+    /// action that reopens an un-provisioned ZDD for provisioning): the
+    /// advertisement starts, for `NEW_ZDD_PROVISIONING_TIMEOUT` when the
+    /// ZDD has no network. Called by [`Node::initialize`].
+    pub fn direct_power_up(&mut self) {
+        let now = self.stack.now();
+        let provisioned = self.stack.is_operating();
+        let t = self.direct.security.power_up(now, provisioned);
+        self.direct_transition(Some(t));
+    }
+
+    fn direct_transition(&mut self, t: Option<Transition>) {
+        match t {
+            Some(Transition::Advertise) => self.push(Event::DirectAdvertising { enabled: true }),
+            Some(Transition::StopAdvertising) => {
+                self.push(Event::DirectAdvertising { enabled: false });
+            }
+            None => {}
+        }
+    }
+
+    /// Whether a ZVD `peer` may establish a session with `psk` now, and
+    /// at which authorization level (§6.3.1, §6.6): the host's secret
+    /// resolver refuses the secret (and closes the connection) on `Err`.
+    pub fn direct_admit(&self, peer: ExtendedAddress, psk: Psk) -> Result<Level, Refusal> {
+        self.direct.security.admit(
+            peer,
+            psk,
+            self.stack.permit_joining_active(),
+            self.anonymous_join_allowed(),
+        )
+    }
+
+    /// A session with `peer` was established at `level`.
+    pub fn direct_session_opened(&mut self, peer: ExtendedAddress, level: Level) {
+        self.direct.security.session_opened(peer, level);
+    }
+
+    /// The session with `peer` ended.
+    pub fn direct_session_closed(&mut self, peer: ExtendedAddress) {
+        let now = self.stack.now();
+        self.direct.security.session_closed(peer, now);
+    }
+
+    /// The security state machine follows the network (§6.2.3) and the
+    /// Configuration cluster (§11.3.5.4.3).
+    pub(crate) fn direct_on_security_event(&mut self, event: &StackEvent) {
+        let t = match event {
+            StackEvent::Joined { .. } | StackEvent::NetworkFormed { .. } => {
+                self.direct.security.on_joined()
+            }
+            StackEvent::Left { .. } => {
+                let now = self.stack.now();
+                Some(self.direct.security.on_left(now))
+            }
+            StackEvent::DirectInterface { enabled, .. } => {
+                self.direct.security.on_interface_configured(*enabled)
+            }
+            _ => None,
+        };
+        self.direct_transition(t);
     }
 
     /// Writes the past network keys to storage.

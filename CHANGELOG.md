@@ -212,6 +212,19 @@ Keep a Changelog; versions follow SemVer.
   client;
   `UtcClock` and `utc_now` supply UTC from the endpoint's Time server
   or the application.
+* The ZDD's security state (ZD 1.1 §6.2, §6.3.1, §6.6):
+  `panweave_direct::state::SecurityState` (Open to be provisioned for
+  `NewZddProvisioningTimeout`, at least 60 s, held open by a provisioning
+  session; interface Off; Open to connect once on a network; leaving
+  reopens provisioning; the Configuration cluster switches the
+  interface) with `admit` (authorization keys only once provisioned,
+  new ZVDs only while the network is open, the anonymous secret only
+  while the Anonymous Join Countdown Timer runs, no provisioning session
+  for a ZVD holding an authorization session); the facade's
+  `Node::direct_power_up` (run by `initialize`), `direct_admit`,
+  `direct_session_opened` / `direct_session_closed`,
+  `DirectState::security`, `NEW_ZDD_PROVISIONING_TIMEOUT` and
+  `Event::DirectAdvertising` telling the host when to advertise.
 * The ZVD's tunnel client (ZD 1.1 §8): `panweave_direct::zvd::TunnelClient`,
   a sans-I/O machine over the host's BLE scan / connect / session /
   tunnel primitives that discovers a ZDD of the ZVD's network by its
