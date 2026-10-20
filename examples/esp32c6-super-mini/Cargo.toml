@@ -1,6 +1,6 @@
 [package]
 name = "panweave-esp32c6"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 panweave = { path = "../../panweave", default-features = false, features = ["crypto-software"] }
 panweave-runtime = { path = "../../panweave-runtime", default-features = false }
 panweave-storage = { path = "../../panweave-storage", default-features = false, features = ["nor-flash"] }
+panweave-hub = { path = "../../panweave-hub" }
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
 esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c6", "ieee802154", "unstable"] }
 esp-storage = { version = "0.10.0", features = ["esp32c6", "bytewise-read", "embedded-storage"] }
@@ -27,6 +28,10 @@ default = []
 green-power = ["panweave-runtime/green-power"]
 # Smaller ZCL tables (docs/footprint.md).
 small-tables = ["panweave/small-tables"]
+# Hub: admit joiners that never complete the Trust Center link key
+# exchange (pre-Zigbee-3.0 devices). Weakens the BDB Trust Center policy;
+# see docs/esp32c6-hub.md before enabling.
+legacy-joiners = []
 
 [profile.release]
 opt-level = "s"

@@ -1,0 +1,50 @@
+[package]
+name = "panweave-hub"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Panweave Zigbee hub: device registry, interview, IAS Zone and lighting logic, and the Panweave Hub Protocol shared with host applications"
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["engine"]
+# The hub application logic on top of the Panweave stack. Without it the
+# crate is only the protocol (message types and framing), which is what
+# a host application needs.
+engine = [
+    "dep:panweave-runtime",
+    "dep:panweave-storage",
+    "dep:panweave-zcl",
+    "dep:panweave-zdo",
+    "dep:panweave-aps",
+    "dep:panweave-security",
+]
+std = ["panweave-types/std", "panweave-codec/std"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+panweave-types = { workspace = true }
+panweave-codec = { workspace = true }
+heapless = { workspace = true }
+panweave-runtime = { workspace = true, optional = true }
+panweave-storage = { workspace = true, optional = true }
+panweave-zcl = { workspace = true, optional = true }
+panweave-zdo = { workspace = true, optional = true }
+panweave-aps = { workspace = true, optional = true }
+panweave-security = { workspace = true, optional = true }
+
+[dev-dependencies]
+panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-sim = { workspace = true }
+panweave-testkit = { workspace = true }
+panweave-mac = { workspace = true }
+panweave-storage = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+# Partition table of the Panweave hub image (ESP32-C6 Super Mini, 4 MiB flash).
+#
+# nvs and phy_init sit where espflash's default table puts them: the
+# Zigbee network the stack keeps at 0x9000 (24 KiB) is the same region
+# for every image, and switching to this table does not touch it.
+# hubdata holds the hub's device registry (two 32 KiB halves of a
+# log-structured store); the firmware finds it by its label.
+#
+# Name,   Type, SubType,   Offset,   Size
+nvs,      data, nvs,       0x9000,   0x6000,
+phy_init, data, phy,       0xf000,   0x1000,
+factory,  app,  factory,   0x10000,  0x300000,
+hubdata,  data, undefined, 0x310000, 0x10000,

@@ -1,6 +1,6 @@
 [package]
 name = "panweave-fuzz"
-version = "0.0.0"
+version = "0.1.0"
 publish = false
 edition = "2024"
 rust-version = "1.95"
@@ -19,6 +19,7 @@ panweave-aps = { path = "../panweave-aps" }
 panweave-zdo = { path = "../panweave-zdo" }
 panweave-zcl = { path = "../panweave-zcl" }
 panweave-green-power = { path = "../panweave-green-power" }
+panweave-hub = { path = "../panweave-hub", default-features = false }
 
 [[bin]]
 name = "mac_frame"
@@ -94,3 +95,9 @@ doc = false
 
 [profile.release]
 debug = 1
+
+[[bin]]
+name = "hub_protocol"
+path = "fuzz_targets/hub_protocol.rs"
+test = false
+doc = false

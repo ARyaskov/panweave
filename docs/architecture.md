@@ -69,6 +69,8 @@ conventions every crate follows.
 | `panweave-pcap` | PCAP/PCAPNG read/write of 802.15.4 frames, layered dissection. | `std` |
 | `panweave-cli` | Diagnostic CLI. | `std` |
 | `panweave` | Facade crate: builders, re-exports, role-specific ergonomic APIs. | yes |
+| `panweave-hub` | Hub application on the runtime: device registry, interview, IAS Zone and lighting normalization, host commands, registry persistence; the Panweave Hub Protocol (types and framing, usable without the stack). See `docs/esp32c6-hub.md`. | yes |
+| `panweave-hub-cli` | Development client of the Hub Protocol over USB serial. | `std` |
 
 ## Layer interfaces
 

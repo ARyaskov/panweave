@@ -1277,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-esp32c6"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "embedded-storage",
  "esp-alloc",
@@ -1289,6 +1289,7 @@ dependencies = [
  "esp-storage",
  "heapless 0.9.3",
  "panweave",
+ "panweave-hub",
  "panweave-runtime",
  "panweave-storage",
 ]
@@ -1302,6 +1303,21 @@ dependencies = [
  "panweave-mac",
  "panweave-security",
  "panweave-types",
+]
+
+[[package]]
+name = "panweave-hub"
+version = "0.2.0"
+dependencies = [
+ "heapless 0.9.3",
+ "panweave-aps",
+ "panweave-codec",
+ "panweave-runtime",
+ "panweave-security",
+ "panweave-storage",
+ "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
 ]
 
 [[package]]

@@ -394,6 +394,7 @@ fn gate() -> Result<(), String> {
         "panweave-direct",
         "panweave-smart-energy",
         "panweave",
+        "panweave-hub",
     ];
     let target = std::env::var("PANWEAVE_NO_STD_TARGET")
         .unwrap_or_else(|_| "thumbv7em-none-eabihf".to_string());
@@ -417,6 +418,13 @@ fn gate() -> Result<(), String> {
                 ],
             )?;
         }
+        // The hub engine is firmware too: it must build bare-metal with
+        // its default features (the protocol alone is checked above).
+        run(
+            &root,
+            "cargo",
+            &["check", "-p", "panweave-hub", "--target", &target],
+        )?;
     } else {
         println!("gate: target {target} not installed; skipping bare-metal no_std check");
     }

@@ -178,12 +178,13 @@ dependencies = [
 
 [[package]]
 name = "panweave-fuzz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "libfuzzer-sys",
  "panweave-aps",
  "panweave-codec",
  "panweave-green-power",
+ "panweave-hub",
  "panweave-mac",
  "panweave-nwk",
  "panweave-security",
@@ -200,6 +201,15 @@ dependencies = [
  "panweave-codec",
  "panweave-mac",
  "panweave-security",
+ "panweave-types",
+]
+
+[[package]]
+name = "panweave-hub"
+version = "0.2.0"
+dependencies = [
+ "heapless",
+ "panweave-codec",
  "panweave-types",
 ]
 
@@ -253,6 +263,7 @@ dependencies = [
  "panweave-aps",
  "panweave-codec",
  "panweave-types",
+ "subtle",
 ]
 
 [[package]]

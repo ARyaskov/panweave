@@ -5,6 +5,25 @@ Keep a Changelog; versions follow SemVer.
 
 ## [Unreleased]
 
+### Added
+
+* `panweave-hub`: a Zigbee hub application on the runtime — bounded
+  device registry keyed by IEEE address, device interview (node, active
+  endpoint and simple descriptors, Basic attributes, IAS Zone enrolment,
+  bindings, reporting, initial state) with retries and resumption for
+  sleepy devices, capability and category derivation from descriptors,
+  IAS Zone interpretation per zone type, light commands with state
+  confirmation, registry persistence through any `Storage`, and the
+  Panweave Hub Protocol v1 (typed requests, responses and events, COBS +
+  CRC-16 framing, access levels) shared with host applications.
+* `panweave-hub-cli`: development client of the Hub Protocol over USB
+  serial.
+* ESP32-C6 `hub` firmware image with a USB Serial/JTAG transport, a
+  registry partition (`partitions-hub.csv`), the RTC watchdog and
+  `Board::init_hub` (two stores sharing the flash driver);
+  `docs/esp32c6-hub.md`.
+* Fuzz target `hub_protocol`.
+
 ## [0.1.0] - 2026-09-18
 
 The first release: the stack as inventoried in `docs/conformance.md`.

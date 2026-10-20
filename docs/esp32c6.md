@@ -4,16 +4,19 @@
 `esp-hal` 1.2, `esp-radio` 1.0 beta) that runs a Panweave node on the
 ESP32-C6 "Super Mini" board — the small module with a USB-C connector,
 GPIO 0–23 around the edge, a blue LED and a BOOT button. It provides
-the adapters a real radio needs and four firmware images that show a
-Zigbee 4.0 network being formed, joined, bound and used.
+the adapters a real radio needs, four firmware images that show a
+Zigbee 4.0 network being formed, joined, bound and used, and a fifth,
+`hub`: a standalone Zigbee hub controlled over USB, documented in
+[`esp32c6-hub.md`](esp32c6-hub.md).
 
 ## What the crate provides
 
 | Module | What it does |
 |---|---|
 | `radio` | `Radio`: the stack's `MacAction`s (transmit, channel, addressing, pending list, energy detect) executed on the `esp-radio` 802.15.4 driver; received frames with RSSI / LQI |
-| `board` | `Board::init()`: chip at 160 MHz, heap for `esp-radio`, the radio, the on-chip flash as the stack's `Storage`, the TRNG as its `CryptoRng`, the IEEE address from the eFuse MAC (EUI-48 → EUI-64 with `FF FE`), the LED (GPIO 15) and the BOOT button (GPIO 9), the die temperature sensor |
+| `board` | `Board::init()`: chip at 160 MHz, heap for `esp-radio`, the radio, the on-chip flash as the stack's `Storage`, the TRNG as its `CryptoRng`, the IEEE address from the eFuse MAC (EUI-48 → EUI-64 with `FF FE`), the LED (GPIO 15) and the BOOT button (GPIO 9), the die temperature sensor, the USB Serial/JTAG and RTC timer peripherals. `Board::init_hub()`: the same with the flash shared by the stack's store and a second store in the `hubdata` partition |
 | `runner` | `Runner::step` (poll the stack, run its radio actions, feed it frames until quiet) and `Runner::idle` (wait for the next deadline, a frame or the button); `now()` from the system timer |
+| `hub` | Hub support: `UsbLink` (non-blocking USB Serial/JTAG byte link for the Hub Protocol), `HubStore` (registry storage), `Watchdog` (RTC watchdog) |
 
 The stack's persistent records go through
 `panweave_storage::nor_flash::NorFlashStore`, a log-structured store
@@ -66,14 +69,22 @@ cargo run --release --bin switch
 cargo run --release --bin temperature_sensor
 ```
 
+The hub is flashed differently — with its own partition table and
+without the serial monitor, its port carrying binary frames:
+
+```bash
+cargo build --release --bin hub
+espflash flash --partition-table partitions-hub.csv target/riscv32imac-unknown-none-elf/release/hub
+```
+
 `.cargo/config.toml` in the crate selects the target, the `linkall.x`
 linker script and `espflash flash --monitor` as the runner, so plain
 `cargo build --release` also works; the crate is excluded from the
 workspace because it builds for another target with its own
 dependency tree. Each image is about 1 MiB (the whole device library,
-Zigbee stack, `esp-radio` and the console formatting); the stack's RAM
-is on the main stack, which the linker gives the ~400 KiB left after
-`.bss`.
+Zigbee stack, `esp-radio` and the console formatting; the hub 1.07 MiB);
+the stack's RAM is on the main stack, which the linker gives the
+~400 KiB left after `.bss`.
 
 The features `green-power` (Green Power Basic Proxy on the router) and
 `small-tables` (`docs/footprint.md`) are forwarded to the stack.
@@ -126,7 +137,9 @@ are the same calls a host application makes:
   (`TrustCenterPolicy::allow_joins`); a product restricts joins to
   install codes or a joining list.
 * No Zigbee Direct: the ESP32-C6 has BLE, but `esp-radio` does not
-  support 802.15.4 and BLE at the same time yet.
+  support 802.15.4 and BLE at the same time yet (its coexistence covers
+  Wi-Fi + BLE only; the findings are in `esp32c6-hub.md`, "Bluetooth LE
+  and Wi-Fi").
 * Not certified, not interoperability-tested against other vendors'
   stacks on this board; see `docs/conformance.md` for what the stack
   itself implements.

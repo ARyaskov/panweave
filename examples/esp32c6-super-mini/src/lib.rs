@@ -13,8 +13,11 @@
 //!   drive the radio, hand events to the application.
 //!
 //! The binaries in `src/bin` are the example firmware: a router On/Off
-//! Light, a coordinator, an On/Off switch and a temperature sensor.
-//! `docs/esp32c6.md` in the repository is the guide.
+//! Light, a coordinator, an On/Off switch and a temperature sensor, and
+//! the hub — a coordinator that interviews and controls third-party
+//! devices for a host over USB ([`hub`], the `panweave-hub` crate).
+//! `docs/esp32c6.md` and `docs/esp32c6-hub.md` in the repository are the
+//! guides.
 //!
 //! [`MacAction`]: panweave::mac::service::MacAction
 //! [`Node::on_radio_frame`]: panweave::Node::on_radio_frame
@@ -24,9 +27,10 @@
 #![warn(missing_docs)]
 
 pub mod board;
+pub mod hub;
 pub mod radio;
 pub mod runner;
 
-pub use board::{Board, FlashStore, Rng};
+pub use board::{Board, FlashStore, Rng, SharedStore};
 pub use radio::Radio;
 pub use runner::{Runner, now};

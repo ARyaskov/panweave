@@ -109,12 +109,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: examples/esp32c6-super-mini
-      - name: build the four firmware images
+      - name: build the firmware images
         working-directory: examples/esp32c6-super-mini
         run: |
           cargo build --release --bins
           cargo clippy --release --bins -- -D warnings
-          for b in on_off_light coordinator switch temperature_sensor; do
+          for b in on_off_light coordinator switch temperature_sensor hub; do
             python3 ../../scripts/elf_size.py target/riscv32imac-unknown-none-elf/release/$b
           done
 

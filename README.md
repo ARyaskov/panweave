@@ -62,6 +62,8 @@ See `docs/architecture.md`. Quick tour:
 | `panweave-green-power/`, `panweave-direct/`, `panweave-smart-energy/` | Optional subsystems |
 | `panweave-storage/`, `panweave-runtime/` | Persistence and stack driver |
 | `panweave-testkit/`, `panweave-sim/`, `panweave-pcap/`, `panweave-cli/` | Testing, simulation and host tooling |
+| `panweave-hub/`, `panweave-hub-cli/` | Zigbee hub application (registry, interview, IAS Zone, lighting, Hub Protocol) and its host CLI |
+| `examples/esp32c6-super-mini/` | ESP32-C6 firmware: example devices and the USB hub (`docs/esp32c6.md`, `docs/esp32c6-hub.md`) |
 | `conformance/`, `docs/` | Requirement inventory and documentation |
 
 Security: `panweave-runtime/tests/dlk.rs` negotiates dynamic link keys
