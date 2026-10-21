@@ -35,13 +35,24 @@
     )
 )]
 
+pub mod boot;
+pub mod capture;
+pub mod compat;
+pub mod diag;
+pub mod esp32c6;
 pub mod model;
+pub mod partitions;
 pub mod protocol;
+pub mod supervisor;
 
 #[cfg(feature = "engine")]
 mod endpoint;
 #[cfg(feature = "engine")]
 mod hub;
+#[cfg(feature = "engine")]
+mod hub_diag;
+#[cfg(feature = "engine")]
+mod hub_security;
 #[cfg(feature = "engine")]
 pub mod ias;
 #[cfg(feature = "engine")]

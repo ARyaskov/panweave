@@ -63,6 +63,9 @@ struct Net {
     now: Instant,
     /// Drop the next `n` frames from `from`.
     drop_from: Option<(ShortAddress, usize)>,
+    /// The NWK layer of `from` refuses its next `n` frames for lack of
+    /// buffers (nothing is transmitted).
+    refuse_from: Option<(ShortAddress, usize)>,
     log: Vec<Frame>,
 }
 
@@ -73,6 +76,7 @@ impl Net {
             views: Vec::new(),
             now: Instant::from_millis(1000),
             drop_from: None,
+            refuse_from: None,
             log: Vec::new(),
         }
     }
@@ -107,6 +111,16 @@ impl Net {
                             frame,
                             ..
                         } => {
+                            if let Some((f, n)) = &mut self.refuse_from
+                                && *f == from
+                                && *n > 0
+                            {
+                                *n -= 1;
+                                self.nodes[i]
+                                    .1
+                                    .on_nwk_data_confirm(handle, NwkStatus::FrameNotBuffered);
+                                continue;
+                            }
                             let dropped = match &mut self.drop_from {
                                 Some((f, n)) if *f == from && *n > 0 => {
                                     *n -= 1;
@@ -359,6 +373,77 @@ fn lost_acknowledgements_trigger_retries_then_no_ack() {
     assert_eq!(ind.len(), 1, "retransmissions are duplicates");
     assert_eq!(net.node(TC_SHORT).stats.retries, 3);
     assert_eq!(net.node(TC_SHORT).stats.ack_failures, 1);
+}
+
+#[test]
+fn a_frame_the_nwk_cannot_buffer_is_offered_again_later() {
+    let mut net = two_nodes();
+    let v = view_all();
+    // The NWK table is full for the first two attempts.
+    net.refuse_from = Some((TC_SHORT, 2));
+    net.node(TC_SHORT)
+        .data_request(
+            &req(
+                Destination::Short {
+                    address: ROUTER_SHORT,
+                    endpoint: Endpoint(3),
+                },
+                &[5],
+                TxOptions::NONE,
+            ),
+            &v,
+        )
+        .unwrap();
+    net.run();
+    // Not retried in the same turn, not failed.
+    assert!(net.events(TC_SHORT).is_empty());
+    assert!(net.log.is_empty());
+    assert_eq!(
+        net.node(TC_SHORT).next_deadline(),
+        Some(net.now.saturating_add(Duration::from_millis(1000)))
+    );
+    net.advance(Duration::from_millis(1000));
+    assert!(net.log.is_empty(), "refused a second time");
+    net.advance(Duration::from_millis(1000));
+    let ev = net.events(TC_SHORT);
+    assert_eq!(confirm_status(&ev), Some(ApsStatus::Success));
+    assert_eq!(net.log.iter().filter(|f| f.from == TC_SHORT).count(), 1);
+    assert_eq!(take_indications().len(), 1);
+    let stats = net.node(TC_SHORT).stats;
+    assert_eq!(stats.deferrals, 2);
+    assert_eq!(stats.retries, 0, "deferrals do not spend retransmissions");
+}
+
+#[test]
+fn local_refusals_are_bounded() {
+    let mut net = two_nodes();
+    let v = view_all();
+    net.refuse_from = Some((TC_SHORT, usize::MAX));
+    net.node(TC_SHORT)
+        .data_request(
+            &req(
+                Destination::Short {
+                    address: ROUTER_SHORT,
+                    endpoint: Endpoint(3),
+                },
+                &[5],
+                TxOptions::ACKED,
+            ),
+            &v,
+        )
+        .unwrap();
+    net.run();
+    for _ in 0..8 {
+        assert!(net.events(TC_SHORT).is_empty());
+        net.advance(Duration::from_millis(1000));
+    }
+    // apscMaxFrameRetries more immediate attempts (the retry path of a
+    // NWK failure), then the request fails; nothing was ever sent.
+    let ev = net.events(TC_SHORT);
+    assert_eq!(confirm_status(&ev), Some(ApsStatus::from_raw(0xD3)));
+    assert!(net.log.is_empty());
+    assert_eq!(net.node(TC_SHORT).stats.deferrals, 8);
+    assert_eq!(net.node(TC_SHORT).next_deadline(), None);
 }
 
 #[test]

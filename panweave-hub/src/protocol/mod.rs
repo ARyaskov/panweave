@@ -20,9 +20,24 @@
 //! enumeration codes decode to their `Unknown` variant where one exists.
 //! A body never exceeds [`frame::MAX_BODY`] octets.
 
+pub mod diagnostics;
 pub mod frame;
+pub mod security;
+
+pub use diagnostics::{
+    BootReport, CapturePage, MAX_BOOT_FINDINGS, MAX_BOOT_PARTITIONS, MAX_CAPTURE_PAGE,
+    MAX_CAPTURE_SECONDS, MAX_TRACE_PAGE, NetworkRestore, PartitionEntry, PartitionFinding,
+    QueueUsage, RadioDiagnostics, RadioDriverStats, ResetKind, RuntimeDiagnostics,
+    StorageDiagnostics, StoreUsage, StoredNetwork, TargetMetrics, TraceConfiguration, TracePage,
+};
+pub use security::{
+    DeniedCounts, DeviceAuthorization, ExemptionInfo, MAX_EXEMPTION_SECONDS, MAX_EXEMPTIONS,
+    MAX_UNAUTHORIZED, SecurityStatus,
+};
 
 use core::fmt;
+
+use crate::capture::CaptureMode;
 
 use heapless::Vec;
 use panweave_codec::{CodecError, Reader, Writer};
@@ -341,6 +356,62 @@ pub enum Request {
     },
     /// Counters for troubleshooting.
     GetDiagnostics,
+    /// What the hub found at boot (0.2.1).
+    GetBootReport,
+    /// Radio, MAC, NWK and APS counters (0.2.1).
+    GetRadioDiagnostics,
+    /// Persistence state (0.2.1).
+    GetStorageDiagnostics,
+    /// Runtime metrics (0.2.1).
+    GetRuntimeDiagnostics,
+    /// The trace configuration (0.2.1).
+    GetTraceConfiguration,
+    /// Changes what the trace keeps (0.2.1).
+    SetTraceConfiguration {
+        /// Minimum severity code (`crate::diag::Severity`).
+        min_severity: u8,
+        /// Category mask.
+        categories: u32,
+    },
+    /// A page of the trace from sequence number `from` (0.2.1).
+    ReadTrace {
+        /// First sequence number wanted.
+        from: u32,
+        /// Records wanted (1..=[`MAX_TRACE_PAGE`]).
+        max: u8,
+        /// Only the records of this device.
+        ieee: Option<u64>,
+    },
+    /// Empties the trace (0.2.1).
+    ClearTrace,
+    /// Starts capturing radio frames for `seconds` (0.2.1).
+    StartCapture {
+        /// Duration, 1..=[`MAX_CAPTURE_SECONDS`].
+        seconds: u16,
+        /// What to keep of each frame ([`CaptureMode::Sanitized`]
+        /// recommended; [`CaptureMode::Raw`] exposes key transports).
+        mode: CaptureMode,
+    },
+    /// Stops the capture (0.2.1).
+    StopCapture,
+    /// Takes up to `max` captured frames (0.2.1).
+    ReadCapture {
+        /// Frames wanted (1..=[`MAX_CAPTURE_PAGE`]).
+        max: u8,
+    },
+    /// Exempts a device from the Trust Center's key-exchange requirement
+    /// for a joining window of `seconds` (1..=[`MAX_EXEMPTION_SECONDS`]);
+    /// once the device joins inside the window the exemption is kept
+    /// (persisted with the device) until revoked. `seconds = 0` revokes
+    /// it (0.2.1).
+    SetKeyExchangeExemption {
+        /// The device.
+        ieee: u64,
+        /// Window length; 0 revokes.
+        seconds: u16,
+    },
+    /// The Trust Center's security state (0.2.1).
+    GetSecurityStatus,
 }
 
 impl Request {
@@ -349,18 +420,31 @@ impl Request {
         match self {
             Request::GetHubInfo
             | Request::GetNetworkStatus
+            | Request::GetSecurityStatus
             | Request::ListDevices { .. }
             | Request::GetDevice { .. }
             | Request::GetDeviceState { .. }
-            | Request::GetDiagnostics => Access::Monitor,
+            | Request::GetDiagnostics
+            | Request::GetBootReport
+            | Request::GetRadioDiagnostics
+            | Request::GetStorageDiagnostics
+            | Request::GetRuntimeDiagnostics
+            | Request::GetTraceConfiguration
+            | Request::ReadTrace { .. } => Access::Monitor,
             Request::InterviewDevice { .. }
             | Request::ReadAttribute { .. }
             | Request::ConfigureReporting { .. }
             | Request::Bind { .. }
             | Request::Light { .. } => Access::Control,
-            Request::PermitJoin { .. } | Request::CloseNetwork | Request::RemoveDevice { .. } => {
-                Access::Admin
-            }
+            Request::PermitJoin { .. }
+            | Request::CloseNetwork
+            | Request::RemoveDevice { .. }
+            | Request::SetTraceConfiguration { .. }
+            | Request::ClearTrace
+            | Request::StartCapture { .. }
+            | Request::StopCapture
+            | Request::ReadCapture { .. }
+            | Request::SetKeyExchangeExemption { .. } => Access::Admin,
         }
     }
 
@@ -385,6 +469,19 @@ impl Request {
             },
             Request::RemoveDevice { .. } => 0x10,
             Request::GetDiagnostics => 0x11,
+            Request::GetBootReport => 0x12,
+            Request::GetRadioDiagnostics => 0x13,
+            Request::GetStorageDiagnostics => 0x14,
+            Request::GetRuntimeDiagnostics => 0x15,
+            Request::GetTraceConfiguration => 0x16,
+            Request::SetTraceConfiguration { .. } => 0x17,
+            Request::ReadTrace { .. } => 0x18,
+            Request::ClearTrace => 0x19,
+            Request::StartCapture { .. } => 0x1a,
+            Request::StopCapture => 0x1b,
+            Request::ReadCapture { .. } => 0x1c,
+            Request::SetKeyExchangeExemption { .. } => 0x1d,
+            Request::GetSecurityStatus => 0x1e,
         }
     }
 
@@ -393,8 +490,43 @@ impl Request {
         match self {
             Request::GetHubInfo
             | Request::GetNetworkStatus
+            | Request::GetSecurityStatus
             | Request::CloseNetwork
-            | Request::GetDiagnostics => Ok(()),
+            | Request::GetDiagnostics
+            | Request::GetBootReport
+            | Request::GetRadioDiagnostics
+            | Request::GetStorageDiagnostics
+            | Request::GetRuntimeDiagnostics
+            | Request::GetTraceConfiguration
+            | Request::ClearTrace
+            | Request::StopCapture => Ok(()),
+            Request::SetTraceConfiguration {
+                min_severity,
+                categories,
+            } => {
+                w.u8(*min_severity)?;
+                w.u32_le(*categories)
+            }
+            Request::ReadTrace { from, max, ieee } => {
+                w.u32_le(*from)?;
+                w.u8(*max)?;
+                match ieee {
+                    Some(i) => {
+                        w.u8(1)?;
+                        w.u64_le(*i)
+                    }
+                    None => w.u8(0),
+                }
+            }
+            Request::StartCapture { seconds, mode } => {
+                w.u16_le(*seconds)?;
+                w.u8(mode.code())
+            }
+            Request::ReadCapture { max } => w.u8(*max),
+            Request::SetKeyExchangeExemption { ieee, seconds } => {
+                w.u64_le(*ieee)?;
+                w.u16_le(*seconds)
+            }
             Request::PermitJoin { seconds } => w.u8(*seconds),
             Request::ListDevices { start } => w.u8(*start),
             Request::GetDevice { ieee }
@@ -518,6 +650,36 @@ impl Request {
                 leave: read_bool(r)?,
             },
             0x11 => Request::GetDiagnostics,
+            0x12 => Request::GetBootReport,
+            0x13 => Request::GetRadioDiagnostics,
+            0x14 => Request::GetStorageDiagnostics,
+            0x15 => Request::GetRuntimeDiagnostics,
+            0x16 => Request::GetTraceConfiguration,
+            0x17 => Request::SetTraceConfiguration {
+                min_severity: r.u8()?,
+                categories: r.u32_le()?,
+            },
+            0x18 => Request::ReadTrace {
+                from: r.u32_le()?,
+                max: r.u8()?,
+                ieee: if read_bool(r)? {
+                    Some(r.u64_le()?)
+                } else {
+                    None
+                },
+            },
+            0x19 => Request::ClearTrace,
+            0x1a => Request::StartCapture {
+                seconds: r.u16_le()?,
+                mode: CaptureMode::from_code(r.u8()?).ok_or(ProtocolError::Malformed)?,
+            },
+            0x1b => Request::StopCapture,
+            0x1c => Request::ReadCapture { max: r.u8()? },
+            0x1d => Request::SetKeyExchangeExemption {
+                ieee: r.u64_le()?,
+                seconds: r.u16_le()?,
+            },
+            0x1e => Request::GetSecurityStatus,
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -773,6 +935,23 @@ pub enum Response {
     },
     /// To [`Request::GetDiagnostics`].
     Diagnostics(Diagnostics),
+    /// To [`Request::GetBootReport`].
+    BootReport(BootReport),
+    /// To [`Request::GetRadioDiagnostics`].
+    RadioDiagnostics(RadioDiagnostics),
+    /// To [`Request::GetStorageDiagnostics`].
+    StorageDiagnostics(StorageDiagnostics),
+    /// To [`Request::GetRuntimeDiagnostics`].
+    RuntimeDiagnostics(RuntimeDiagnostics),
+    /// To [`Request::GetTraceConfiguration`] and
+    /// [`Request::SetTraceConfiguration`].
+    TraceConfiguration(TraceConfiguration),
+    /// To [`Request::ReadTrace`].
+    TracePage(TracePage),
+    /// To [`Request::ReadCapture`].
+    CapturePage(CapturePage),
+    /// To [`Request::GetSecurityStatus`].
+    SecurityStatus(SecurityStatus),
     /// The request failed.
     Error(ErrorCode),
 }
@@ -1273,6 +1452,14 @@ impl Response {
             Response::DeviceState { .. } => 0x06,
             Response::Accepted { .. } => 0x07,
             Response::Diagnostics(_) => 0x08,
+            Response::BootReport(_) => 0x09,
+            Response::RadioDiagnostics(_) => 0x0a,
+            Response::StorageDiagnostics(_) => 0x0b,
+            Response::RuntimeDiagnostics(_) => 0x0c,
+            Response::TraceConfiguration(_) => 0x0d,
+            Response::TracePage(_) => 0x0e,
+            Response::CapturePage(_) => 0x0f,
+            Response::SecurityStatus(_) => 0x10,
             Response::Error(_) => 0x7f,
         }
     }
@@ -1317,6 +1504,14 @@ impl Response {
             }
             Response::Accepted { command } => w.u16_le(*command),
             Response::Diagnostics(d) => write_diagnostics(w, d),
+            Response::BootReport(b) => diagnostics::write_boot_report(w, b),
+            Response::RadioDiagnostics(d) => diagnostics::write_radio(w, d),
+            Response::StorageDiagnostics(d) => diagnostics::write_storage(w, d),
+            Response::RuntimeDiagnostics(d) => diagnostics::write_runtime(w, d),
+            Response::TraceConfiguration(c) => diagnostics::write_trace_config(w, c),
+            Response::TracePage(p) => diagnostics::write_trace_page(w, p),
+            Response::CapturePage(p) => diagnostics::write_capture_page(w, p),
+            Response::SecurityStatus(st) => security::write_security(w, st),
             Response::Error(e) => w.u8(e.code()),
         }
     }
@@ -1365,6 +1560,14 @@ impl Response {
                 command: r.u16_le()?,
             },
             0x08 => Response::Diagnostics(read_diagnostics(r)?),
+            0x09 => Response::BootReport(diagnostics::read_boot_report(r)?),
+            0x0a => Response::RadioDiagnostics(diagnostics::read_radio(r)?),
+            0x0b => Response::StorageDiagnostics(diagnostics::read_storage(r)?),
+            0x0c => Response::RuntimeDiagnostics(diagnostics::read_runtime(r)?),
+            0x0d => Response::TraceConfiguration(diagnostics::read_trace_config(r)?),
+            0x0e => Response::TracePage(diagnostics::read_trace_page(r)?),
+            0x0f => Response::CapturePage(diagnostics::read_capture_page(r)?),
+            0x10 => Response::SecurityStatus(security::read_security(r)?),
             0x7f => Response::Error(ErrorCode::from_code(r.u8()?)),
             t => return Err(ProtocolError::UnknownTag(t)),
         })

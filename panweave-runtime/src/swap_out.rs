@@ -95,6 +95,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             e.passphrase.clone_from(&b.passphrase);
             if self.aps.install_link_key(e).is_ok() {
                 n += 1;
+                // Step 8: the device renews the hashed key it holds.
+                let _ = self.authorization.swap_out_renewals.push(b.device);
             }
         }
         n

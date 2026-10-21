@@ -1826,6 +1826,11 @@ fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
     let mut coord = Coordinator::new(tc_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
     coord.stack.config.trust_center_policy.allow_joins = true;
+    // The scripted ZVD below advances the clock 3 s per tunnelled frame,
+    // so its Request Key comes later than the BDB default 15 s
+    // key-exchange window; the window itself is tested in
+    // panweave-runtime/tests/trust_center_policy.rs.
+    coord.stack.config.trust_center_policy.node_join_timeout_s = 120;
     coord.stack.config.zigbee_direct_aware = false;
     let c = w.add(coord);
     w.nodes[c]

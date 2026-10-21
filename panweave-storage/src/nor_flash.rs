@@ -30,9 +30,29 @@ const FLAG_SET: u8 = 0;
 const FLAG_ERASED: u8 = 1;
 const FLAG_KIND_ERASED: u8 = 2;
 
+/// Counters of a [`NorFlashStore`], for diagnostics. They live in RAM
+/// and restart at every boot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StoreStats {
+    /// The region had no valid half when opened and was formatted (blank
+    /// flash, or both headers unreadable).
+    pub formatted_at_open: bool,
+    /// Records whose payload failed the CRC when read (a write cut by a
+    /// power loss, or flash corruption); such a record reads as absent.
+    pub corrupt_records: u32,
+    /// Records appended.
+    pub writes: u32,
+    /// Compactions (half switches).
+    pub compactions: u32,
+    /// Operations that failed with an I/O error of the flash.
+    pub io_errors: u32,
+}
+
 /// A [`Storage`] over the NOR flash `F`, in `len` octets at `base`.
 pub struct NorFlashStore<F: NorFlash> {
     flash: F,
+    /// Counters.
+    pub stats: StoreStats,
     base: u32,
     half: u32,
     /// 0 or 1: the half records are appended to.
@@ -130,6 +150,7 @@ impl<F: NorFlash> NorFlashStore<F> {
         }
         let mut s = NorFlashStore {
             flash,
+            stats: StoreStats::default(),
             base,
             half: len / 2,
             active: 0,
@@ -139,7 +160,10 @@ impl<F: NorFlash> NorFlashStore<F> {
         let a = s.header(0)?;
         let b = s.header(1)?;
         match (a, b) {
-            (None, None) => s.format()?,
+            (None, None) => {
+                s.stats.formatted_at_open = true;
+                s.format()?;
+            }
             (Some(sa), Some(sb)) => {
                 // Both valid only when a compaction's old half was not
                 // erased yet: the newer sequence wins.
@@ -180,6 +204,11 @@ impl<F: NorFlash> NorFlashStore<F> {
     /// Octets left in the active half before a compaction.
     pub fn free(&self) -> u32 {
         self.half - self.tail
+    }
+
+    /// Size of one half: the most the live records can occupy.
+    pub fn capacity(&self) -> u32 {
+        self.half
     }
 
     fn half_base(&self, half: u32) -> u32 {
@@ -262,7 +291,11 @@ impl<F: NorFlash> NorFlashStore<F> {
                 .map_err(|_| StorageError::Io)?;
             dst.copy_from_slice(&tmp[..n]);
         }
-        Ok(crc16(dst) == r.crc)
+        let ok = crc16(dst) == r.crc;
+        if !ok {
+            self.stats.corrupt_records = self.stats.corrupt_records.saturating_add(1);
+        }
+        Ok(ok)
     }
 
     /// Positions `tail` after the last record of the active half.
@@ -349,10 +382,12 @@ impl<F: NorFlash> NorFlashStore<F> {
         buf[8..16].copy_from_slice(&id.to_le_bytes());
         buf[HEADER..HEADER + data.len()].copy_from_slice(data);
         let at = self.half_base(self.active) + self.tail;
-        self.flash
-            .write(at, &buf[..size as usize])
-            .map_err(|_| StorageError::Io)?;
+        if self.flash.write(at, &buf[..size as usize]).is_err() {
+            self.stats.io_errors = self.stats.io_errors.saturating_add(1);
+            return Err(StorageError::Io);
+        }
         self.tail += size;
+        self.stats.writes = self.stats.writes.saturating_add(1);
         Ok(())
     }
 
@@ -391,6 +426,7 @@ impl<F: NorFlash> NorFlashStore<F> {
         self.active = new;
         self.seq = seq;
         self.tail = out;
+        self.stats.compactions = self.stats.compactions.saturating_add(1);
         self.erase_half(old)
     }
 }
@@ -615,7 +651,29 @@ mod tests {
         s.flash.cells[at] &= 0xf0;
         let mut buf = [0u8; 8];
         assert_eq!(s.load(nib, &mut buf).unwrap(), None);
+        assert_eq!(s.stats.corrupt_records, 1, "the torn record is counted");
         s.store(nib, &[5]).unwrap();
         assert_eq!(s.load(nib, &mut buf).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn counters_report_formatting_writes_compactions_and_io_errors() {
+        let mut s = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
+        assert!(s.stats.formatted_at_open, "blank flash is formatted");
+        assert_eq!(s.capacity(), S);
+        let counter = Key::single(Kind::NwkFrameCounter);
+        for i in 0..400u32 {
+            s.store(counter, &i.to_le_bytes()).unwrap();
+        }
+        assert_eq!(s.stats.writes, 400);
+        assert!(s.stats.compactions >= 1);
+        assert_eq!(s.stats.corrupt_records, 0);
+        s.flash.fuel = Some(0);
+        assert_eq!(s.store(counter, &[1]), Err(StorageError::Io));
+        assert_eq!(s.stats.io_errors, 1);
+        s.flash.fuel = None;
+        let NorFlashStore { flash, .. } = s;
+        let s = NorFlashStore::new(flash, 0, 2 * S).unwrap();
+        assert!(!s.stats.formatted_at_open, "a valid log is reopened");
     }
 }

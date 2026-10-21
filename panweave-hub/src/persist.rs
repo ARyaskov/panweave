@@ -44,6 +44,12 @@ pub(crate) const fn index_key() -> Key {
     Key::with_id(Kind::Application, 0)
 }
 
+/// The record of a supervisor-requested reset (an IEEE address no
+/// device can have).
+pub(crate) const fn supervisor_key() -> Key {
+    Key::with_id(Kind::Application, 0xFFFF_FFFF_FFFF_FFFE)
+}
+
 /// A device record.
 pub(crate) const fn device_key(ieee: u64) -> Key {
     Key::with_id(Kind::Application, ieee)
@@ -131,8 +137,17 @@ pub(crate) fn encode_device(d: &Device, out: &mut [u8]) -> Result<usize, Protoco
         write_list(&mut w, &e.inputs)?;
         write_list(&mut w, &e.outputs)?;
     }
+    // Optional trailing flags (0.2.1), written only when set, so a record
+    // without them stays readable by 0.2.0: bit 0 = key-exchange
+    // exemption.
+    if d.key_exchange_exempt {
+        w.u8(TRAILER_KEY_EXCHANGE_EXEMPT)?;
+    }
     Ok(w.position())
 }
+
+/// Trailing flag: the device is exempt from the key exchange.
+const TRAILER_KEY_EXCHANGE_EXEMPT: u8 = 1;
 
 /// Decodes a device record.
 pub(crate) fn decode_device(bytes: &[u8]) -> Result<Device, ProtocolError> {
@@ -188,7 +203,11 @@ pub(crate) fn decode_device(bytes: &[u8]) -> Result<Device, ProtocolError> {
         d.endpoints.push(e).map_err(|_| ProtocolError::Malformed)?;
     }
     if !r.is_empty() {
-        return Err(ProtocolError::Malformed);
+        let flags = r.u8()?;
+        if flags & !TRAILER_KEY_EXCHANGE_EXEMPT != 0 || !r.is_empty() {
+            return Err(ProtocolError::Malformed);
+        }
+        d.key_exchange_exempt = flags & TRAILER_KEY_EXCHANGE_EXEMPT != 0;
     }
     d.dirty = false;
     Ok(d)
@@ -242,6 +261,20 @@ mod tests {
         // Another format is refused, not misread.
         buf[0] = 2;
         assert!(decode_device(&buf[..n]).is_err());
+
+        // The key-exchange exemption is an optional trailing octet: a
+        // record without it is byte-for-byte the 0.2.0 format.
+        let mut exempt = d.clone();
+        exempt.key_exchange_exempt = true;
+        let mut buf2 = [0u8; MAX_RECORD];
+        let m = encode_device(&exempt, &mut buf2).unwrap();
+        assert_eq!(m, n + 1);
+        assert!(decode_device(&buf2[..m]).unwrap().key_exchange_exempt);
+        // Unknown trailing flags or more octets are refused.
+        buf2[m - 1] = 0x82;
+        assert!(decode_device(&buf2[..m]).is_err());
+        buf2[m - 1] = 1;
+        assert!(decode_device(&buf2[..=m]).is_err());
         assert!(decode_device(&buf[..n - 1]).is_err());
     }
 

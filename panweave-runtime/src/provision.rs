@@ -373,6 +373,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         };
         let _ = self.aps.security.install(e);
         let _ = self.persist_link_keys();
+        if is_tc && !provisional {
+            // A key established out of band and proven (Smart Energy
+            // CBKE): the key exchange is complete.
+            self.on_link_key_verified(partner);
+        }
     }
 
     /// The current startup set of the Commissioning server on

@@ -30,8 +30,18 @@ use panweave_zdo::layer::Zdo;
 /// burst — Device_annce, GP Pairing, mode changes — plus the relays of a
 /// few neighbors fit within nwkNetworkBroadcastDeliveryTime).
 pub type StackNwk<C, R> = Nwk<C, R, 16, 16, 4, 16>;
+/// Link-key entries (`apsDeviceKeyPairSet`): one per device a Trust
+/// Center keys individually, so it bounds how many devices can complete
+/// the key exchange (`small-tables`: 8).
+#[cfg(not(feature = "small-tables"))]
+pub const LINK_KEYS: usize = 32;
+/// Link-key entries (`apsDeviceKeyPairSet`): one per device a Trust
+/// Center keys individually, so it bounds how many devices can complete
+/// the key exchange (`small-tables`: 8).
+#[cfg(feature = "small-tables")]
+pub const LINK_KEYS: usize = 8;
 /// APS layer with the stack's table sizes.
-pub type StackAps<C> = Aps<C, 8, 8, 8, 8>;
+pub type StackAps<C> = Aps<C, LINK_KEYS, 8, 8, 8>;
 /// ZDO with up to 4 endpoints.
 pub type StackZdo = Zdo<4>;
 /// Endpoints the ZCL dispatcher holds (the Green Power endpoint counts).
@@ -223,12 +233,30 @@ pub enum StackEvent {
         rejoin: bool,
     },
     /// A device joined through this node (Trust Center / parent view)
-    /// and was authorized.
+    /// and was authorized: at a Trust Center that requires the key
+    /// exchange, only once it completed it ([`crate::authorization`]).
     DeviceAuthorized {
         /// IEEE address.
         ieee: ExtendedAddress,
         /// Network address.
         short: ShortAddress,
+    },
+    /// Trust Center: a device received the network key and must now
+    /// complete the key exchange the policy requires; it is not
+    /// authorized for application traffic until
+    /// [`StackEvent::DeviceAuthorized`].
+    KeyExchangePending {
+        /// IEEE address.
+        ieee: ExtendedAddress,
+        /// Network address.
+        short: ShortAddress,
+    },
+    /// Trust Center: a device did not complete the required key exchange
+    /// within `bdbTrustCenterNodeJoinTimeout`; its link key was removed
+    /// and it was asked to leave.
+    KeyExchangeTimedOut {
+        /// IEEE address.
+        ieee: ExtendedAddress,
     },
     /// A Device_annce was received.
     DeviceAnnounce {
@@ -889,6 +917,10 @@ pub(crate) struct PendingChild {
     pub ieee: ExtendedAddress,
     pub short: ShortAddress,
     pub request: RequestId,
+    /// The router the device joined through (`None`: our own child).
+    pub parent: Option<ShortAddress>,
+    /// The key goes to an initial (unsecured) join, not a rejoin.
+    pub initial_join: bool,
 }
 
 /// The composed stack.
@@ -1001,6 +1033,15 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     pub(crate) touchlink: Option<crate::touchlink::Touchlink>,
     /// Events dropped on overflow.
     pub dropped_events: u32,
+    /// Join milestones for diagnostics ([`crate::join_trace`]).
+    pub(crate) join_trace:
+        Deque<crate::join_trace::JoinRecord, { crate::join_trace::JOIN_TRACE_CAPACITY }>,
+    /// Join milestones dropped because nobody drained them.
+    pub join_trace_dropped: u32,
+    /// Trust Center authorization ([`crate::authorization`]).
+    pub(crate) authorization: crate::authorization::AuthorizationState,
+    /// Why the last [`Stack::restore`] found no usable network.
+    pub(crate) restore_detail: crate::persist::RestoreDetail,
 }
 
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
@@ -1124,6 +1165,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             green_power: None,
             touchlink: None,
             dropped_events: 0,
+            join_trace: Deque::new(),
+            join_trace_dropped: 0,
+            authorization: crate::authorization::AuthorizationState::default(),
+            restore_detail: crate::persist::RestoreDetail::NotRun,
         }
     }
 
@@ -1157,6 +1202,34 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Next application event.
     pub fn next_event(&mut self) -> Option<StackEvent> {
         self.events.pop_front()
+    }
+
+    /// Next join milestone ([`crate::join_trace`]).
+    pub fn next_join_record(&mut self) -> Option<crate::join_trace::JoinRecord> {
+        self.join_trace.pop_front()
+    }
+
+    /// Records a join milestone; the oldest record gives way when the
+    /// queue is full.
+    pub(crate) fn trace_join(
+        &mut self,
+        device: ExtendedAddress,
+        short: Option<ShortAddress>,
+        stage: crate::join_trace::JoinStage,
+        detail: u8,
+    ) {
+        let record = crate::join_trace::JoinRecord {
+            at: self.now,
+            device,
+            short,
+            stage,
+            detail,
+        };
+        if self.join_trace.is_full() {
+            let _ = self.join_trace.pop_front();
+            self.join_trace_dropped = self.join_trace_dropped.saturating_add(1);
+        }
+        let _ = self.join_trace.push_back(record);
     }
 
     pub(crate) fn push_event(&mut self, e: StackEvent) {
@@ -1417,6 +1490,11 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 .map(|_| ())
                 .map_err(|_| NwkStatus::InvalidRequest)
         };
+        if r.is_ok() {
+            // A removed device keeps no authorization: whatever it still
+            // sends is refused, and it must join again.
+            self.revoke_device(device);
+        }
         self.pump();
         r
     }
@@ -1490,6 +1568,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.zdo.poll_timers(now);
         self.zcl.poll_timers(now);
         self.poll_dlk(now);
+        self.poll_authorization(now);
         if self.challenge.is_some_and(|c| now.has_reached(c.deadline)) {
             self.challenge = None;
         }
@@ -1586,6 +1665,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             self.zdo.next_deadline(),
             self.zcl.next_deadline(),
             self.dlk_deadline(),
+            self.authorization.deadline(),
             self.challenge.map(|c| c.deadline),
             self.next_scan.map(|(at, _, _)| at),
             self.keep_alive.deadline(),

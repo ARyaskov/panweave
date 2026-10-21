@@ -29,6 +29,7 @@
 extern crate alloc;
 
 pub mod agility;
+pub mod authorization;
 mod bdb;
 mod context;
 mod dlk;
@@ -36,6 +37,7 @@ pub mod fragment_cache;
 #[cfg(feature = "green-power")]
 pub mod green_power;
 pub mod interpan;
+pub mod join_trace;
 mod keep_alive;
 pub mod ota;
 mod persist;
@@ -45,10 +47,11 @@ mod stack;
 pub mod swap_out;
 pub mod touchlink;
 
-pub use persist::Restored;
+pub use authorization::{Authorization, DeniedFrames, DenyReason};
+pub use persist::{RestoreDetail, Restored};
 pub use provision::{AdoptParams, FormationParams};
 pub use stack::{
     CLUSTER_ATTRIBUTES, ENDPOINT_CLUSTERS, ENDPOINTS, EVENT_CAPACITY, EndpointError, JoinMode,
-    Stack, StackAps, StackCluster, StackConfig, StackEndpoint, StackEvent, StackNwk, StackZcl,
-    StackZdo, ZclFrame, ZdpData,
+    LINK_KEYS, Stack, StackAps, StackCluster, StackConfig, StackEndpoint, StackEvent, StackNwk,
+    StackZcl, StackZdo, ZclFrame, ZdpData,
 };

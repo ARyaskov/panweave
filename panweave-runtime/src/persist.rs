@@ -47,11 +47,65 @@ const RECORD: usize = 512;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Restored {
-    /// No network data was stored: the device is factory new.
+    /// No usable network data was found: the device is factory new, or
+    /// what was stored cannot be used ([`Stack::restore_detail`] tells
+    /// which — a caller that forms a network must check it).
     FactoryNew,
     /// Network parameters and keys were restored; the runtime should
     /// rejoin (end devices) or resume (routers / coordinator).
     OnNetwork,
+}
+
+/// Why [`Stack::restore`] returned what it did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum RestoreDetail {
+    /// `restore` has not run (or failed with a storage error).
+    NotRun,
+    /// A network was restored.
+    Restored,
+    /// Neither the NIB nor the network keys are stored: factory new.
+    Empty,
+    /// Only one of the NIB and the network-key records is stored (an
+    /// interrupted formation, factory reset or write).
+    Incomplete,
+    /// A record is in a format this firmware does not know (written by a
+    /// newer one). It is left untouched.
+    UnknownFormat,
+    /// A record could not be decoded, or holds no active network key.
+    Malformed,
+}
+
+impl RestoreDetail {
+    /// Whether the storage genuinely holds no network: the only case in
+    /// which forming a new one cannot replace an existing one.
+    pub const fn is_empty(self) -> bool {
+        matches!(self, RestoreDetail::Empty)
+    }
+
+    /// A stable code (diagnostics).
+    pub const fn code(self) -> u8 {
+        match self {
+            RestoreDetail::NotRun => 0,
+            RestoreDetail::Restored => 1,
+            RestoreDetail::Empty => 2,
+            RestoreDetail::Incomplete => 3,
+            RestoreDetail::UnknownFormat => 4,
+            RestoreDetail::Malformed => 5,
+        }
+    }
+
+    /// A short name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            RestoreDetail::NotRun => "not-run",
+            RestoreDetail::Restored => "restored",
+            RestoreDetail::Empty => "empty",
+            RestoreDetail::Incomplete => "incomplete",
+            RestoreDetail::UnknownFormat => "unknown-format",
+            RestoreDetail::Malformed => "malformed",
+        }
+    }
 }
 
 fn record<S: Storage>(storage: &mut S, key: Key) -> Result<Option<Vec<u8, RECORD>>, StorageError> {
@@ -200,7 +254,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// scalar AIB attributes.
     pub fn persist_link_keys(&mut self) -> Result<(), StorageError> {
         self.storage.erase_kind(Kind::LinkKey)?;
-        let mut records: Vec<(u64, [u8; 48], usize), 8> = Vec::new();
+        let mut records: Vec<(u64, [u8; 48], usize), { crate::stack::LINK_KEYS }> = Vec::new();
         for e in self.aps.security.keys().iter() {
             let mut buf = [0u8; 48];
             let mut w = Writer::new(&mut buf);
@@ -229,7 +283,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         // storage trait has no enumeration. Format 2 appends the startup
         // attributes of Table 2-24 (apsDesignatedCoordinator,
         // apsChannelMaskList, apsUseExtendedPANID, apsUseInsecureJoin).
-        let mut buf = [0u8; 16 + 8 * 8 + 16 + 16];
+        let mut buf = [0u8; 16 + 8 * crate::stack::LINK_KEYS + 16 + 16];
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(AIB_FORMAT);
         let _ = w.u64_le(self.aps.aib.trust_center_address.0);
@@ -339,6 +393,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// last persisted reservation; the caller then calls
     /// [`Stack::resume`].
     pub fn restore(&mut self) -> Result<Restored, StorageError> {
+        self.restore_detail = RestoreDetail::NotRun;
         // The outgoing NWK frame counter outlives a factory reset (BDB
         // 3.1 §13): continue past the last reservation either way.
         let mut fc = [0u8; 4];
@@ -352,12 +407,27 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 .restore_outgoing_counter(u32::from_le_bytes(fc));
         }
         self.restore_startup_sets()?;
-        let Some(nib) = record(&mut self.storage, Key::single(Kind::Nib))? else {
-            return Ok(Restored::FactoryNew);
+        let nib = record(&mut self.storage, Key::single(Kind::Nib))?;
+        let keys = record(&mut self.storage, Key::single(Kind::NetworkKeys))?;
+        let (nib, keys) = match (nib, keys) {
+            (Some(n), Some(k)) => (n, k),
+            (None, None) => {
+                self.restore_detail = RestoreDetail::Empty;
+                return Ok(Restored::FactoryNew);
+            }
+            _ => {
+                self.restore_detail = RestoreDetail::Incomplete;
+                return Ok(Restored::FactoryNew);
+            }
         };
-        let Some(keys) = record(&mut self.storage, Key::single(Kind::NetworkKeys))? else {
+        if nib.first() != Some(&NIB_FORMAT) || keys.first() != Some(&KEYS_FORMAT) {
+            self.restore_detail = if nib.is_empty() || keys.is_empty() {
+                RestoreDetail::Malformed
+            } else {
+                RestoreDetail::UnknownFormat
+            };
             return Ok(Restored::FactoryNew);
-        };
+        }
         let mut r = Reader::new(&nib);
         let parsed = (|| -> Result<(), panweave_codec::CodecError> {
             if r.u8()? != NIB_FORMAT {
@@ -383,6 +453,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Ok(())
         })();
         if parsed.is_err() {
+            self.restore_detail = RestoreDetail::Malformed;
             return Ok(Restored::FactoryNew);
         }
         let mut r = Reader::new(&keys);
@@ -405,11 +476,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             Ok(())
         })();
         if parsed.is_err() || !self.nwk.security.has_key() {
+            self.restore_detail = RestoreDetail::Malformed;
             return Ok(Restored::FactoryNew);
         }
         // Frame counter: continue after the last persisted reservation
         // (never reuse a value, §4.3.4).
-        let mut partners: Vec<u64, 8> = Vec::new();
+        let mut partners: Vec<u64, { crate::stack::LINK_KEYS }> = Vec::new();
         if let Some(aib) = record(&mut self.storage, Key::single(Kind::Aib))? {
             let mut r = Reader::new(&aib);
             let format = r.u8().ok();
@@ -453,7 +525,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         self.aps
             .set_network_state(short, DeviceState::JoinedAuthorized);
         self.phase = Phase::Operating;
+        self.restore_detail = RestoreDetail::Restored;
         Ok(Restored::OnNetwork)
+    }
+
+    /// Why the last [`Stack::restore`] returned what it did.
+    pub fn restore_detail(&self) -> RestoreDetail {
+        self.restore_detail
     }
 
     fn restore_link_keys(&mut self, partners: &[u64]) -> Result<(), StorageError> {

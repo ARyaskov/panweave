@@ -13,7 +13,10 @@ use panweave_hub::{Hub, HubConfig, hub_endpoint};
 use panweave_mac::service::MacServiceConfig;
 use panweave_runtime::{JoinMode, StackConfig, StackEvent};
 use panweave_sim::{App, OnOffApp, SimStack, Simulator};
-use panweave_storage::MemoryStorage;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use panweave_storage::{Key, Kind, MemoryStorage, Storage, StorageError};
 use panweave_testkit::TestRng;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
@@ -31,8 +34,59 @@ pub const CONTACT: u64 = 0x00AA_0000_0000_0003;
 pub const BULB: u64 = 0x00AA_0000_0000_0004;
 
 /// Registry storage of the tests: enough records of the NOR flash
-/// store's maximum size.
-pub type HubStore = MemoryStorage<40, 512>;
+/// store's maximum size, with injectable write faults.
+#[derive(Clone, Debug, Default)]
+pub struct HubStore {
+    inner: MemoryStorage<40, 512>,
+    /// Fault of every write while set: 0 none, 1 full, 2 I/O error.
+    /// Shared by clones (a "rebooted" hub keeps the fault).
+    fault: Arc<AtomicU8>,
+}
+
+impl HubStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Makes every write (store and erase) fail with `e` until cleared.
+    pub fn fail_writes(&self, e: Option<StorageError>) {
+        let code = match e {
+            None => 0,
+            Some(StorageError::Full) => 1,
+            Some(_) => 2,
+        };
+        self.fault.store(code, Ordering::SeqCst);
+    }
+
+    fn fault(&self) -> Result<(), StorageError> {
+        match self.fault.load(Ordering::SeqCst) {
+            0 => Ok(()),
+            1 => Err(StorageError::Full),
+            _ => Err(StorageError::Io),
+        }
+    }
+}
+
+impl Storage for HubStore {
+    fn store(&mut self, key: Key, data: &[u8]) -> Result<(), StorageError> {
+        self.fault()?;
+        self.inner.store(key, data)
+    }
+
+    fn load(&mut self, key: Key, buf: &mut [u8]) -> Result<Option<usize>, StorageError> {
+        self.inner.load(key, buf)
+    }
+
+    fn erase(&mut self, key: Key) -> Result<(), StorageError> {
+        self.fault()?;
+        self.inner.erase(key)
+    }
+
+    fn erase_kind(&mut self, kind: Kind) -> Result<(), StorageError> {
+        self.fault()?;
+        self.inner.erase_kind(kind)
+    }
+}
 
 /// The hub as a simulator application: stack events in, hub events
 /// collected for the test to inspect.
@@ -101,10 +155,21 @@ fn device_stack(
     model: &'static [u8],
     seed: u64,
 ) -> SimStack {
+    device_stack_as(ieee, role, sleepy, b"Sim Devices", model, seed)
+}
+
+fn device_stack_as(
+    ieee: u64,
+    role: LogicalDeviceType,
+    sleepy: bool,
+    manufacturer: &'static [u8],
+    model: &'static [u8],
+    seed: u64,
+) -> SimStack {
     let mut cfg = StackConfig::new(role, ExtendedAddress(ieee));
     cfg.sleepy = sleepy;
     cfg.poll_interval = Duration::from_millis(1000);
-    cfg.manufacturer_name = b"Sim Devices";
+    cfg.manufacturer_name = manufacturer;
     cfg.model = model;
     SimStack::new(
         cfg,
@@ -121,7 +186,27 @@ pub fn zone_sensor(
     enroll: EnrollMode,
     model: &'static [u8],
 ) -> SimStack {
-    let mut s = device_stack(ieee, LogicalDeviceType::EndDevice, true, model, ieee);
+    zone_sensor_as(ieee, zone_type, enroll, b"Sim Devices", model)
+}
+
+/// [`zone_sensor`] reporting `manufacturer` / `model` in its Basic
+/// cluster: a *synthetic emulation* of a commercial device's identity
+/// (the rest of its behaviour is the simulator's standard IAS sensor).
+pub fn zone_sensor_as(
+    ieee: u64,
+    zone_type: u16,
+    enroll: EnrollMode,
+    manufacturer: &'static [u8],
+    model: &'static [u8],
+) -> SimStack {
+    let mut s = device_stack_as(
+        ieee,
+        LogicalDeviceType::EndDevice,
+        true,
+        manufacturer,
+        model,
+        ieee,
+    );
     let mut ep = EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION);
     ep.add_instance(identify::server().unwrap()).unwrap();
     ep.add_instance(power_configuration::battery_server(30).unwrap())

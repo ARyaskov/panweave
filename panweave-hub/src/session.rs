@@ -15,10 +15,11 @@ use panweave_security::cipher::BlockCipher;
 use panweave_storage::Storage;
 use panweave_types::CryptoRng;
 
+use crate::diag::{Category, DiagRecord, Severity, code};
 use crate::hub::Hub;
 pub use crate::protocol::Access;
 use crate::protocol::frame::{FrameDecoder, FrameError, MAX_WIRE};
-use crate::protocol::{ErrorCode, Message, ProtocolError, Request, Response};
+use crate::protocol::{ErrorCode, Message, ProtocolError, QueueUsage, Request, Response};
 
 /// Counters of one session.
 #[derive(Clone, Copy, Debug, Default)]
@@ -39,6 +40,10 @@ pub struct LinkStats {
     pub responses_dropped: u32,
     /// Bytes discarded from the transmit queue (host gone).
     pub discarded: u32,
+    /// Times the transmit queue was discarded.
+    pub discard_events: u32,
+    /// Most octets ever queued for transmission.
+    pub tx_high_water: u32,
 }
 
 /// A host session with a transmit queue of `TX` octets.
@@ -81,6 +86,8 @@ impl<const TX: usize> Session<TX> {
                 unauthorized: 0,
                 responses_dropped: 0,
                 discarded: 0,
+                discard_events: 0,
+                tx_high_water: 0,
             },
         }
     }
@@ -110,10 +117,20 @@ impl<const TX: usize> Session<TX> {
                 }
                 Some(Err(FrameError::TooLarge)) => {
                     self.stats.oversize += 1;
+                    hub.log(DiagRecord::new(
+                        Category::Usb,
+                        Severity::Warning,
+                        code::USB_FRAME_OVERSIZE,
+                    ));
                     continue;
                 }
                 Some(Err(_)) => {
                     self.stats.corrupt += 1;
+                    hub.log(DiagRecord::new(
+                        Category::Usb,
+                        Severity::Warning,
+                        code::USB_FRAME_CORRUPT,
+                    ));
                     continue;
                 }
             };
@@ -135,6 +152,10 @@ impl<const TX: usize> Session<TX> {
             Ok(Message::Request { id, request }) => {
                 let response = if request.required_access() > self.access {
                     self.stats.unauthorized += 1;
+                    hub.log(
+                        DiagRecord::new(Category::Usb, Severity::Warning, code::USB_UNAUTHORIZED)
+                            .arg(u32::from(id)),
+                    );
                     Response::Error(ErrorCode::Unauthorized)
                 } else {
                     let mut r = hub.handle(stack, &request);
@@ -148,14 +169,34 @@ impl<const TX: usize> Session<TX> {
                         d.unauthorized = self.stats.unauthorized;
                         d.responses_dropped = self.stats.responses_dropped;
                     }
+                    if let (Request::GetRuntimeDiagnostics, Response::RuntimeDiagnostics(d)) =
+                        (&request, &mut r)
+                    {
+                        d.session_tx = QueueUsage {
+                            len: u16::try_from(self.tx.len()).unwrap_or(u16::MAX),
+                            capacity: u16::try_from(TX).unwrap_or(u16::MAX),
+                            high_water: u16::try_from(self.stats.tx_high_water).unwrap_or(u16::MAX),
+                        };
+                        d.usb_discards = self.stats.discard_events;
+                    }
                     r
                 };
-                self.respond(id, response);
+                if !self.respond(id, response) {
+                    hub.log(DiagRecord::new(
+                        Category::Usb,
+                        Severity::Error,
+                        code::USB_RESPONSE_DROPPED,
+                    ));
+                }
                 true
             }
             Ok(_) => {
                 // Hosts send requests only.
                 self.stats.malformed += 1;
+                hub.log(
+                    DiagRecord::new(Category::Usb, Severity::Warning, code::USB_REQUEST_REJECTED)
+                        .status(ErrorCode::Malformed.code()),
+                );
                 false
             }
             Err(e) => {
@@ -169,6 +210,10 @@ impl<const TX: usize> Session<TX> {
                     }
                     _ => (Message::request_id(body), ErrorCode::Malformed),
                 };
+                hub.log(
+                    DiagRecord::new(Category::Usb, Severity::Warning, code::USB_REQUEST_REJECTED)
+                        .status(code.code()),
+                );
                 if let Some(id) = id {
                     self.respond(id, Response::Error(code));
                 }
@@ -185,10 +230,13 @@ impl<const TX: usize> Session<TX> {
             let _ = self.tx.push_back(b);
         }
         self.stats.frames_tx += 1;
+        let queued = u32::try_from(self.tx.len()).unwrap_or(u32::MAX);
+        self.stats.tx_high_water = self.stats.tx_high_water.max(queued);
         true
     }
 
-    fn respond(&mut self, id: u16, response: Response) {
+    /// Queues a response; `false` when it had to be dropped.
+    fn respond(&mut self, id: u16, response: Response) -> bool {
         let mut wire = [0u8; MAX_WIRE];
         let msg = Message::Response { id, response };
         let n = match msg.encode_frame(&mut wire) {
@@ -204,7 +252,9 @@ impl<const TX: usize> Session<TX> {
         };
         if !self.enqueue(&wire[..n]) {
             self.stats.responses_dropped += 1;
+            return false;
         }
+        true
     }
 
     /// Moves hub events into the transmit queue while room remains for a
@@ -253,13 +303,18 @@ impl<const TX: usize> Session<TX> {
     }
 
     /// Drops everything queued (the host went away); a reconnecting host
-    /// then starts at a frame boundary.
-    pub fn discard_tx(&mut self) {
+    /// then starts at a frame boundary. Returns the octets dropped.
+    pub fn discard_tx(&mut self) -> usize {
+        let n = self.tx.len();
+        if n > 0 {
+            self.stats.discard_events = self.stats.discard_events.saturating_add(1);
+        }
         self.stats.discarded = self
             .stats
             .discarded
-            .saturating_add(u32::try_from(self.tx.len()).unwrap_or(u32::MAX));
+            .saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
         self.tx.clear();
+        n
     }
 
     /// Forgets a partially received frame (after a transport reset).

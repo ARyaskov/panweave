@@ -28,9 +28,10 @@
 
 pub mod board;
 pub mod hub;
+pub mod memory;
 pub mod radio;
 pub mod runner;
 
 pub use board::{Board, FlashStore, Rng, SharedStore};
 pub use radio::Radio;
-pub use runner::{Runner, now};
+pub use runner::{Runner, Traffic, now};

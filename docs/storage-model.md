@@ -20,7 +20,7 @@ a format octet so that a later layout can migrate or reject old data.
 | `NwkFrameCounter` | outgoing NWK frame-counter reservation bound | before the reservation is used | integrity-critical |
 | `LinkKey` (per partner) | key, kind (global / unique), attributes, incoming counter, outgoing reservation bound, frame-counter-sync flag | `ApsAction::Persist(LinkKeys)` | yes |
 | `ApsFrameCounter` (per partner) | outgoing APS frame-counter reservation bound | before the reservation is used | integrity-critical |
-| `Aib` | Trust Center address and the index of `LinkKey` partners | with `LinkKey` | no |
+| `Aib` | Trust Center address and the index of `LinkKey` partners (up to `LINK_KEYS` = 32, 8 with `small-tables`) | with `LinkKey` | no |
 | `Bindings` | binding table (§2.2.8.1) | `ApsAction::Persist(Bindings)`, ZDO Bind / Unbind / Clear_All_Bindings | no |
 | `Groups` | group table | `ApsAction::Persist(Groups)` | no |
 | `GreenPower` | one Proxy Table entry per `id` (index 0–19) in the OTA format of GP Basic §A.3.4.2.2.1; one Sink Table entry per `id` 0x100 + index in the format of §A.3.3.2.2.1 | `ProxyEvent::TableChanged` / `SinkEvent::TableChanged` (pairings, forwarded and accepted frames update the counter) | counter: monotonic per GPD, never rolled back |
@@ -93,6 +93,23 @@ under the new key.
    started (§3.6.1.12) and children get a full timeout period
    (§3.6.10.8). Returns `Restored::OnNetwork`.
 2. Otherwise nothing is touched and `Restored::FactoryNew` is returned.
+   `Stack::restore_detail()` says why, because "no usable network" is not
+   always "factory new":
+
+   | `RestoreDetail` | Storage |
+   |---|---|
+   | `Empty` | neither `Nib` nor `NetworkKeys`: factory new |
+   | `Incomplete` | only one of them (an interrupted formation, factory reset or write) |
+   | `UnknownFormat` | a record in a format this firmware does not know (a newer firmware's) |
+   | `Malformed` | a record that does not decode, or keys without an active one |
+
+   A storage error is returned as `Err` (nothing restored,
+   `RestoreDetail::NotRun`); calling `restore` again later is safe.
+   `restore` never writes, so whatever is stored stays for a later
+   firmware or an operator. Only `Empty` should lead an application to
+   form a network: the hub's policy is `NetworkRestore::decide`
+   (`docs/esp32c6-hub.md`), tested with every state above in
+   `panweave-runtime/tests/restore_detail.rs`.
 
 `Stack::resume()` then continues per BDB 3.1 §10.1: the coordinator and
 routers restart routing and re-announce; end devices perform a secured
@@ -116,3 +133,32 @@ collide with entries still live in peers' duplicate rejection tables
 
 * `MemoryStorage<N, S>` (tests, simulation and RAM-only deployments).
 * File and flash-journal backends are planned (`TODO(PW-STO-004)`).
+
+## Trust Center authorization state
+
+Whether a device completed the key exchange the Trust Center requires
+(`panweave_runtime::authorization`) is not stored separately: it is
+derived from the device's `LinkKey` record (a unique key with the
+verified attribute). The key-exchange window of a pending device lives in
+RAM only, so a restart can never turn a pending device into an authorized
+one; it simply has no access until it rejoins and completes the
+exchange. Exemptions from the requirement are the application's to
+store (the hub keeps them in its registry records as an optional trailing
+flag octet, written only when set, so records without it are unchanged).
+Only *admitted* exemptions (a device that joined under one) are
+persisted; an unused commissioning grant lives in RAM and ends at a
+restart, so a reboot never reopens a grant window. The held-frame queue
+and the address-resolution requests of application-frame authorization
+are RAM only as well.
+
+## Supervisor reset record
+
+When the hub's health supervisor lets the watchdog reset the chip after
+a confirmed stall, it first stores one small record in the hub's own
+store: `Kind::Application`, id `0xFFFF_FFFF_FFFF_FFFE`, six octets —
+format version 1, the stall cause (1 radio driver, 2 stack progress) and
+the uptime in seconds (little endian). The next boot reads it, logs
+`previous-stall-reset` and erases it, so it is reported exactly once.
+It is written only on that path (never during normal operation), holds
+no key or address, and a store that cannot take it simply loses the
+report, not the reset.

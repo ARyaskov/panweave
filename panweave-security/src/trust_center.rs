@@ -118,9 +118,18 @@ pub struct TrustCenterPolicy {
     pub allow_remote_policy_change: bool,
     /// `allowVirtualDevices` (Zigbee Direct ZVDs).
     pub allow_virtual_devices: bool,
-    /// BDB `bdbTrustCenterRequireKeyExchange`: joiners must complete the
-    /// TCLK exchange or be removed.
+    /// BDB `bdbTrustCenterRequireKeyExchange`: a joiner must replace its
+    /// initial link key with a unique Trust Center link key and verify it
+    /// (APS Request Key / Transport Key / Verify Key, or a dynamic link
+    /// key negotiation) within [`Self::node_join_timeout_s`], or it is
+    /// removed. Until then it is not authorized for application traffic
+    /// (`panweave-runtime`'s `authorization` module enforces it).
     pub require_key_exchange: bool,
+    /// BDB `bdbTrustCenterNodeJoinTimeout`, seconds: how long a joiner
+    /// that received the network key has to complete the key exchange
+    /// required by [`Self::require_key_exchange`]. Default 15 (BDB 3.1
+    /// Table 3).
+    pub node_join_timeout_s: u16,
     /// Whether dynamic link key negotiation is offered.
     pub dlk_enabled: bool,
     /// Device interview (BDB 3.1 §9.9, R23.2 §4.7.3.3): after a joiner's
@@ -143,6 +152,7 @@ impl Default for TrustCenterPolicy {
             allow_remote_policy_change: true,
             allow_virtual_devices: false,
             require_key_exchange: true,
+            node_join_timeout_s: 15,
             dlk_enabled: true,
             interview_joiners: false,
         }

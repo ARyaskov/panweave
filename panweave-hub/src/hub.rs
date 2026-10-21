@@ -21,6 +21,9 @@ use panweave_zcl::global::{
 use panweave_zcl::{Direction, FrameType, Header};
 use panweave_zdo::zdp::{BindReq, MgmtLeaveReq, StatusRsp, cluster as zdp};
 
+#[cfg(feature = "radio-capture")]
+use crate::capture::CaptureBuffer;
+use crate::diag::{Category, DiagLog, DiagRecord, Severity, code};
 use crate::model::{
     ContactState, DeviceState, Flag, InterviewStatus, LeakState, PowerSource, brightness_to_level,
 };
@@ -28,19 +31,26 @@ use crate::persist;
 use crate::protocol::{
     AttributeData, CommandStage, DEVICE_PAGE, DeviceList, Diagnostics, ErrorCode, Event, HubInfo,
     LightCommand, MAX_FIRMWARE, MAX_PERMIT_JOIN_SECONDS, NetworkInfo, NetworkState, NetworkStatus,
-    Request, Response, SensorEvent, VERSION,
+    Request, Response, SensorEvent, TargetMetrics, VERSION,
 };
+use crate::protocol::{BootReport, NetworkRestore, RadioDriverStats, StoreUsage};
 use crate::registry::{Device, MAX_DEVICES, NO_SHORT, Registry, cluster};
 use crate::zcl::{self, Applied, Report, ias_cmd};
 
 /// Hub events kept for the host.
-const EVENT_CAPACITY: usize = 32;
+pub(crate) const EVENT_CAPACITY: usize = 32;
+/// Records the diagnostic trace keeps (32 octets each).
+pub const DIAG_CAPACITY: usize = 128;
+/// Frames the capture queue holds (about 150 octets each; only with the
+/// `radio-capture` feature).
+#[cfg(feature = "radio-capture")]
+pub const CAPTURE_FRAMES: usize = 16;
 /// Zigbee transactions awaited at once.
-const MAX_PENDING: usize = 10;
+pub(crate) const MAX_PENDING: usize = 10;
 /// ZDP transactions awaited at once (the stack's ZDO tracks four).
 const MAX_PENDING_ZDP: usize = 3;
 /// Host commands in flight.
-const MAX_COMMANDS: usize = 8;
+pub(crate) const MAX_COMMANDS: usize = 8;
 /// Device records written per poll (bounds the time a poll can take).
 const WRITES_PER_POLL: usize = 2;
 /// Pause between two hub-initiated frames to a sleepy device. Its parent
@@ -117,20 +127,53 @@ pub struct HubCounters {
     pub storage_errors: u32,
     /// Devices refused because the registry was full.
     pub registry_full: u32,
+    /// Registry writes refused because the storage was full.
+    pub storage_full: u32,
+    /// Device records skipped at restore.
+    pub records_skipped: u32,
+    /// The last storage error (0 full, 1 I/O, 2 buffer too small).
+    pub last_storage_error: Option<u8>,
 }
 
-/// Counters of the platform (radio driver, stack) for diagnostics; the
-/// firmware updates them.
+/// Counters and state of the platform (radio driver, stores, main loop,
+/// USB) for diagnostics; the firmware updates them. Values a platform
+/// does not have stay `None` (the simulator has no radio driver).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlatformCounters {
     /// Radio frames received.
     pub radio_rx: u32,
     /// Radio frames transmitted.
     pub radio_tx: u32,
-    /// Radio frames dropped by the driver.
+    /// Radio frames dropped by the driver adapter (malformed buffers).
     pub radio_dropped: u32,
     /// Stack events dropped.
     pub stack_events_dropped: u32,
+    /// The radio driver adapter's counters.
+    pub driver: Option<RadioDriverStats>,
+    /// Transmit power, dBm.
+    pub tx_power_dbm: Option<i8>,
+    /// Energy detection works on this radio.
+    pub energy_detection: bool,
+    /// Main loop turns.
+    pub loop_iterations: Option<u32>,
+    /// Longest main loop turn, µs.
+    pub loop_max_us: Option<u32>,
+    /// Main loop turns over the overrun limit.
+    pub loop_overruns: Option<u32>,
+    /// Longest radio processing step, µs.
+    pub radio_step_max_us: Option<u32>,
+    /// Watchdog timeout, seconds.
+    pub watchdog_s: Option<u16>,
+    /// Octets received from the host.
+    pub usb_rx_bytes: Option<u32>,
+    /// Octets sent to the host.
+    pub usb_tx_bytes: Option<u32>,
+    /// The stack's flash store.
+    pub stack_store: Option<StoreUsage>,
+    /// The registry's flash store.
+    pub hub_store: Option<StoreUsage>,
+    /// Target memory and timing measurements.
+    pub target: TargetMetrics,
 }
 
 /// Who awaits a transaction.
@@ -191,7 +234,7 @@ struct HostCommand {
 /// The hub.
 pub struct Hub<HS: Storage> {
     pub(crate) config: HubConfig,
-    storage: HS,
+    pub(crate) storage: HS,
     pub(crate) registry: Registry,
     pub(crate) pending: Vec<Pending, MAX_PENDING>,
     commands: Vec<HostCommand, MAX_COMMANDS>,
@@ -210,6 +253,28 @@ pub struct Hub<HS: Storage> {
     pub counters: HubCounters,
     /// Platform counters (updated by the firmware).
     pub platform: PlatformCounters,
+    /// The diagnostic trace.
+    pub(crate) diag: DiagLog<DIAG_CAPACITY>,
+    /// Captured radio frames.
+    #[cfg(feature = "radio-capture")]
+    pub(crate) capture: CaptureBuffer<CAPTURE_FRAMES>,
+    /// What the hub found at boot.
+    pub(crate) boot: BootReport,
+    /// What happened to the network at boot.
+    pub(crate) network_restore: Option<NetworkRestore>,
+    /// High-water marks: events, pending, commands.
+    pub(crate) high_water: [u16; 3],
+    /// Stack events dropped as last seen (to log new drops once).
+    pub(crate) stack_drops_seen: u32,
+    /// Join milestones the stack dropped, as last seen.
+    pub(crate) join_drops_seen: u32,
+    /// When the previous join milestone of each recent device happened.
+    pub(crate) join_last: Vec<(u64, Instant), 4>,
+    /// Key-exchange exemptions waiting for their device to join, with
+    /// the end of their window.
+    pub(crate) exemption_grants: Vec<(u64, Instant), { crate::protocol::MAX_EXEMPTIONS }>,
+    /// The persisted exemptions were applied to the stack.
+    pub(crate) exemptions_applied: bool,
 }
 
 impl<HS: Storage> core::fmt::Debug for Hub<HS> {
@@ -258,6 +323,17 @@ impl<HS: Storage> Hub<HS> {
             storage_failing: false,
             counters: HubCounters::default(),
             platform: PlatformCounters::default(),
+            diag: DiagLog::new(),
+            #[cfg(feature = "radio-capture")]
+            capture: CaptureBuffer::new(),
+            boot: BootReport::default(),
+            network_restore: None,
+            high_water: [0; 3],
+            stack_drops_seen: 0,
+            join_drops_seen: 0,
+            join_last: Vec::new(),
+            exemption_grants: Vec::new(),
+            exemptions_applied: false,
         }
     }
 
@@ -276,14 +352,35 @@ impl<HS: Storage> Hub<HS> {
     /// next heard; unfinished interviews resume.
     pub fn restore(&mut self) -> Result<usize, StorageError> {
         if !self.config.persistent {
+            self.log(DiagRecord::new(
+                Category::Boot,
+                Severity::Warning,
+                code::REGISTRY_RAM_ONLY,
+            ));
             return Ok(0);
         }
         let mut buf = [0u8; persist::MAX_RECORD];
-        let Some(n) = self.storage.load(persist::index_key(), &mut buf)? else {
-            return Ok(0);
+        let index = match self.storage.load(persist::index_key(), &mut buf) {
+            Ok(Some(n)) => n,
+            Ok(None) => {
+                self.log(
+                    DiagRecord::new(Category::Boot, Severity::Info, code::REGISTRY_RESTORED).arg(0),
+                );
+                return Ok(0);
+            }
+            Err(e) => {
+                self.storage_error(e);
+                return Err(e);
+            }
         };
+        let n = index;
         let Ok(index) = persist::decode_index(buf.get(..n).unwrap_or(&[])) else {
             self.counters.storage_errors += 1;
+            self.log(DiagRecord::new(
+                Category::Persistence,
+                Severity::Error,
+                code::INDEX_CORRUPT,
+            ));
             self.emit(Event::HubError {
                 error: ErrorCode::StorageFailure,
                 detail: 0,
@@ -296,7 +393,7 @@ impl<HS: Storage> Hub<HS> {
                 Ok(Some(n)) => persist::decode_device(buf.get(..n).unwrap_or(&[])).ok(),
                 Ok(None) => None,
                 Err(e) => {
-                    self.counters.storage_errors += 1;
+                    self.storage_error(e);
                     return Err(e);
                 }
             };
@@ -312,16 +409,32 @@ impl<HS: Storage> Hub<HS> {
                     }
                     let _ = self.registry.restore(d);
                 }
-                _ => skipped = skipped.saturating_add(1),
+                _ => {
+                    skipped = skipped.saturating_add(1);
+                    self.log(
+                        DiagRecord::new(
+                            Category::Persistence,
+                            Severity::Error,
+                            code::RECORD_SKIPPED,
+                        )
+                        .ieee(ieee),
+                    );
+                }
             }
         }
+        self.log(
+            DiagRecord::new(Category::Boot, Severity::Info, code::REGISTRY_RESTORED)
+                .arg(u32::try_from(self.registry.len()).unwrap_or(u32::MAX)),
+        );
         if skipped > 0 {
             self.counters.storage_errors += u32::from(skipped);
+            self.counters.records_skipped += u32::from(skipped);
             self.emit(Event::HubError {
                 error: ErrorCode::StorageFailure,
                 detail: skipped,
             });
         }
+        self.take_previous_stall_reset();
         Ok(self.registry.len())
     }
 
@@ -366,6 +479,8 @@ impl<HS: Storage> Hub<HS> {
         self.permit_until = None;
         self.joins_until = None;
         self.network = None;
+        self.exemption_grants.clear();
+        self.exemptions_applied = false;
         self.storage.erase_kind(panweave_storage::Kind::Application)
     }
 
@@ -379,9 +494,16 @@ impl<HS: Storage> Hub<HS> {
             let _ = self.events.push_back(Event::EventsDropped { count });
         }
         if self.events.push_back(e).is_err() {
+            if self.unreported_drops == 0 {
+                self.log(
+                    DiagRecord::new(Category::Resources, Severity::Warning, code::EVENTS_DROPPED)
+                        .arg(1),
+                );
+            }
             self.unreported_drops = self.unreported_drops.saturating_add(1);
             self.counters.events_dropped = self.counters.events_dropped.saturating_add(1);
         }
+        self.note_high_water();
     }
 
     /// The next event for the host.
@@ -402,6 +524,11 @@ impl<HS: Storage> Hub<HS> {
     /// Events waiting for the host.
     pub fn pending_events(&self) -> usize {
         self.events.len()
+    }
+
+    /// Host commands in flight.
+    pub(crate) fn commands_len(&self) -> usize {
+        self.commands.len()
     }
 
     fn emit_state_events(&mut self, ieee: u64, before: &DeviceState, after: &DeviceState) {
@@ -456,24 +583,73 @@ impl<HS: Storage> Hub<HS> {
             StackEvent::NetworkFormed { .. } => {
                 let info = Self::network_info(stack);
                 self.network = Some(info);
+                self.log(
+                    DiagRecord::new(Category::Boot, Severity::Info, code::NETWORK_FORMED)
+                        .arg(u32::from(info.channel)),
+                );
                 self.emit(Event::NetworkStarted(info));
             }
-            StackEvent::FormationFailed(_) => {
+            StackEvent::FormationFailed(status) => {
                 self.network = None;
+                self.log(
+                    DiagRecord::new(Category::Boot, Severity::Critical, code::FORMATION_FAILED)
+                        .status(status.raw()),
+                );
                 self.emit(Event::HubError {
                     error: ErrorCode::NetworkDown,
                     detail: 0,
                 });
             }
             StackEvent::DeviceAuthorized { ieee, short } => {
+                self.log(
+                    DiagRecord::new(
+                        Category::Commissioning,
+                        Severity::Info,
+                        code::DEVICE_AUTHORIZED,
+                    )
+                    .ieee(ieee.0)
+                    .short(short.0),
+                );
                 self.device_joined(ieee.0, short.0, None);
+                self.after_authorized(stack, ieee.0);
+            }
+            StackEvent::KeyExchangePending { ieee, .. } => {
+                self.on_key_exchange_pending(stack, ieee.0);
+            }
+            StackEvent::KeyExchangeTimedOut { ieee } => {
+                // Removed by the Trust Center (logged with the join
+                // milestones); a registered device is no longer present.
+                self.device_left(ieee.0);
             }
             StackEvent::DeviceAnnounce {
                 ieee,
                 short,
                 capability,
-            } => self.device_joined(ieee.0, short.0, Some(*capability)),
+            } => {
+                self.log(
+                    DiagRecord::new(
+                        Category::Commissioning,
+                        Severity::Info,
+                        code::DEVICE_ANNOUNCED,
+                    )
+                    .ieee(ieee.0)
+                    .short(short.0)
+                    .status(capability.raw()),
+                );
+                // A device still in (or past) its key-exchange window is
+                // not the hub's to register or interview.
+                if Self::may_serve(stack, ieee.0) {
+                    self.device_joined(ieee.0, short.0, Some(*capability));
+                } else {
+                    self.log_not_authorized(stack, ieee.0, Some(short.0));
+                }
+            }
             StackEvent::DeviceLeft { ieee, rejoin } => {
+                self.log(
+                    DiagRecord::new(Category::Commissioning, Severity::Info, code::DEVICE_LEFT)
+                        .ieee(ieee.0)
+                        .status(u8::from(*rejoin)),
+                );
                 if !rejoin {
                     self.device_left(ieee.0);
                 }
@@ -482,7 +658,19 @@ impl<HS: Storage> Hub<HS> {
                 self.heard(stack, z.src.0);
                 self.on_reply(stack, z.src.0, Wait::Zdp(z.seq.0), Reply::Zdp(z));
             }
-            StackEvent::ZdpTimeout { seq, dst, .. } => {
+            StackEvent::ZdpTimeout { seq, dst, cluster } => {
+                let ieee = self
+                    .registry
+                    .index_of_short(dst.0)
+                    .and_then(|i| self.registry.at(i));
+                let mut rec = DiagRecord::new(Category::Zdo, Severity::Warning, code::ZDP_TIMEOUT)
+                    .short(dst.0)
+                    .cluster(cluster.0)
+                    .tsn(seq.0);
+                if let Some(d) = ieee {
+                    rec = rec.ieee(d.ieee);
+                }
+                self.log(rec);
                 self.on_reply(stack, dst.0, Wait::Zdp(seq.0), Reply::Timeout);
             }
             StackEvent::ZclResponse(f) => {
@@ -515,10 +703,20 @@ impl<HS: Storage> Hub<HS> {
             return;
         }
         let now = self.now;
+        let old_short = self.registry.get(ieee).map(|d| d.short);
         let (i, new) = match self.registry.upsert(ieee, short) {
             Ok(r) => r,
             Err(_) => {
                 self.counters.registry_full += 1;
+                self.log(
+                    DiagRecord::new(
+                        Category::Commissioning,
+                        Severity::Error,
+                        code::REGISTRY_FULL,
+                    )
+                    .ieee(ieee)
+                    .short(short),
+                );
                 self.emit(Event::HubError {
                     error: ErrorCode::RegistryFull,
                     detail: u16::try_from(MAX_DEVICES).unwrap_or(u16::MAX),
@@ -532,7 +730,10 @@ impl<HS: Storage> Hub<HS> {
         };
         if let Some(c) = capability {
             d.rx_on_when_idle = Some(c.rx_on_when_idle());
-            if c.is_mains_powered() && d.power_source == PowerSource::Unknown {
+            if c.is_mains_powered()
+                && d.power_source == PowerSource::Unknown
+                && !d.ignores_mac_mains_claim()
+            {
                 d.power_source = PowerSource::Mains;
             }
         }
@@ -570,6 +771,37 @@ impl<HS: Storage> Hub<HS> {
             }
         }
         self.schedule_persist();
+        if let Some(old) = old_short
+            && old != short
+        {
+            self.log(
+                DiagRecord::new(
+                    Category::Commissioning,
+                    Severity::Info,
+                    code::ADDRESS_CHANGED,
+                )
+                .ieee(ieee)
+                .short(short)
+                .arg(u32::from(old)),
+            );
+        }
+        if new {
+            self.log(
+                DiagRecord::new(Category::Interview, Severity::Info, code::INTERVIEW_STARTED)
+                    .ieee(ieee)
+                    .short(short),
+            );
+        } else if report {
+            self.log(
+                DiagRecord::new(
+                    Category::Commissioning,
+                    Severity::Info,
+                    code::DEVICE_REJOINED,
+                )
+                .ieee(ieee)
+                .short(short),
+            );
+        }
         if report || !was_present {
             self.emit(Event::DeviceJoined {
                 ieee,
@@ -611,12 +843,31 @@ impl<HS: Storage> Hub<HS> {
         short: u16,
     ) -> Option<usize> {
         let now = self.now;
+        // Traffic from a device without application access neither
+        // registers it nor resumes its interview.
+        let known = self
+            .registry
+            .index_of_short(short)
+            .and_then(|i| self.registry.at(i))
+            .map(|d| d.ieee);
+        if !Self::may_serve(stack, known.or_else(|| ieee_of(stack, short))?) {
+            return None;
+        }
         let i = match self.registry.index_of_short(short) {
             Some(i) => i,
             None => {
                 let ieee = ieee_of(stack, short)?;
                 let (i, new) = self.registry.upsert(ieee, short).ok()?;
                 if new {
+                    self.log(
+                        DiagRecord::new(
+                            Category::Commissioning,
+                            Severity::Info,
+                            code::DEVICE_DISCOVERED,
+                        )
+                        .ieee(ieee)
+                        .short(short),
+                    );
                     self.index_dirty = true;
                     if let Some(d) = self.registry.at_mut(i) {
                         d.interview.status = InterviewStatus::InProgress;
@@ -647,6 +898,12 @@ impl<HS: Storage> Hub<HS> {
                 d.interview.status = InterviewStatus::InProgress;
                 d.interview.attempts = 0;
                 d.interview.due = Some(now);
+                let rec =
+                    DiagRecord::new(Category::Interview, Severity::Info, code::INTERVIEW_RESUMED)
+                        .ieee(d.ieee)
+                        .short(short)
+                        .arg(crate::interview::stage_arg(d));
+                self.log(rec);
             }
             InterviewStatus::InProgress if d.interview.attempts > 0 && !d.interview.busy => {
                 d.interview.due = Some(now);
@@ -694,6 +951,7 @@ impl<HS: Storage> Hub<HS> {
         let ieee = d.ieee;
         let before = d.state;
         let was_enrolled = d.zone.is_some_and(|z| z.enrolled);
+        let zone_type_before = d.zone.and_then(|z| z.zone_type);
         let mut identity = false;
         for (attribute, value) in values {
             let Some(d) = self.registry.at_mut(i) else {
@@ -714,14 +972,28 @@ impl<HS: Storage> Hub<HS> {
                 Applied::State | Applied::Unchanged | Applied::Unmapped => {}
             }
         }
+        // A zone status that arrived before the zone type was known (an
+        // early notification) is interpreted as soon as it is.
+        if let Some(d) = self.registry.at(i)
+            && zone_type_before.is_none()
+            && d.zone.and_then(|z| z.zone_type).is_some()
+            && let Some(status) = d.state.zone_status
+        {
+            self.ingest_zone_status(i, status);
+        }
         let Some(d) = self.registry.at_mut(i) else {
             return;
         };
         let caps = d.capabilities;
+        let power = d.power_source;
         if identity {
             d.dirty = true;
         }
         d.classify();
+        if d.power_source != power {
+            identity = true;
+            d.dirty = true;
+        }
         if d.capabilities != caps {
             d.dirty = true;
             identity = true;
@@ -740,7 +1012,14 @@ impl<HS: Storage> Hub<HS> {
             d.cie_address = None;
             d.dirty = true;
             identity = true;
+            let rec = DiagRecord::new(Category::IasZone, Severity::Warning, code::IAS_REENROLL)
+                .ieee(ieee)
+                .short(d.short);
+            self.log(rec);
         }
+        let Some(d) = self.registry.at(i) else {
+            return;
+        };
         let after = d.state;
         if identity {
             self.schedule_persist();
@@ -760,6 +1039,27 @@ impl<HS: Storage> Hub<HS> {
             || f.origin.header.command != global::READ_ATTRIBUTES_RESPONSE
         {
             return;
+        }
+        let ieee = self.registry.at(i).map_or(0, |d| d.ieee);
+        for r in Records::<ReadAttributeStatus>::new(&f.payload).map_while(Result::ok) {
+            if !r.status.is_success() {
+                // UNSUPPORTED_ATTRIBUTE is an answer, not a failure.
+                let severity = if r.status.raw() == 0x86 {
+                    Severity::Debug
+                } else {
+                    Severity::Warning
+                };
+                self.log(
+                    DiagRecord::new(Category::Zcl, severity, code::ZCL_ATTRIBUTE_ERROR)
+                        .ieee(ieee)
+                        .short(f.origin.src.0)
+                        .endpoint(f.origin.src_endpoint.0)
+                        .cluster(f.origin.cluster.0)
+                        .tsn(f.origin.header.seq.0)
+                        .status(r.status.raw())
+                        .arg(u32::from(r.id.0)),
+                );
+            }
         }
         let values = Records::<ReadAttributeStatus>::new(&f.payload)
             .map_while(Result::ok)
@@ -785,6 +1085,48 @@ impl<HS: Storage> Hub<HS> {
             crate::ias::OVERRIDES,
         );
         let r = crate::ias::interpret(map, status);
+        {
+            use crate::diag::ias_bits as b;
+            let overridden = crate::ias::OVERRIDES.iter().any(|o| {
+                o.manufacturer == d.manufacturer.as_slice() && o.model == d.model.as_slice()
+            });
+            let mut flags = 0;
+            if let Some(c) = r.contact {
+                flags |= b::CONTACT_KNOWN;
+                if c == ContactState::Open {
+                    flags |= b::CONTACT_OPEN;
+                }
+            }
+            if let Some(w) = r.water_leak {
+                flags |= b::LEAK_KNOWN;
+                if w == LeakState::Leak {
+                    flags |= b::LEAK;
+                }
+            }
+            if r.test {
+                flags |= b::TEST_MODE;
+            }
+            if overridden {
+                flags |= b::OVERRIDE;
+            }
+            if map.is_none() {
+                flags |= b::TYPE_UNKNOWN;
+            }
+            let mut rec = DiagRecord::new(Category::IasZone, Severity::Info, code::IAS_STATUS)
+                .ieee(d.ieee)
+                .short(d.short)
+                .arg(crate::diag::zone_status_arg(status, flags));
+            if let Some(z) = d.zone {
+                rec = rec.endpoint(z.endpoint);
+            }
+            self.diag.record(
+                rec,
+                u32::try_from(self.now.as_millis() & u64::from(u32::MAX)).unwrap_or(0),
+            );
+        }
+        let Some(d) = self.registry.at_mut(i) else {
+            return;
+        };
         d.state.zone_status = Some(status);
         if let Some(c) = r.contact {
             d.state.contact = c;
@@ -828,17 +1170,36 @@ impl<HS: Storage> Hub<HS> {
                 }
                 ias_cmd::ENROLL_REQUEST => self.on_enroll_request(stack, i, f),
                 _ => {
+                    self.log_unsupported(i, f);
                     let _ = stack
                         .zcl
                         .default_response(o, panweave_zcl::ZclStatus::UnsupportedClusterCommand);
                 }
             }
         } else {
+            self.log_unsupported(i, f);
             let _ = stack
                 .zcl
                 .default_response(o, panweave_zcl::ZclStatus::UnsupportedClusterCommand);
         }
         stack.flush();
+    }
+
+    fn log_unsupported(&mut self, i: Option<usize>, f: &ZclFrame) {
+        let mut rec = DiagRecord::new(
+            Category::Zcl,
+            Severity::Debug,
+            code::ZCL_UNSUPPORTED_COMMAND,
+        )
+        .short(f.origin.src.0)
+        .endpoint(f.origin.src_endpoint.0)
+        .cluster(f.origin.cluster.0)
+        .tsn(f.origin.header.seq.0)
+        .arg(u32::from(f.origin.header.command.0));
+        if let Some(d) = i.and_then(|i| self.registry.at(i)) {
+            rec = rec.ieee(d.ieee);
+        }
+        self.log(rec);
     }
 
     /// Zone Enroll Request (ZCL8 §8.2.2.4.2): the hub, as the CIE,
@@ -893,6 +1254,29 @@ impl<HS: Storage> Hub<HS> {
             None => (0x02, 0xff),
         };
         self.schedule_persist();
+        let ieee = i.and_then(|i| self.registry.at(i)).map(|d| d.ieee);
+        let mut req = DiagRecord::new(Category::IasZone, Severity::Info, code::IAS_ENROLL_REQUEST)
+            .short(f.origin.src.0)
+            .endpoint(src_endpoint)
+            .tsn(f.origin.header.seq.0);
+        let mut rsp = DiagRecord::new(Category::IasZone, Severity::Info, code::IAS_ENROLL_RESPONSE)
+            .short(f.origin.src.0)
+            .endpoint(src_endpoint)
+            .tsn(f.origin.header.seq.0)
+            .status(code)
+            .arg(u32::from(zone_id));
+        if let Some(t) = zone_type {
+            req = req.arg(u32::from(t));
+        }
+        if let Some(ieee) = ieee {
+            req = req.ieee(ieee);
+            rsp = rsp.ieee(ieee);
+        }
+        if code != 0 {
+            rsp.severity = Severity::Warning;
+        }
+        self.log(req);
+        self.log(rsp);
         // A response command: same transaction sequence number.
         let _ = stack.zcl.respond(
             &f.origin,
@@ -989,14 +1373,26 @@ impl<HS: Storage> Hub<HS> {
     pub fn poll<C: BlockCipher, R: CryptoRng, S: Storage>(&mut self, stack: &mut Stack<C, R, S>) {
         self.now = stack.now();
         let now = self.now;
+        self.poll_diagnostics(stack);
+        self.poll_security(stack);
         self.expire(stack);
         if self.permit_until.is_some_and(|t| now.has_reached(t)) {
             self.permit_until = None;
+            self.log(DiagRecord::new(
+                Category::Commissioning,
+                Severity::Info,
+                code::PERMIT_JOIN_CLOSED,
+            ));
             self.emit(Event::PermitJoinChanged { seconds: 0 });
         }
         if self.joins_until.is_some_and(|t| now.has_reached(t)) {
             self.joins_until = None;
             stack.config.trust_center_policy.allow_joins = false;
+            self.log(DiagRecord::new(
+                Category::Commissioning,
+                Severity::Info,
+                code::JOINS_REFUSED_AGAIN,
+            ));
         }
         if stack.is_operating() {
             self.run_interviews(stack);
@@ -1246,8 +1642,27 @@ impl<HS: Storage> Hub<HS> {
         }
     }
 
-    fn storage_failed(&mut self) {
+    /// Counts and logs a storage error (also used by the firmware for
+    /// the stack's storage at boot).
+    pub fn storage_error(&mut self, e: StorageError) {
+        let code = match e {
+            StorageError::Full => 0,
+            StorageError::Io => 1,
+            StorageError::BufferTooSmall => 2,
+        };
         self.counters.storage_errors = self.counters.storage_errors.saturating_add(1);
+        if e == StorageError::Full {
+            self.counters.storage_full = self.counters.storage_full.saturating_add(1);
+        }
+        self.counters.last_storage_error = Some(code);
+        self.log(
+            DiagRecord::new(Category::Persistence, Severity::Error, code::STORE_FAILED)
+                .status(code),
+        );
+    }
+
+    fn storage_failed(&mut self, e: StorageError) {
+        self.storage_error(e);
         if !self.storage_failing {
             self.storage_failing = true;
             self.emit(Event::HubError {
@@ -1294,11 +1709,19 @@ impl<HS: Storage> Hub<HS> {
                     self.counters.storage_writes += 1;
                     self.storage_failing = false;
                     written += 1;
+                    self.log(
+                        DiagRecord::new(
+                            Category::Persistence,
+                            Severity::Debug,
+                            code::RECORD_WRITTEN,
+                        )
+                        .ieee(key.id),
+                    );
                     if let Some(d) = self.registry.at_mut(i) {
                         d.dirty = false;
                     }
                 }
-                Err(_) => return self.storage_failed(),
+                Err(e) => return self.storage_failed(e),
             }
         }
         if self.index_dirty {
@@ -1313,12 +1736,12 @@ impl<HS: Storage> Hub<HS> {
                     self.counters.storage_writes += 1;
                     self.index_dirty = false;
                 }
-                Err(_) => return self.storage_failed(),
+                Err(e) => return self.storage_failed(e),
             }
         }
         while let Some(&ieee) = self.erase_queue.first() {
-            if self.storage.erase(persist::device_key(ieee)).is_err() {
-                return self.storage_failed();
+            if let Err(e) = self.storage.erase(persist::device_key(ieee)) {
+                return self.storage_failed(e);
             }
             self.erase_queue.remove(0);
         }
@@ -1393,7 +1816,20 @@ impl<HS: Storage> Hub<HS> {
             self.permit_until = None;
             self.joins_until = None;
             stack.config.trust_center_policy.allow_joins = false;
+            self.log(DiagRecord::new(
+                Category::Commissioning,
+                Severity::Info,
+                code::PERMIT_JOIN_CLOSED,
+            ));
         } else {
+            self.log(
+                DiagRecord::new(
+                    Category::Commissioning,
+                    Severity::Info,
+                    code::PERMIT_JOIN_OPENED,
+                )
+                .arg(u32::from(seconds)),
+            );
             let window = Duration::from_secs(u64::from(seconds));
             let until = self.now.saturating_add(window);
             self.permit_until = Some(until);
@@ -1420,6 +1856,12 @@ impl<HS: Storage> Hub<HS> {
         request: &Request,
     ) -> Response {
         self.now = stack.now();
+        if let Some(r) = self.handle_diagnostics(stack, request) {
+            return r.unwrap_or_else(Response::Error);
+        }
+        if let Some(r) = self.handle_security(stack, request) {
+            return r.unwrap_or_else(Response::Error);
+        }
         let r = match request {
             Request::GetHubInfo => Ok(Response::HubInfo(HubInfo {
                 protocol_version: VERSION,
@@ -1558,6 +2000,20 @@ impl<HS: Storage> Hub<HS> {
                 .remove_device(stack, *ieee, *leave)
                 .map(|()| Response::Done),
             Request::GetDiagnostics => Ok(Response::Diagnostics(self.diagnostics())),
+            // Answered by `handle_diagnostics` above.
+            Request::GetBootReport
+            | Request::GetRadioDiagnostics
+            | Request::GetStorageDiagnostics
+            | Request::GetRuntimeDiagnostics
+            | Request::GetTraceConfiguration
+            | Request::SetTraceConfiguration { .. }
+            | Request::ReadTrace { .. }
+            | Request::ClearTrace
+            | Request::StartCapture { .. }
+            | Request::StopCapture
+            | Request::ReadCapture { .. }
+            | Request::SetKeyExchangeExemption { .. }
+            | Request::GetSecurityStatus => Err(ErrorCode::UnknownRequest),
         };
         r.unwrap_or_else(Response::Error)
     }
@@ -1572,6 +2028,7 @@ impl<HS: Storage> Hub<HS> {
     ) -> Result<(), ErrorCode> {
         let d = self.registry.get(ieee).ok_or(ErrorCode::UnknownDevice)?;
         let short = d.short;
+        self.drop_exemption(stack, ieee);
         if leave {
             if !stack.is_operating() {
                 return Err(ErrorCode::NetworkDown);
@@ -1680,6 +2137,7 @@ impl<HS: Storage> Hub<HS> {
         };
         let wait = self.transmit(stack, &cmd).ok_or(ErrorCode::SendFailed)?;
         cmd.stage = CommandStage::Sent;
+        self.log_command(&cmd, code::COMMAND_SENT, Severity::Debug, None);
         let _ = self.commands.push(cmd);
         if !self.track(Owner::Command(id), short, wait) {
             // Room was checked above; never leave a command untracked.
@@ -1740,11 +2198,37 @@ impl<HS: Storage> Hub<HS> {
         }
     }
 
+    fn log_command(&mut self, c: &HostCommand, which: u16, severity: Severity, status: Option<u8>) {
+        let cluster_id = match c.kind {
+            CommandKind::Light(LightCommand::SetBrightness { .. }) => cluster::LEVEL,
+            CommandKind::Light(_) => cluster::ON_OFF,
+            CommandKind::Read { cluster, .. }
+            | CommandKind::Configure { cluster, .. }
+            | CommandKind::Bind { cluster } => cluster,
+        };
+        let mut rec = DiagRecord::new(Category::Zcl, severity, which)
+            .ieee(c.ieee)
+            .short(c.short)
+            .endpoint(c.endpoint)
+            .cluster(cluster_id)
+            .arg(u32::from(c.id));
+        if let Some(s) = status {
+            rec = rec.status(s);
+        }
+        self.log(rec);
+    }
+
     fn finish_command_ok(&mut self, id: u16, stage: CommandStage, value: Option<AttributeData>) {
         let Some(at) = self.commands.iter().position(|c| c.id == id) else {
             return;
         };
         let c = self.commands.swap_remove(at);
+        let which = if stage == CommandStage::Confirmed {
+            code::COMMAND_CONFIRMED
+        } else {
+            code::COMMAND_RESPONDED
+        };
+        self.log_command(&c, which, Severity::Info, None);
         self.emit(Event::CommandCompleted {
             command: id,
             ieee: c.ieee,
@@ -1759,6 +2243,12 @@ impl<HS: Storage> Hub<HS> {
         };
         let c = self.commands.swap_remove(at);
         self.pending.retain(|p| p.owner != Owner::Command(id));
+        let which = if error == ErrorCode::Timeout {
+            code::COMMAND_TIMEOUT
+        } else {
+            code::COMMAND_FAILED
+        };
+        self.log_command(&c, which, Severity::Warning, Some(status));
         self.emit(Event::CommandFailed {
             command: id,
             ieee: c.ieee,
@@ -1811,6 +2301,7 @@ impl<HS: Storage> Hub<HS> {
             if let Some(cmd) = self.commands.iter_mut().find(|x| x.id == c.id) {
                 cmd.attempts += 1;
             }
+            self.log_command(&c, code::COMMAND_RETRY, Severity::Warning, None);
             if self.track(Owner::Command(c.id), c.short, wait) {
                 return;
             }
@@ -1834,6 +2325,19 @@ impl<HS: Storage> Hub<HS> {
                 return self.finish_command_failed(c.id, ErrorCode::ZclFailure, 0xff);
             };
             if !dr.status.is_success() {
+                self.log(
+                    DiagRecord::new(
+                        Category::Zcl,
+                        Severity::Warning,
+                        code::ZCL_DEFAULT_RESPONSE_ERROR,
+                    )
+                    .ieee(c.ieee)
+                    .short(c.short)
+                    .endpoint(f.origin.src_endpoint.0)
+                    .cluster(f.origin.cluster.0)
+                    .tsn(h.seq.0)
+                    .status(dr.status.raw()),
+                );
                 return self.finish_command_failed(c.id, ErrorCode::ZclFailure, dr.status.raw());
             }
             match c.kind {
@@ -1884,6 +2388,93 @@ impl<HS: Storage> Hub<HS> {
                 None => self.finish_command_ok(c.id, CommandStage::Responded, None),
                 Some(s) => self.finish_command_failed(c.id, ErrorCode::ZclFailure, s.status.raw()),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use crate::protocol::ZoneInfo;
+    use crate::registry::zone_type;
+    use panweave_storage::MemoryStorage;
+
+    type TestHub = Hub<MemoryStorage<8, 512>>;
+
+    fn hub_with(model: &[u8], manufacturer: &[u8]) -> (TestHub, usize) {
+        let mut hub = Hub::new(HubConfig::default(), MemoryStorage::new());
+        let (i, _) = hub.registry.upsert(0x00AA_0000_0000_0042, 0x1234).unwrap();
+        let d = hub.registry.at_mut(i).unwrap();
+        d.manufacturer = Vec::from_slice(manufacturer).unwrap();
+        d.model = Vec::from_slice(model).unwrap();
+        d.zone = Some(ZoneInfo {
+            endpoint: 1,
+            zone_type: None,
+            zone_id: None,
+            enrolled: false,
+        });
+        while hub.next_event().is_some() {}
+        (hub, i)
+    }
+
+    #[test]
+    fn an_alarm_before_the_zone_type_is_interpreted_once_it_is_known() {
+        let (mut hub, i) = hub_with(b"YNDX-00527", b"Yandex");
+        // A Zone Status Change Notification arrives before the interview
+        // read the zone type: kept raw, never read as "dry".
+        hub.ingest_zone_status(i, crate::ias::status::ALARM1);
+        let d = hub.registry.at(i).unwrap();
+        assert_eq!(d.state.water_leak, LeakState::Unknown);
+        assert_eq!(d.state.zone_status, Some(1));
+        // The zone type arrives: the stored status is interpreted.
+        hub.apply_attributes(
+            i,
+            1,
+            cluster::IAS_ZONE,
+            [(
+                0x0001u16,
+                panweave_zcl::Value::Enum16(zone_type::WATER_SENSOR),
+            )]
+            .into_iter(),
+            false,
+        );
+        assert_eq!(
+            hub.registry.at(i).unwrap().state.water_leak,
+            LeakState::Leak
+        );
+        let mut leak_events = 0;
+        while let Some(e) = hub.next_event() {
+            if matches!(
+                e,
+                Event::Sensor {
+                    event: SensorEvent::WaterLeakDetected,
+                    ..
+                }
+            ) {
+                leak_events += 1;
+            }
+        }
+        assert_eq!(leak_events, 1);
+    }
+
+    #[test]
+    fn the_aqara_profile_corrects_a_mains_claim_and_others_do_not() {
+        for (model, manufacturer, expected) in [
+            (&b"lumi.flood.agl02"[..], &b"LUMI"[..], PowerSource::Battery),
+            (&b"other-sensor"[..], &b"LUMI"[..], PowerSource::Mains),
+        ] {
+            let (mut hub, i) = hub_with(model, manufacturer);
+            let d = hub.registry.at_mut(i).unwrap();
+            assert_eq!(
+                d.ignores_mac_mains_claim(),
+                expected == PowerSource::Battery
+            );
+            // What a MAC capability octet with the mains bit led to.
+            d.power_source = PowerSource::Mains;
+            hub.apply_attributes(i, 1, cluster::BASIC, core::iter::empty(), false);
+            assert_eq!(hub.registry.at(i).unwrap().power_source, expected);
         }
     }
 }

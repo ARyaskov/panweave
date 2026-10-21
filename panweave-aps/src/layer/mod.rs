@@ -497,6 +497,9 @@ pub struct ApsStats {
     pub ack_failures: u32,
     /// Retransmissions.
     pub retries: u32,
+    /// Transmissions put off because the NWK layer had no buffer
+    /// (`constants::MAX_LOCAL_DEFERRALS`).
+    pub deferrals: u32,
     /// Fragmented ASDUs reassembled.
     pub reassembled: u32,
     /// Events dropped because the queue was full.
@@ -723,6 +726,7 @@ impl<
         for p in &self.pending {
             match p.state {
                 tx::TxState::AwaitingAck { deadline } => consider(deadline),
+                tx::TxState::Deferred { until } => consider(until),
                 tx::TxState::Ready => consider(self.now),
                 _ => {}
             }

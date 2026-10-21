@@ -361,6 +361,14 @@ fn gate() -> Result<(), String> {
             "nor-flash,std",
         ],
     )?;
+    // The hub with radio capture compiled in (capture tests, the
+    // synthetic-secret leakage tests); the workspace run covers the hub
+    // without it (capture requests answer NotSupported).
+    run(
+        &root,
+        "cargo",
+        &["test", "-p", "panweave-hub", "--features", "radio-capture"],
+    )?;
     // The small-tables profile changes the dimensions of every endpoint
     // type: it must at least build with every feature (CI tests it).
     run(

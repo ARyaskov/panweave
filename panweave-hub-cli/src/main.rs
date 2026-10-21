@@ -3,17 +3,29 @@
 //! definitions of the `panweave-hub` crate the firmware uses.
 //!
 //! ```text
-//! panweave-hub-cli [--port PORT] [--timeout SECONDS] [--verbose] <command>
+//! panweave-hub-cli [--port PORT] [--timeout SECONDS] [--verbose] [--json] <command>
 //! ```
 //!
 //! Run without arguments for the command list. The port defaults to the
 //! `PANWEAVE_HUB_PORT` environment variable, else to the only Espressif
 //! USB serial port (VID 0x303a) found.
+//!
+//! Exit codes: 0 success, 1 a command or test failed, 2 usage error,
+//! 3 the hub could not be reached (no port, port busy, no response).
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod capturecmd;
+mod diagcmd;
+mod fingerprint;
+mod hil;
+mod json;
+mod securitycmd;
+mod selftest;
+
 use std::io::{Read, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -39,6 +51,7 @@ commands:
   watch                                   print events until Ctrl+C
   device <ieee> [info]                    everything known about a device
   device <ieee> state                     its normalized state
+  device <ieee> fingerprint               identifying values with their provenance
   device <ieee> interview                 run its interview again
   device <ieee> remove [--leave]          forget it (and make it leave)
   light <ieee> on|off|toggle [--endpoint N]
@@ -47,17 +60,55 @@ commands:
   bind <ieee> <endpoint> <cluster>
   report <ieee> <endpoint> <cluster> <attribute> <type> <min> <max> <change>
   diagnostics                             counters
+  diagnostics system|radio|storage|runtime
+                                          boot report, radio, storage, runtime metrics
+  diagnostics trace                       every stored trace record
+  diagnostics watch [--level L] [--category C[,C…]]
+                                          follow the trace until Ctrl+C
+  diagnostics device <ieee>               a device's trace records
+  diagnostics interview <ieee>            its interview timeline, with a summary
+  diagnostics export --output FILE [--ieee IEEE]
+                                          the trace as JSONL
+  diagnostics configure [--level L] [--category C[,C…]|all]
+                                          what the hub keeps (Admin)
+  diagnostics clear                       empty the trace (Admin)
+  capture start [--seconds N] [--mode metadata|sanitized|raw [--allow-raw]]
+  capture stop
+  capture export --output FILE.pcap [--seconds N] [--metadata FILE.jsonl] [--mode M [--allow-raw]]
+                                          capture radio frames to pcap (Admin)
+  security                                Trust Center policy, unauthorized devices, exemptions
+  security exempt <ieee> [--seconds N]    let one device join without the key exchange (Admin)
+  security revoke <ieee>                  withdraw its exemption (Admin)
+  self-test [--allow-reboot] [--join-test [--join-seconds N]]
+                                          hardware smoke test (PASS/FAIL/SKIP)
+  hil light|contact|leak|aqara-leak|sber-contact|yandex-leak <ieee>
+      [--report FILE] [--unattended] [--wait SECONDS]
+                                          operator-driven device check
+  partitions check <csv> [--flash-size BYTES] [--image FILE]
+                                          validate a partition table (no hub)
 
+Global --json prints machine-readable output (diagnostics, security, self-test,
+device fingerprint).
+Levels: trace debug info warning error critical. Categories: system boot
+usb radio mac nwk aps trust-center commissioning zdo zcl interview ias-zone
+persistence watchdog resources.
 Numbers accept 0x-prefixed hex. IEEE addresses: 0011223344556677,
 0x0011223344556677 or 00:11:22:33:44:55:66:77.";
 
 /// Espressif's USB vendor identifier (USB Serial/JTAG of the ESP32-C6).
 const ESPRESSIF_VID: u16 = 0x303a;
 
+/// Set by Ctrl+C: long-running commands finish cleanly.
+static STOP: AtomicBool = AtomicBool::new(false);
+
+/// Prefix of errors that mean the hub could not be reached (exit code 3).
+const UNREACHABLE: &str = "hub unreachable: ";
+
 struct Options {
     port: Option<String>,
     timeout: Duration,
     verbose: bool,
+    json: bool,
     args: Vec<String>,
 }
 
@@ -66,6 +117,7 @@ fn parse_options() -> Result<Options, String> {
         port: std::env::var("PANWEAVE_HUB_PORT").ok(),
         timeout: Duration::from_secs(5),
         verbose: false,
+        json: false,
         args: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -77,6 +129,7 @@ fn parse_options() -> Result<Options, String> {
                 o.timeout = Duration::from_secs(number(&s)?);
             }
             "--verbose" | "-v" => o.verbose = true,
+            "--json" => o.json = true,
             "--help" | "-h" => return Err(String::new()),
             _ => o.args.push(a),
         }
@@ -116,13 +169,16 @@ fn find_port() -> Result<String, String> {
         .collect();
     match esp.as_slice() {
         [one] => Ok(one.port_name.clone()),
-        [] => Err("no Espressif USB serial port found: pass --port".into()),
+        [] => Err(format!(
+            "{UNREACHABLE}no Espressif USB serial port found: pass --port"
+        )),
         _ => Err("several Espressif ports found: pass --port".into()),
     }
 }
 
 /// A connection to the hub.
 struct Hub {
+    name: String,
     port: Box<dyn serialport::SerialPort>,
     rx: Receiver<Message>,
     next_id: u16,
@@ -132,10 +188,26 @@ struct Hub {
 
 impl Hub {
     fn open(name: &str, timeout: Duration, verbose: bool) -> Result<Hub, String> {
+        let (port, rx) = Self::connect(name, verbose)?;
+        Ok(Hub {
+            name: name.to_string(),
+            port,
+            rx,
+            next_id: 1,
+            timeout,
+            verbose,
+        })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn connect(
+        name: &str,
+        verbose: bool,
+    ) -> Result<(Box<dyn serialport::SerialPort>, Receiver<Message>), String> {
         let mut port = serialport::new(name, 115_200)
             .timeout(Duration::from_millis(50))
             .open()
-            .map_err(|e| format!("opening {name}: {e}"))?;
+            .map_err(|e| format!("{UNREACHABLE}opening {name}: {e}"))?;
         // The ESP32-C6's USB Serial/JTAG resets the chip on the RTS/DTR
         // pattern flashing tools use; keep both lines released.
         let _ = port.write_data_terminal_ready(false);
@@ -172,13 +244,56 @@ impl Hub {
                 }
             }
         });
-        Ok(Hub {
-            port,
-            rx,
-            next_id: 1,
-            timeout,
-            verbose,
-        })
+        Ok((port, rx))
+    }
+
+    /// Writes octets as they are (robustness tests).
+    fn send_raw(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.port
+            .write_all(bytes)
+            .and_then(|()| self.port.flush())
+            .map_err(|e| format!("writing: {e}"))
+    }
+
+    /// Resets the chip through the USB Serial/JTAG reset line (RTS with
+    /// DTR released, as flashing tools do; a "USB-JTAG reset" in the boot
+    /// report afterwards), waits for the port to come back and reconnects.
+    fn reset_and_reconnect(&mut self) -> Result<(), String> {
+        let _ = self.port.write_data_terminal_ready(false);
+        self.port
+            .write_request_to_send(true)
+            .map_err(|e| format!("asserting RTS: {e}"))?;
+        thread::sleep(Duration::from_millis(100));
+        let _ = self.port.write_request_to_send(false);
+        // The USB device disappears while the chip restarts.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        thread::sleep(Duration::from_millis(500));
+        loop {
+            match Self::connect(&self.name, self.verbose) {
+                Ok((port, rx)) => {
+                    self.port = port;
+                    self.rx = rx;
+                    break;
+                }
+                Err(e) if Instant::now() >= deadline => return Err(e),
+                Err(_) => thread::sleep(Duration::from_millis(250)),
+            }
+        }
+        // Wait until the firmware answers (boot takes a moment).
+        let wait = self.timeout;
+        self.timeout = Duration::from_millis(500);
+        let mut answered = false;
+        while Instant::now() < deadline && !answered {
+            answered = matches!(self.call(Request::GetHubInfo), Ok(Response::HubInfo(_)));
+        }
+        self.timeout = wait;
+        if answered {
+            Ok(())
+        } else {
+            Err(format!(
+                "{UNREACHABLE}the hub did not answer after the reset"
+            ))
+        }
     }
 
     fn send(&mut self, request: Request) -> Result<u16, String> {
@@ -212,7 +327,9 @@ impl Hub {
                 Ok(other) if self.verbose => eprintln!("(ignored {other:?})"),
                 Ok(_) => {}
                 Err(RecvTimeoutError::Timeout) => {
-                    return Err("no response from the hub (is the hub firmware running?)".into());
+                    return Err(format!(
+                        "{UNREACHABLE}no response from the hub (is the hub firmware running?)"
+                    ));
                 }
                 Err(RecvTimeoutError::Disconnected) => return Err("serial port closed".into()),
             }
@@ -246,15 +363,16 @@ impl Hub {
     }
 
     fn watch(&mut self) -> Result<(), String> {
-        loop {
-            match self.rx.recv() {
+        while !STOP.load(Ordering::SeqCst) {
+            match self.rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Message::Event { seq, event }) => {
                     println!("[{seq:5}] {}", describe_event(&event));
                 }
-                Ok(_) => {}
-                Err(_) => return Err("serial port closed".into()),
+                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err("serial port closed".into()),
             }
         }
+        Ok(())
     }
 }
 
@@ -567,11 +685,15 @@ fn run(o: &Options) -> Result<(), String> {
     if args.is_empty() {
         return Err(String::new());
     }
+    if let ["partitions", "check", csv, ..] = args.as_slice() {
+        return partitions_check(csv, &o.args, o.json);
+    }
     let port = match &o.port {
         Some(p) => p.clone(),
         None => find_port()?,
     };
     let mut hub = Hub::open(&port, o.timeout, o.verbose)?;
+    let as_json = o.json;
     let unexpected = |r: Response| match r {
         Response::Error(e) => Err(error_text(e)),
         r => Err(format!("unexpected response: {r:?}")),
@@ -644,6 +766,13 @@ fn run(o: &Options) -> Result<(), String> {
                 r => unexpected(r),
             }
         }
+        ["device", id, "fingerprint"] => match hub.call(Request::GetDevice { ieee: ieee(id)? })? {
+            Response::Device(d) => {
+                fingerprint::print(&d, as_json);
+                Ok(())
+            }
+            r => unexpected(r),
+        },
         ["device", id, "state"] => match hub.call(Request::GetDeviceState { ieee: ieee(id)? })? {
             Response::DeviceState {
                 state, last_seen_s, ..
@@ -748,11 +877,114 @@ fn run(o: &Options) -> Result<(), String> {
             }
             r => unexpected(r),
         },
+        ["diagnostics", rest @ ..] => diagcmd::run(&mut hub, rest, as_json),
+        ["capture", rest @ ..] => capturecmd::run(&mut hub, rest),
+        ["security", rest @ ..] => securitycmd::run(&mut hub, rest, as_json),
+        ["self-test", rest @ ..] => {
+            let options = selftest::Options {
+                allow_reboot: rest.contains(&"--allow-reboot"),
+                join_test: rest.contains(&"--join-test"),
+                join_seconds: flag_value(&o.args, "--join-seconds", 120u8)?,
+            };
+            let results = selftest::run(&mut hub, &port, &options);
+            if selftest::print(&results, as_json) {
+                Ok(())
+            } else {
+                Err(FAILED.into())
+            }
+        }
+        ["hil", kind, id, rest @ ..] => {
+            let options = hil::Options {
+                unattended: rest.contains(&"--unattended"),
+                wait: Duration::from_secs(flag_value(&o.args, "--wait", 60u64)?),
+            };
+            let report = rest
+                .iter()
+                .position(|a| *a == "--report")
+                .and_then(|i| rest.get(i + 1).copied());
+            if hil::run(&mut hub, kind, ieee(id)?, &options, report)? {
+                Ok(())
+            } else {
+                Err(FAILED.into())
+            }
+        }
         _ => Err(USAGE.into()),
     }
 }
 
+/// A failure already reported on stdout (exit code 1, nothing more to print).
+const FAILED: &str = "\u{0}failed";
+
+fn partitions_check(csv_path: &str, args: &[String], as_json: bool) -> Result<(), String> {
+    use panweave_hub::partitions::{parse_csv, validate};
+    let csv = std::fs::read_to_string(csv_path).map_err(|e| format!("{csv_path}: {e}"))?;
+    let table = parse_csv(&csv).map_err(|e| format!("{csv_path} line {}: {}", e.line, e.what))?;
+    let flash: u32 = flag_value(args, "--flash-size", 0x40_0000u32)?;
+    let image = match args.iter().position(|a| a == "--image") {
+        Some(i) => {
+            let path = args.get(i + 1).ok_or("--image needs a value")?;
+            let len = std::fs::metadata(path)
+                .map_err(|e| format!("{path}: {e}"))?
+                .len();
+            Some(u32::try_from(len).map_err(|_| format!("{path}: too large"))?)
+        }
+        None => None,
+    };
+    let findings = validate(&table, flash, image);
+    if as_json {
+        let items: Vec<String> = findings
+            .iter()
+            .map(|f| {
+                json::Obj::new()
+                    .int("code", f.code().into())
+                    .str("description", f.describe())
+                    .opt("partition", f.partition().map(i128::from))
+                    .bool("fatal", f.is_fatal())
+                    .finish()
+            })
+            .collect();
+        println!(
+            "{}",
+            json::Obj::new()
+                .int("partitions", i128::try_from(table.len()).unwrap_or(0))
+                .raw("findings", &json::array(&items))
+                .finish()
+        );
+    } else {
+        for (i, p) in table.iter().enumerate() {
+            println!(
+                "{i:>2}: {:<10} type {:#04x} subtype {:#04x} offset {:#08x} size {:#08x}",
+                p.label, p.kind, p.subtype, p.offset, p.size
+            );
+        }
+        for f in &findings {
+            println!(
+                "{} {}{}",
+                if f.is_fatal() { "error:  " } else { "warning:" },
+                f.describe(),
+                f.partition()
+                    .map_or_else(String::new, |p| format!(" (partition {p})"))
+            );
+        }
+        if findings.is_empty() {
+            println!("valid hub layout for {} KiB of flash", flash / 1024);
+        }
+    }
+    if findings.iter().any(|f| f.is_fatal()) {
+        Err(FAILED.into())
+    } else {
+        Ok(())
+    }
+}
+
 fn main() -> ExitCode {
+    // Ctrl+C asks long-running commands to stop; a second one ends the
+    // process at once.
+    let _ = ctrlc::set_handler(|| {
+        if STOP.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+    });
     let options = match parse_options() {
         Ok(o) => o,
         Err(e) => {
@@ -770,7 +1002,12 @@ fn main() -> ExitCode {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
+        Err(e) if e == FAILED => ExitCode::FAILURE,
         Err(e) => {
+            if let Some(rest) = e.strip_prefix(UNREACHABLE) {
+                eprintln!("{rest}");
+                return ExitCode::from(3);
+            }
             eprintln!("{e}");
             ExitCode::FAILURE
         }

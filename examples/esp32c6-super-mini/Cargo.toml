@@ -15,23 +15,27 @@ panweave-hub = { path = "../../panweave-hub" }
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
 esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c6", "ieee802154", "unstable"] }
 esp-storage = { version = "0.10.0", features = ["esp32c6", "bytewise-read", "embedded-storage"] }
-esp-alloc = { version = "0.11.0", features = ["esp32c6"] }
+# `internal-heap-stats`: the hub reports the heap's peak use.
+esp-alloc = { version = "0.11.0", features = ["esp32c6", "internal-heap-stats"] }
 esp-backtrace = { version = "0.20.0", features = ["esp32c6", "panic-handler", "println"] }
 esp-println = { version = "0.18.0", features = ["esp32c6"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c6"] }
 heapless = { version = "0.9", default-features = false }
 embedded-storage = "0.3.1"
+# Interrupts off while the hub paints its stack for the watermark
+# (`src/memory.rs`); already in the tree through esp-hal.
+critical-section = "1.2.0"
 
 [features]
-default = []
+default = ["capture"]
 # Green Power Basic Proxy on the router firmware.
 green-power = ["panweave-runtime/green-power"]
 # Smaller ZCL tables (docs/footprint.md).
 small-tables = ["panweave/small-tables"]
-# Hub: admit joiners that never complete the Trust Center link key
-# exchange (pre-Zigbee-3.0 devices). Weakens the BDB Trust Center policy;
-# see docs/esp32c6-hub.md before enabling.
-legacy-joiners = []
+# Hub: radio frame capture for diagnostics (bounded, sanitized by
+# default, off until an Admin host starts one; docs/esp32c6-diagnostics.md).
+# Without it the hub engine holds no capture buffer.
+capture = ["panweave-hub/radio-capture"]
 
 [profile.release]
 opt-level = "s"
@@ -42,3 +46,6 @@ incremental = false
 
 [profile.dev]
 opt-level = 1
+
+[build-dependencies]
+panweave-hub = { path = "../../panweave-hub", default-features = false }

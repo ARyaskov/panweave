@@ -22,8 +22,14 @@ engine = [
     "dep:panweave-zdo",
     "dep:panweave-aps",
     "dep:panweave-security",
+    "dep:panweave-nwk",
 ]
 std = ["panweave-types/std", "panweave-codec/std"]
+# Radio frame capture in the hub engine: the bounded frame buffer
+# (`CAPTURE_FRAMES` frames) and the capture requests. Without it the
+# engine holds no capture state and answers the capture requests with
+# `NotSupported`; the protocol types stay available either way.
+radio-capture = ["engine"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -38,6 +44,7 @@ panweave-zcl = { workspace = true, optional = true }
 panweave-zdo = { workspace = true, optional = true }
 panweave-aps = { workspace = true, optional = true }
 panweave-security = { workspace = true, optional = true }
+panweave-nwk = { workspace = true, optional = true }
 
 [dev-dependencies]
 panweave-security = { workspace = true, features = ["crypto-software"] }
@@ -45,6 +52,7 @@ panweave-sim = { workspace = true }
 panweave-testkit = { workspace = true }
 panweave-mac = { workspace = true }
 panweave-storage = { workspace = true }
+panweave-pcap = { workspace = true }
 
 [lints]
 workspace = true

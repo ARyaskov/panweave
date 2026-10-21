@@ -1279,6 +1279,7 @@ dependencies = [
 name = "panweave-esp32c6"
 version = "0.2.0"
 dependencies = [
+ "critical-section",
  "embedded-storage",
  "esp-alloc",
  "esp-backtrace",
@@ -1312,6 +1313,7 @@ dependencies = [
  "heapless 0.9.3",
  "panweave-aps",
  "panweave-codec",
+ "panweave-nwk",
  "panweave-runtime",
  "panweave-security",
  "panweave-storage",

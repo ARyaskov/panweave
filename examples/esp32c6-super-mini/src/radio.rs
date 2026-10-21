@@ -24,6 +24,7 @@ use panweave::mac::radio::{
     RadioCapabilities, RadioConfig, RadioError, RxMetadata, TxOptions, TxResult,
 };
 use panweave::types::{Channel, ExtendedAddress, PanId, ShortAddress};
+use panweave_hub::protocol::RadioDriverStats;
 
 static TX_DONE: AtomicBool = AtomicBool::new(false);
 static TX_FAILED: AtomicBool = AtomicBool::new(false);
@@ -58,9 +59,14 @@ pub struct Radio {
     /// The driver's configuration changed since the last transmission.
     dirty: bool,
     seq: u8,
-    /// Frames the driver's queue could not hold (it reports "queue
-    /// full" only in its log).
+    /// Received buffers with an impossible length, dropped. (Frames the
+    /// driver's own receive queue could not hold are not observable: it
+    /// reports them only in its log.)
     pub dropped: u32,
+    /// Counters of this adapter (what the driver lets us observe).
+    pub stats: RadioDriverStats,
+    /// [`Radio::recover`] calls.
+    pub recoveries: u32,
 }
 
 impl Radio {
@@ -112,6 +118,8 @@ impl Radio {
             dirty: false,
             seq: 0,
             dropped: 0,
+            recoveries: 0,
+            stats: RadioDriverStats::default(),
         }
     }
 
@@ -137,6 +145,7 @@ impl Radio {
     /// `InvalidChannel` for a channel of another page.
     pub fn set_channel(&mut self, channel: Channel) -> Result<(), RadioError> {
         if !channel.is_2_4ghz() {
+            self.stats.config_errors = self.stats.config_errors.wrapping_add(1);
             return Err(RadioError::InvalidChannel);
         }
         self.cfg.channel = channel.raw();
@@ -159,6 +168,11 @@ impl Radio {
         self.cfg.channel
     }
 
+    /// The configured transmit power, dBm.
+    pub fn tx_power(&self) -> i8 {
+        self.cfg.txpower
+    }
+
     /// Transmits `frame` (a MAC frame without FCS) and waits for the
     /// outcome: the acknowledgement when one was requested, otherwise
     /// the end of the transmission.
@@ -170,8 +184,10 @@ impl Radio {
     /// frame or never reported its outcome.
     pub fn transmit(&mut self, frame: &[u8], options: TxOptions) -> Result<TxResult, RadioError> {
         if frame.len() > MAX_MAC_FRAME_SIZE {
+            self.stats.tx_faults = self.stats.tx_faults.wrapping_add(1);
             return Err(RadioError::FrameTooLong);
         }
+        self.stats.tx_attempts = self.stats.tx_attempts.wrapping_add(1);
         // The driver's length octet counts the FCS the hardware appends:
         // two octets of room after the frame.
         let mut buf = [0u8; MAX_MAC_FRAME_SIZE + 2];
@@ -183,9 +199,14 @@ impl Radio {
         {
             self.set_tx_power(dbm);
         }
-        self.drv
+        if self
+            .drv
             .transmit_raw(&buf[..frame.len() + 2], options.csma)
-            .map_err(|_| RadioError::HardwareFault)?;
+            .is_err()
+        {
+            self.stats.tx_faults = self.stats.tx_faults.wrapping_add(1);
+            return Err(RadioError::HardwareFault);
+        }
         self.dirty = false;
         let start = crate::now();
         loop {
@@ -197,28 +218,33 @@ impl Radio {
                 // the driver does not say which. For an acknowledged
                 // frame the MAC service retries either way.
                 return if options.ack_request {
+                    self.stats.tx_no_ack = self.stats.tx_no_ack.wrapping_add(1);
                     Ok(TxResult::default())
                 } else {
+                    self.stats.tx_cca_failures = self.stats.tx_cca_failures.wrapping_add(1);
                     Err(RadioError::ChannelAccessFailure)
                 };
             }
             if crate::now().as_millis() - start.as_millis() > TX_TIMEOUT_MS {
+                self.stats.tx_faults = self.stats.tx_faults.wrapping_add(1);
                 return Err(RadioError::HardwareFault);
             }
         }
         if !options.ack_request {
             return Ok(TxResult::default());
         }
-        Ok(match self.drv.get_ack_frame() {
-            Some(ack) => TxResult {
-                acked: true,
-                frame_pending: ack
-                    .data
-                    .get(1)
-                    .is_some_and(|fcf| fcf & FCF_FRAME_PENDING != 0),
-                timestamp_us: None,
-            },
-            None => TxResult::default(),
+        let Some(ack) = self.drv.get_ack_frame() else {
+            self.stats.tx_no_ack = self.stats.tx_no_ack.wrapping_add(1);
+            return Ok(TxResult::default());
+        };
+        self.stats.tx_acked = self.stats.tx_acked.wrapping_add(1);
+        Ok(TxResult {
+            acked: true,
+            frame_pending: ack
+                .data
+                .get(1)
+                .is_some_and(|fcf| fcf & FCF_FRAME_PENDING != 0),
+            timestamp_us: None,
         })
     }
 
@@ -233,20 +259,26 @@ impl Radio {
             let len = usize::from(raw.data[0]);
             if len < 3 || len >= raw.data.len() {
                 self.dropped = self.dropped.wrapping_add(1);
+                self.stats.rx_malformed = self.dropped;
                 continue;
             }
             let n = len - 2;
             if n > MAX_MAC_FRAME_SIZE {
                 self.dropped = self.dropped.wrapping_add(1);
+                self.stats.rx_malformed = self.dropped;
                 continue;
             }
             buf[..n].copy_from_slice(&raw.data[1..=n]);
             #[allow(clippy::cast_possible_wrap)]
             let rssi = raw.data[n + 1] as i8;
+            let lqi = rssi_to_lqi(rssi);
+            self.stats.rx_frames = self.stats.rx_frames.wrapping_add(1);
+            self.stats.last_rssi = Some(rssi);
+            self.stats.last_lqi = Some(lqi);
             return Some((
                 n,
                 RxMetadata {
-                    lqi: rssi_to_lqi(rssi),
+                    lqi,
                     rssi_dbm: rssi,
                     timestamp_us: None,
                     acked_by_hardware: false,
@@ -269,6 +301,17 @@ impl Radio {
         0
     }
 
+    /// The supervisor's safe recovery: re-applies the radio configuration
+    /// and restarts reception, with the driver's documented calls
+    /// (`set_config`, `start_receive`). Touches nothing persistent.
+    pub fn recover(&mut self) {
+        self.drv.set_config(self.cfg);
+        self.drv.start_receive();
+        self.dirty = true;
+        self.flush();
+        self.recoveries = self.recoveries.wrapping_add(1);
+    }
+
     /// Makes a pending configuration change effective now (see the
     /// module documentation): a frame from this device to itself.
     pub fn flush(&mut self) {
@@ -285,6 +328,7 @@ impl Radio {
         f[3..5].copy_from_slice(&self.pan_id.0.to_le_bytes());
         f[5..13].copy_from_slice(&self.ieee.0.to_le_bytes());
         f[13..21].copy_from_slice(&self.ieee.0.to_le_bytes());
+        self.stats.config_flushes = self.stats.config_flushes.wrapping_add(1);
         let _ = self.transmit(&f, TxOptions::UNACKED);
         self.dirty = false;
     }

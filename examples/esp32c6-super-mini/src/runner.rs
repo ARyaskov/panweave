@@ -30,6 +30,33 @@ use panweave::types::time::Instant;
 
 use crate::radio::Radio;
 
+/// A frame the runner moved between the stack and the radio, for an
+/// observer (frame capture). Borrowed for the duration of the call: an
+/// observer copies what it keeps.
+pub enum Traffic<'a> {
+    /// A frame handed to the radio (an attempt; `acked` says whether an
+    /// acknowledgement came back when one was requested).
+    Tx {
+        /// The MAC frame without FCS.
+        frame: &'a [u8],
+        /// An acknowledgement was requested.
+        ack_requested: bool,
+        /// One came back.
+        acked: bool,
+        /// The driver reported a fault (no outcome, or refused).
+        fault: bool,
+    },
+    /// A frame the radio received (it passed the address filter).
+    Rx {
+        /// The MAC frame without FCS.
+        frame: &'a [u8],
+        /// RSSI, dBm.
+        rssi: i8,
+        /// LQI.
+        lqi: u8,
+    },
+}
+
 /// The stack's clock: milliseconds since boot from the system timer.
 pub fn now() -> Instant {
     Instant::from_millis(
@@ -49,7 +76,17 @@ pub struct Runner {
     pub rx_frames: u32,
     /// Frames transmitted.
     pub tx_frames: u32,
+    /// Longest [`Runner::step`], µs (radio and stack processing, no
+    /// waiting).
+    pub step_max_us: u32,
+    /// Steps that stopped after [`MAX_RX_PER_STEP`] received frames to
+    /// let the rest of the loop (USB, watchdog) run.
+    pub rx_bursts_cut: u32,
 }
+
+/// Received frames one [`Runner::step`] processes at most; the rest stay
+/// in the driver's queue for the next turn, a few milliseconds later.
+pub const MAX_RX_PER_STEP: u32 = 32;
 
 impl Runner {
     /// Takes the radio.
@@ -60,6 +97,8 @@ impl Runner {
             delay: Delay::new(),
             rx_frames: 0,
             tx_frames: 0,
+            step_max_us: 0,
+            rx_bursts_cut: 0,
         }
     }
 
@@ -69,7 +108,19 @@ impl Runner {
         &mut self,
         node: &mut Node<C, R, S>,
     ) -> Option<Instant> {
+        self.step_observed(node, |_, _| {})
+    }
+
+    /// [`Runner::step`] that shows every frame to `observe`, with the
+    /// channel it went over.
+    pub fn step_observed<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        node: &mut Node<C, R, S>,
+        mut observe: impl FnMut(Traffic<'_>, u8),
+    ) -> Option<Instant> {
+        let started = esp_hal::time::Instant::now();
         node.poll(now());
+        let mut received = 0u32;
         loop {
             let mut moved = false;
             while let Some(action) = node.next_radio_action() {
@@ -78,6 +129,15 @@ impl Runner {
                     MacAction::Transmit { frame, options, .. } => {
                         let result = self.radio.transmit(&frame, options);
                         self.tx_frames = self.tx_frames.wrapping_add(1);
+                        observe(
+                            Traffic::Tx {
+                                frame: &frame,
+                                ack_requested: options.ack_request,
+                                acked: result.as_ref().is_ok_and(|r| r.acked),
+                                fault: result.is_err(),
+                            },
+                            self.radio.channel(),
+                        );
                         node.on_tx_complete(result);
                     }
                     MacAction::SetChannel { channel, .. } => {
@@ -91,9 +151,20 @@ impl Runner {
                     }
                 }
             }
-            while let Some((n, meta)) = self.radio.receive(&mut self.rx) {
+            while received < MAX_RX_PER_STEP
+                && let Some((n, meta)) = self.radio.receive(&mut self.rx)
+            {
                 moved = true;
+                received += 1;
                 self.rx_frames = self.rx_frames.wrapping_add(1);
+                observe(
+                    Traffic::Rx {
+                        frame: &self.rx[..n],
+                        rssi: meta.rssi_dbm,
+                        lqi: meta.lqi,
+                    },
+                    self.radio.channel(),
+                );
                 node.on_radio_frame(&self.rx[..n], meta);
             }
             if !moved {
@@ -101,7 +172,14 @@ impl Runner {
             }
             node.poll(now());
         }
+        if received >= MAX_RX_PER_STEP && self.radio.frame_pending() {
+            // A burst: the rest of the loop (USB, watchdog) runs before
+            // the next frames; the idle wait ends at once on them.
+            self.rx_bursts_cut = self.rx_bursts_cut.wrapping_add(1);
+        }
         self.radio.flush();
+        let us = started.elapsed().as_micros();
+        self.step_max_us = self.step_max_us.max(u32::try_from(us).unwrap_or(u32::MAX));
         node.next_deadline()
     }
 

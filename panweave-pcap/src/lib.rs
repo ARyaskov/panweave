@@ -59,6 +59,30 @@ impl<W: Write> PcapWriter<W> {
         Ok(())
     }
 
+    /// Appends the first octets of a frame that was `original_len`
+    /// octets long on the air (a sanitized capture): the record's captured
+    /// length is `frame.len()`, its original length `original_len`, so
+    /// readers show the packet as cut rather than as a shorter frame.
+    /// `original_len` below `frame.len()` is raised to it.
+    pub fn write_truncated(
+        &mut self,
+        timestamp_us: u64,
+        frame: &[u8],
+        original_len: usize,
+    ) -> io::Result<()> {
+        let secs = u32::try_from(timestamp_us / 1_000_000).unwrap_or(u32::MAX);
+        let usecs = u32::try_from(timestamp_us % 1_000_000).unwrap_or(0);
+        let incl = u32::try_from(frame.len()).unwrap_or(u32::MAX);
+        let orig = u32::try_from(original_len.max(frame.len())).unwrap_or(u32::MAX);
+        self.out.write_all(&secs.to_le_bytes())?;
+        self.out.write_all(&usecs.to_le_bytes())?;
+        self.out.write_all(&incl.to_le_bytes())?;
+        self.out.write_all(&orig.to_le_bytes())?;
+        self.out.write_all(frame)?;
+        self.packets += 1;
+        Ok(())
+    }
+
     /// Number of packets written.
     pub const fn packets(&self) -> u64 {
         self.packets
@@ -131,6 +155,18 @@ mod tests {
         assert_eq!(&bytes[24..28], &1u32.to_le_bytes());
         assert_eq!(&bytes[28..32], &500_000u32.to_le_bytes());
         assert_eq!(&bytes[40..], &[0x02, 0x00, 0x05]);
+    }
+
+    #[test]
+    fn truncated_records_keep_their_original_length() {
+        let mut w = PcapWriter::new(Vec::new()).unwrap();
+        w.write_truncated(0, &[0x41, 0x88, 0x01], 40).unwrap();
+        w.write_truncated(0, &[0x02, 0x00, 0x05], 1).unwrap();
+        let bytes = w.finish().unwrap();
+        assert_eq!(&bytes[32..36], &3u32.to_le_bytes(), "captured");
+        assert_eq!(&bytes[36..40], &40u32.to_le_bytes(), "original");
+        assert_eq!(bytes.len(), 24 + 2 * (16 + 3));
+        assert_eq!(&bytes[55..59], &3u32.to_le_bytes(), "never below captured");
     }
 
     #[test]

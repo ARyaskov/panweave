@@ -370,7 +370,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 nwk_secure: false,
             },
         };
-        self.send_network_key(device, join.short, route);
+        self.send_network_key(device, join.short, route, true);
     }
 
     /// Admits a joiner held for a device interview (BDB 3.1 §9.9): the
@@ -388,7 +388,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 nwk_secure: false,
             },
         };
-        self.send_network_key(device, join.short, route);
+        self.send_network_key(device, join.short, route, true);
         self.pump();
         Ok(())
     }

@@ -49,6 +49,7 @@ use panweave_zdo::zdp::{
     StatusRsp, cluster as zdp,
 };
 
+use crate::diag::{Category, DiagRecord, Severity, code};
 use crate::hub::{Hub, Owner, Reply, SLEEPY_SPACING, Wait};
 use crate::model::{InterviewStage, InterviewStatus, LogicalType, PowerSource};
 use crate::protocol::{EndpointDescriptor, ErrorCode, Event, ZoneInfo};
@@ -127,7 +128,56 @@ const fn has_steps(stage: InterviewStage) -> bool {
     )
 }
 
+/// The `arg` of interview records: the stage code and the step.
+pub(crate) fn stage_arg(d: &Device) -> u32 {
+    (u32::from(d.interview.stage.code()) << 8) | u32::from(d.interview.step)
+}
+
+/// The endpoint and cluster the current step addresses (the ZDP request
+/// cluster for descriptor stages).
+fn step_target(d: &Device) -> (Option<u8>, u16) {
+    let step = usize::from(d.interview.step);
+    match d.interview.stage {
+        InterviewStage::NodeDescriptor => (None, zdp::NODE_DESC_REQ.0),
+        InterviewStage::ActiveEndpoints => (None, zdp::ACTIVE_EP_REQ.0),
+        InterviewStage::SimpleDescriptors => (
+            d.endpoints.get(step).map(|e| e.endpoint),
+            zdp::SIMPLE_DESC_REQ.0,
+        ),
+        InterviewStage::BasicAttributes => (d.endpoint_serving(cluster::BASIC), cluster::BASIC),
+        InterviewStage::IasZone => (d.zone.map(|z| z.endpoint), cluster::IAS_ZONE),
+        InterviewStage::Bindings | InterviewStage::Reporting => report_list(d)
+            .get(step)
+            .map_or((None, 0), |&(ep, c)| (Some(ep), c)),
+        InterviewStage::InitialState => state_list(d)
+            .get(step)
+            .map_or((None, 0), |&(ep, c)| (Some(ep), c)),
+        InterviewStage::Done => (None, 0),
+    }
+}
+
 impl<HS: Storage> Hub<HS> {
+    /// Logs an interview record for device `i` with its stage and step.
+    fn log_interview(
+        &mut self,
+        i: usize,
+        which: u16,
+        severity: Severity,
+        extra: impl FnOnce(DiagRecord) -> DiagRecord,
+    ) {
+        if !self.trace_wants(Category::Interview, severity) {
+            return;
+        }
+        let Some(d) = self.registry.at(i) else {
+            return;
+        };
+        let rec = DiagRecord::new(Category::Interview, severity, which)
+            .ieee(d.ieee)
+            .short(d.short)
+            .arg(stage_arg(d));
+        self.log(extra(rec));
+    }
+
     /// Restarts a device's interview from the node descriptor.
     pub(crate) fn restart_interview(&mut self, ieee: u64) -> Result<(), ErrorCode> {
         let now = self.now;
@@ -148,8 +198,14 @@ impl<HS: Storage> Hub<HS> {
         d.enroll_answered = false;
         d.enroll_retries = 0;
         d.dirty = true;
+        let short = d.short;
         self.pending.retain(|p| p.owner != Owner::Interview(ieee));
         self.schedule_persist();
+        self.log(
+            DiagRecord::new(Category::Interview, Severity::Info, code::INTERVIEW_STARTED)
+                .ieee(ieee)
+                .short(short),
+        );
         Ok(())
     }
 
@@ -203,6 +259,18 @@ impl<HS: Storage> Hub<HS> {
                 Step::Sent(wait) => {
                     d.interview.busy = true;
                     d.interview.due = None;
+                    let (ep, cl) = step_target(d);
+                    let attempt = d.interview.attempts.saturating_add(1);
+                    let tsn = match wait {
+                        Wait::Zdp(t) | Wait::Zcl(t) => t,
+                    };
+                    self.log_interview(i, code::INTERVIEW_REQUEST, Severity::Debug, |r| {
+                        let r = r.tsn(tsn).cluster(cl).status(attempt);
+                        match ep {
+                            Some(e) => r.endpoint(e),
+                            None => r,
+                        }
+                    });
                     if !self.track(Owner::Interview(ieee), short, wait)
                         && let Some(d) = self.registry.at_mut(i)
                     {
@@ -230,6 +298,7 @@ impl<HS: Storage> Hub<HS> {
                 }
                 Step::Busy => {
                     d.interview.due = Some(now.saturating_add(Duration::from_millis(500)));
+                    self.log_interview(i, code::INTERVIEW_SEND_DEFERRED, Severity::Debug, |r| r);
                     return;
                 }
                 Step::Goto(step, t) => {
@@ -299,7 +368,11 @@ impl<HS: Storage> Hub<HS> {
             capabilities: d.capabilities,
             partial: d.interview.partial,
         };
+        let partial = d.interview.partial;
         self.schedule_persist();
+        self.log_interview(i, code::INTERVIEW_COMPLETED, Severity::Info, |r| {
+            r.status(u8::from(partial))
+        });
         self.emit(e);
     }
 
@@ -452,6 +525,18 @@ impl<HS: Storage> Hub<HS> {
             3 => {
                 // No Zone Enroll Request came: enrol unsolicited.
                 let id = zone.zone_id.unwrap_or(0xff);
+                let ieee = d.ieee;
+                self.log(
+                    DiagRecord::new(
+                        Category::IasZone,
+                        Severity::Info,
+                        code::IAS_ENROLL_UNSOLICITED,
+                    )
+                    .ieee(ieee)
+                    .short(short)
+                    .endpoint(ep)
+                    .arg(u32::from(id)),
+                );
                 match self.send_cluster_command(
                     stack,
                     short,
@@ -492,10 +577,15 @@ impl<HS: Storage> Hub<HS> {
         };
         d.interview.busy = false;
         let stage = d.interview.stage;
+        let step = d.interview.step;
         let outcome = match reply {
             Reply::Timeout => Err((ErrorCode::Timeout, 0)),
             Reply::Zdp(z) => Self::zdp_outcome(d, stage, &z.data),
             Reply::Zcl(f) => Self::zcl_outcome(d, stage, f, now),
+        };
+        self.log_reply(i, stage, step, reply);
+        let Some(d) = self.registry.at_mut(i) else {
+            return;
         };
         match outcome {
             Ok(next) => {
@@ -517,6 +607,115 @@ impl<HS: Storage> Hub<HS> {
         self.run_interviews(stack);
     }
 
+    /// Logs an interview answer with its protocol status, and what it
+    /// means for IAS enrolment and reporting.
+    fn log_reply(&mut self, i: usize, stage: InterviewStage, step: u8, reply: Reply<'_>) {
+        let arg = (u32::from(stage.code()) << 8) | u32::from(step);
+        match reply {
+            Reply::Timeout => {}
+            Reply::Zdp(z) => {
+                let status = z.data.first().copied().unwrap_or(0xff);
+                let severity = if status == 0 {
+                    Severity::Debug
+                } else {
+                    Severity::Warning
+                };
+                self.log_interview(i, code::INTERVIEW_ANSWER, severity, |r| {
+                    r.tsn(z.seq.0).cluster(z.cluster.0).status(status).arg(arg)
+                });
+            }
+            Reply::Zcl(f) => {
+                let h = &f.origin.header;
+                let status = if h.command == global::DEFAULT_RESPONSE {
+                    DefaultResponse::decode_exact(&f.payload).map_or(0xff, |r| r.status.raw())
+                } else {
+                    0
+                };
+                let severity = if status == 0 {
+                    Severity::Debug
+                } else {
+                    Severity::Warning
+                };
+                let (ep, cl, tsn) = (f.origin.src_endpoint.0, f.origin.cluster.0, h.seq.0);
+                self.log_interview(i, code::INTERVIEW_ANSWER, severity, |r| {
+                    r.tsn(tsn).cluster(cl).endpoint(ep).status(status).arg(arg)
+                });
+                if stage == InterviewStage::Reporting
+                    && h.command == global::CONFIGURE_REPORTING_RESPONSE
+                {
+                    let ieee = self.registry.at(i).map_or(0, |d| d.ieee);
+                    for r in Records::<ConfigureReportingStatus>::new(&f.payload)
+                        .map_while(Result::ok)
+                        .filter(|r| !r.status.is_success())
+                    {
+                        let severity = if matches!(r.status.raw(), 0x86 | 0x8c) {
+                            Severity::Debug
+                        } else {
+                            Severity::Warning
+                        };
+                        let mut rec =
+                            DiagRecord::new(Category::Zcl, severity, code::ZCL_REPORTING_REFUSED)
+                                .ieee(ieee)
+                                .short(f.origin.src.0)
+                                .endpoint(ep)
+                                .cluster(cl)
+                                .tsn(tsn)
+                                .status(r.status.raw());
+                        if let Some((_, id)) = r.target {
+                            rec = rec.arg(u32::from(id.0));
+                        }
+                        self.log(rec);
+                    }
+                }
+                if stage == InterviewStage::IasZone {
+                    self.log_ias_answer(i, step, status, f);
+                }
+            }
+        }
+    }
+
+    fn log_ias_answer(&mut self, i: usize, step: u8, status: u8, f: &panweave_runtime::ZclFrame) {
+        let Some(d) = self.registry.at(i) else {
+            return;
+        };
+        let zone = d.zone;
+        let base = |c: u16, sev: Severity| {
+            DiagRecord::new(Category::IasZone, sev, c)
+                .ieee(d.ieee)
+                .short(d.short)
+                .endpoint(f.origin.src_endpoint.0)
+                .tsn(f.origin.header.seq.0)
+        };
+        let rec = match step {
+            0 => {
+                let mut r = base(code::IAS_ZONE_READ, Severity::Info)
+                    .status(u8::from(zone.is_some_and(|z| z.enrolled)));
+                if let Some(t) = zone.and_then(|z| z.zone_type) {
+                    r = r.arg(u32::from(t));
+                }
+                r
+            }
+            1 => {
+                let ok = f.origin.header.command == global::WRITE_ATTRIBUTES_RESPONSE
+                    && Records::<WriteAttributeStatus>::new(&f.payload)
+                        .map_while(Result::ok)
+                        .all(|r| r.status.is_success());
+                let sev = if ok {
+                    Severity::Info
+                } else {
+                    Severity::Warning
+                };
+                base(code::IAS_CIE_WRITTEN, sev).status(if ok { 0 } else { status.max(1) })
+            }
+            4 if zone.is_some_and(|z| z.enrolled) => {
+                base(code::IAS_ENROLL_CONFIRMED, Severity::Info)
+            }
+            4 => base(code::IAS_NOT_ENROLLED, Severity::Warning).status(d.enroll_retries),
+            _ => return,
+        };
+        self.log(rec);
+    }
+
     fn zdp_outcome(
         d: &mut Device,
         stage: InterviewStage,
@@ -536,7 +735,9 @@ impl<HS: Storage> Hub<HS> {
                     LogicalDeviceType::EndDevice => LogicalType::EndDevice,
                 });
                 d.rx_on_when_idle = Some(desc.mac_capability.rx_on_when_idle());
-                if desc.mac_capability.is_mains_powered() && d.power_source == PowerSource::Unknown
+                if desc.mac_capability.is_mains_powered()
+                    && d.power_source == PowerSource::Unknown
+                    && !d.ignores_mac_mains_claim()
                 {
                     d.power_source = PowerSource::Mains;
                 }
@@ -675,7 +876,7 @@ impl<HS: Storage> Hub<HS> {
     }
 
     /// A step failed: retry, skip it, or stall the interview.
-    fn step_failed(&mut self, i: usize, error: ErrorCode, _status: u8) {
+    fn step_failed(&mut self, i: usize, error: ErrorCode, status: u8) {
         let now = self.now;
         let max = self.config.max_attempts;
         let retry_delay = self.config.retry_delay;
@@ -683,7 +884,21 @@ impl<HS: Storage> Hub<HS> {
             return;
         };
         d.interview.attempts = d.interview.attempts.saturating_add(1);
+        let attempts = d.interview.attempts;
         let stage = d.interview.stage;
+        if error == ErrorCode::Timeout {
+            let (ep, cl) = step_target(d);
+            self.log_interview(i, code::INTERVIEW_TIMEOUT, Severity::Warning, |r| {
+                let r = r.cluster(cl).status(attempts);
+                match ep {
+                    Some(e) => r.endpoint(e),
+                    None => r,
+                }
+            });
+        }
+        let Some(d) = self.registry.at_mut(i) else {
+            return;
+        };
         if error == ErrorCode::Timeout && d.interview.attempts < max {
             d.interview.due = Some(now.saturating_add(retry_delay));
             return;
@@ -695,9 +910,26 @@ impl<HS: Storage> Hub<HS> {
             d.dirty = true;
             let ieee = d.ieee;
             self.schedule_persist();
+            self.log_interview(i, code::INTERVIEW_STALLED, Severity::Error, |r| {
+                r.status(if error == ErrorCode::Timeout {
+                    0xff
+                } else {
+                    status
+                })
+            });
             self.emit(Event::DeviceInterviewFailed { ieee, stage, error });
             return;
         }
+        self.log_interview(i, code::INTERVIEW_STEP_SKIPPED, Severity::Warning, |r| {
+            r.status(if error == ErrorCode::Timeout {
+                0xff
+            } else {
+                status
+            })
+        });
+        let Some(d) = self.registry.at_mut(i) else {
+            return;
+        };
         d.interview.partial = true;
         d.interview.attempts = 0;
         d.interview.due = Some(now);

@@ -19,6 +19,11 @@ path = "src/main.rs"
 panweave-hub = { workspace = true, features = ["std"] }
 heapless = { workspace = true }
 serialport = { version = "4.10.1", default-features = false }
+# Ctrl+C ends `watch`, `capture export` and `self-test` cleanly (the
+# capture is stopped on the hub and the pcap file finished) on Windows and
+# Unix alike; the standard library has no portable signal handling.
+ctrlc = "3.5"
+panweave-pcap = { workspace = true }
 
 [lints]
 workspace = true

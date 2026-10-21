@@ -33,6 +33,7 @@ use esp_hal::tsens::{self, TemperatureSensor};
 use esp_storage::FlashStorage;
 use panweave::types::ExtendedAddress;
 use panweave::types::rng::{CryptoRng, Rng as PanweaveRng};
+use panweave_hub::partitions::{MAX_PARTITIONS, Partition, kind as partition_kind};
 use panweave_storage::nor_flash::NorFlashStore;
 
 use crate::radio::Radio;
@@ -213,31 +214,72 @@ impl Board<SharedStore> {
     /// partition — `None` when the flashed partition table has no such
     /// partition (or a malformed one), in which case nothing is written
     /// outside the stack's region.
-    pub fn init_hub() -> (Self, Option<SharedStore>) {
+    pub fn init_hub() -> (Self, Option<SharedStore>, PartitionScan) {
         let (parts, mut flash) = Parts::init();
-        let hub_region = find_partition(&mut flash, HUB_PARTITION);
+        let scan = scan_partitions(&mut flash);
+        let hub_region = scan.hubdata;
         let flash: &'static RefCell<FlashStorage<'static>> =
             alloc::boxed::Box::leak(alloc::boxed::Box::new(RefCell::new(flash)));
         let storage = NorFlashStore::new(SharedFlash(flash), STORE_OFFSET, STORE_LEN)
             .unwrap_or_else(|_| panic!("storage region {STORE_OFFSET:#x}+{STORE_LEN:#x}"));
         let hub = hub_region
             .and_then(|(offset, len)| NorFlashStore::new(SharedFlash(flash), offset, len).ok());
-        (parts.with_storage(storage), hub)
+        (parts.with_storage(storage), hub, scan)
     }
 }
 
-/// The region of the data partition labelled `label`, trimmed to whole
-/// pairs of sectors, provided it does not overlap the stack's region.
-fn find_partition(flash: &mut FlashStorage<'static>, label: &str) -> Option<(u32, u32)> {
+/// The partition table found on flash at boot (read-only: nothing is
+/// erased or rewritten).
+pub struct PartitionScan {
+    /// The table could be read and parsed.
+    pub read: bool,
+    /// Its entries.
+    pub table: heapless::Vec<Partition, MAX_PARTITIONS>,
+    /// Flash size the image header declares, octets.
+    pub flash_size: u32,
+    /// The registry region chosen (the `hubdata` partition trimmed to
+    /// whole pairs of sectors), when usable.
+    pub hubdata: Option<(u32, u32)>,
+}
+
+/// Reads the partition table and picks the registry region: the data
+/// partition labelled [`HUB_PARTITION`], trimmed to whole pairs of
+/// sectors, provided it does not overlap the stack's region.
+fn scan_partitions(flash: &mut FlashStorage<'static>) -> PartitionScan {
     use esp_bootloader_esp_idf::partitions::{self, PARTITION_TABLE_MAX_LEN};
+    let flash_size = u32::try_from(flash.capacity()).unwrap_or(u32::MAX);
+    let mut scan = PartitionScan {
+        read: false,
+        table: heapless::Vec::new(),
+        flash_size,
+        hubdata: None,
+    };
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let table = partitions::read_partition_table(flash, &mut buf).ok()?;
-    let entry = table.iter().find(|p| p.label_as_str() == label)?;
+    let Ok(table) = partitions::read_partition_table(flash, &mut buf) else {
+        return scan;
+    };
+    scan.read = true;
+    for e in table.iter() {
+        let p = Partition {
+            label: heapless::String::try_from(e.label_as_str()).unwrap_or_default(),
+            kind: e.raw_type(),
+            subtype: e.raw_subtype(),
+            offset: e.offset(),
+            size: e.len(),
+        };
+        let _ = scan.table.push(p);
+    }
     let sector = FlashStorage::SECTOR_SIZE;
-    let offset = entry.offset();
-    let len = entry.len() / (2 * sector) * (2 * sector);
-    let overlaps = offset < STORE_OFFSET + STORE_LEN && STORE_OFFSET < offset + len;
-    (offset % sector == 0 && len >= 2 * sector && !overlaps).then_some((offset, len))
+    scan.hubdata = table
+        .iter()
+        .find(|p| p.label_as_str() == HUB_PARTITION && p.raw_type() == partition_kind::DATA)
+        .and_then(|entry| {
+            let offset = entry.offset();
+            let len = entry.len() / (2 * sector) * (2 * sector);
+            let overlaps = offset < STORE_OFFSET + STORE_LEN && STORE_OFFSET < offset + len;
+            (offset % sector == 0 && len >= 2 * sector && !overlaps).then_some((offset, len))
+        });
+    scan
 }
 
 /// The die temperature in °C.

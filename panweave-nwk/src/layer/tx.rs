@@ -39,6 +39,26 @@ impl<
     const BTT: usize,
 > Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
 {
+    /// Queues a unicast awaiting its MAC confirm, counting saturation of
+    /// the pending table for diagnostics; [`NwkError::Busy`] when it is
+    /// full.
+    fn track_pending(&mut self, entry: PendingTx) -> Result<(), NwkError> {
+        let r = self.pending.push(entry);
+        if r.is_err() {
+            self.stats.pending_full = self.stats.pending_full.saturating_add(1);
+        }
+        let used = u32::try_from(self.pending.len()).unwrap_or(u32::MAX);
+        self.stats.pending_high_water = self.stats.pending_high_water.max(used);
+        r.map_err(|_| NwkError::Busy)
+    }
+
+    /// Unicasts awaiting their MAC confirm, and how many of them are held
+    /// for a sleepy child's next poll.
+    pub fn pending_tx(&self) -> (usize, usize) {
+        let held = self.pending.iter().filter(|p| p.indirect).count();
+        (self.pending.len(), held)
+    }
+
     /// Largest higher-layer payload that fits in a secured NPDU with a
     /// header of `header_len` octets.
     pub const fn max_payload(header_len: usize, secured: bool) -> usize {
@@ -371,7 +391,7 @@ impl<
             RouteDecision::Discover => {
                 entry.awaiting_route = true;
                 let dst = entry.dst;
-                self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+                self.track_pending(entry)?;
                 self.start_route_discovery(dst, None, false)?;
                 Ok(())
             }
@@ -409,7 +429,7 @@ impl<
             entry.retry_at = None;
             entry.indirect = false;
             let assume_security = entry.secure;
-            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+            self.track_pending(entry)?;
             self.push_action(NwkAction::TrustedLinkData {
                 handle,
                 link,
@@ -427,7 +447,7 @@ impl<
             entry.awaiting_route = false;
             entry.retry_at = None;
             let dst = entry.next_hop;
-            self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+            self.track_pending(entry)?;
             self.push_action(NwkAction::MacDataDeferred { handle, dst });
             return Ok(());
         }
@@ -436,7 +456,7 @@ impl<
             Err(NwkError::CounterPending) => {
                 entry.mac_handle = None;
                 entry.retry_at = Some(self.now + COUNTER_RETRY_DELAY);
-                return self.pending.push(entry).map_err(|_| NwkError::Busy);
+                return self.track_pending(entry);
             }
             Err(e) => return Err(e),
         };
@@ -446,7 +466,7 @@ impl<
         entry.retry_at = None;
         let dst = entry.next_hop;
         let indirect = entry.indirect;
-        self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+        self.track_pending(entry)?;
         self.nib.tx_total = self.nib.tx_total.saturating_add(1);
         self.push_action(NwkAction::MacData {
             handle,
@@ -604,7 +624,7 @@ impl<
                 let mut entry = self.pending.swap_remove(pos);
                 entry.mac_handle = None;
                 entry.retry_at = Some(self.now + COUNTER_RETRY_DELAY);
-                let _ = self.pending.push(entry);
+                let _ = self.track_pending(entry);
             }
             Err(_) => {
                 let entry = self.pending.swap_remove(pos);
@@ -650,7 +670,7 @@ impl<
                     entry.retries_left -= 1;
                     entry.mac_handle = None;
                     entry.retry_at = Some(self.now + constants::UNICAST_RETRY_DELAY);
-                    if self.pending.push(entry).is_err() {
+                    if self.track_pending(entry).is_err() {
                         // Cannot keep it: report failure now.
                         // (Queue was just popped so this cannot happen.)
                     }
@@ -919,7 +939,7 @@ impl<
             RouteDecision::Discover => {
                 entry.awaiting_route = true;
                 let dst = entry.dst;
-                self.pending.push(entry).map_err(|_| NwkError::Busy)?;
+                self.track_pending(entry)?;
                 self.start_route_discovery(dst, None, false)?;
                 Ok(())
             }

@@ -308,10 +308,13 @@ pub(crate) fn apply(d: &mut Device, cluster_id: u16, attribute: u16, v: &Value<'
             state(set(&mut d.state.battery_mv, mv))
         }
         (cluster::POWER_CONFIGURATION, power_attr::BATTERY_PERCENTAGE) => {
+            // Half-percent units, 0..=200; 0xFF means invalid and any other
+            // value above 200 is out of range: neither is turned into a
+            // percentage (none is derived from the voltage either).
             let pct = v
                 .as_u64()
-                .filter(|x| *x != 0xff)
-                .and_then(|x| u8::try_from(x.div_ceil(2).min(100)).ok());
+                .filter(|x| *x <= 200)
+                .and_then(|x| u8::try_from(x.div_ceil(2)).ok());
             state(set(&mut d.state.battery_percent, pct))
         }
         (cluster::POWER_CONFIGURATION, power_attr::BATTERY_ALARM_STATE) => match v.as_u64() {
@@ -405,6 +408,20 @@ mod tests {
         };
         apply(&mut d, cluster::POWER_CONFIGURATION, 0x21, &unknown);
         assert_eq!(d.state.battery_percent, None);
+        for (raw, pct) in [
+            (0, Some(0)),
+            (1, Some(1)),
+            (200, Some(100)),
+            (201, None),
+            (254, None),
+        ] {
+            let v = Value::Uint {
+                width: 1,
+                value: raw,
+            };
+            apply(&mut d, cluster::POWER_CONFIGURATION, 0x21, &v);
+            assert_eq!(d.state.battery_percent, pct, "raw {raw}");
+        }
         let volts = Value::Uint {
             width: 1,
             value: 30,

@@ -23,6 +23,176 @@ Keep a Changelog; versions follow SemVer.
   `Board::init_hub` (two stores sharing the flash driver);
   `docs/esp32c6-hub.md`.
 * Fuzz target `hub_protocol`.
+* ESP32-C6 bring-up and diagnostics (`docs/esp32c6-diagnostics.md`,
+  `docs/esp32c6-hardware-testing.md`):
+  * `panweave-hub`: structured diagnostic trace (`diag`: 128 packed
+    records, severity / category filtering before queueing, drop of the
+    least severe first, counted drops, Critical records never filtered);
+    instrumentation of joins, interviews, IAS Zone (raw and interpreted
+    zone status together), ZCL commands, registry, persistence and the
+    host session; boot report, radio, storage and runtime reports;
+    bounded radio capture (`capture`) with metadata / sanitized / raw
+    modes, sanitized by default (headers only, fail closed on anything
+    unrecognized), original lengths kept;
+    partition table validation (`partitions`); ESP32-C6 reset reasons
+    (`esp32c6`); `NetworkRestore::decide`, the boot network policy.
+  * Hub Protocol v1, compatibly extended: requests 0x12–0x1E
+    (`GetBootReport`, `GetRadioDiagnostics`, `GetStorageDiagnostics`,
+    `GetRuntimeDiagnostics`, `Get/SetTraceConfiguration`, `ReadTrace`,
+    `ClearTrace`, `Start/Stop/ReadCapture`, `SetKeyExchangeExemption`,
+    `GetSecurityStatus`) and responses 0x09–0x10; no tag renumbered, the
+    existing golden frames unchanged.
+  * `panweave-hub`: `radio-capture` feature — without it the engine holds
+    no capture buffer (2 488 octets less, host measurement) and answers
+    the capture requests `NotSupported`; `boot` (`RestoreRetry`,
+    `stored_network`), `supervisor` (`RadioSupervisor`), target memory and
+    timing metrics in the runtime report (`TargetMetrics`).
+  * `panweave-pcap`: `PcapWriter::write_truncated` (captured length below
+    the original length).
+  * `panweave-runtime`: Trust Center join trace (`join_trace`,
+    `Stack::next_join_record`), twelve milestones per queue;
+    `Stack::restore_detail` (`RestoreDetail`: empty, incomplete, unknown
+    format, malformed).
+  * `panweave-nwk`: pending-unicast saturation and high-water counters,
+    `Nwk::pending_tx`.
+  * `panweave-storage`: `NorFlashStore::stats` (formatted at open,
+    damaged records, writes, compactions, I/O errors) and `capacity`.
+  * `panweave-hub-cli`: `diagnostics system|radio|storage|runtime|trace|
+    watch|device|interview|export|configure|clear`, `capture
+    start|stop|export` (pcap, link type 230, JSONL metadata), `self-test`
+    (15 tests, PASS / FAIL / SKIP), `hil light|contact|leak` with JSON
+    reports, `partitions check`, `security [exempt|revoke]`, global
+    `--json`, clean Ctrl+C handling (`ctrlc`), exit codes (3: hub
+    unreachable); capture `--mode`, raw only with `--allow-raw`.
+  * ESP32-C6 `hub` firmware: boot report (reset reason, chip revision,
+    CPU clock, flash size, partition table check, build id from git via
+    `build.rs`), radio driver counters, loop and radio-step timing, loop
+    overrun records, USB byte counters, capture feed; `capture` feature
+    (default); `build.rs` rejects an invalid `partitions-hub.csv`; main
+    stack watermark (painted stack) and heap statistics; at most 32
+    received frames per radio step.
+* Real-device compatibility (`docs/device-compatibility.md`):
+  * `panweave-hub`: `compat`, commercial device profiles matched on exact
+    Basic identities, with cited evidence and a verification status, for
+    the Aqara Water Leak Sensor T1 (`lumi.flood.agl02`), the Sber
+    SBDV-00030 opening sensor (`_TYZB01_epni2jgy` / `TS0203`) and the
+    Yandex YNDX-00527 leak sensor; all three are documented externally,
+    none hardware verified. One correction: the Aqara sensor's MAC
+    "mains powered" flag is ignored (it runs on a CR2032). Profiles never
+    affect security. The Sber SBDV-00115 bulb is recorded as out of
+    scope (Wi-Fi / Bluetooth LE, not Zigbee).
+  * `panweave-hub-cli`: `device <ieee> fingerprint [--json]` (every value
+    labelled Observed on hardware, Documented externally, Derived from
+    protocol semantics or Unknown); `hil aqara-leak|sber-contact|
+    yandex-leak` (profile match, fingerprint, battery, alarm and clear,
+    battery power cycle, alarm and clear again) with commit, date,
+    profile, fingerprint, diagnostics and an overall PASS / FAIL /
+    INCOMPLETE result in the report; health, radio recoveries, denied
+    frames by reason and exemption use in `diagnostics runtime` and
+    `security`.
+* `panweave-hub`: `supervisor::HealthSupervisor` (health states
+  healthy-idle, healthy-active, degraded, suspected-stall,
+  confirmed-stall) replaces `RadioSupervisor`; trace codes
+  `stall-suspected`, `stall-confirmed`, `previous-stall-reset`,
+  `join-exemption-withdrawn`; `TargetMetrics::health` and
+  `radio_recoveries`; `SecurityStatus::denied` (by reason),
+  `exemptions_used`, `exemptions_expired`.
+* `panweave-runtime`: `Stack::grant_commissioning_exemption`,
+  `commissioning_exemption`, `commissioning_exemptions`, `denied_frames`
+  (`DeniedFrames`, `DenyReason`), `held_application_frames`;
+  `JoinStage::ExemptionWithdrawn`.
+* `panweave-aps`: `ApsStats::deferrals`; `constants::LOCAL_RETRY_DELAY`,
+  `MAX_LOCAL_DEFERRALS`.
+
+### Changed
+
+* ESP32-C6 `hub` firmware: a new network is formed only when the stack's
+  storage was read and is genuinely empty. A read error, damaged records,
+  or a stored network that cannot be used (half written, unknown format,
+  undecodable — which 0.2.0 treated as factory new) leave the hub up
+  without a network and report it; an unreadable storage is read again
+  with a growing interval and the network resumes when a read succeeds.
+  0.2.0 formed a new network on a read error, orphaning paired devices.
+* ESP32-C6 `hub` firmware: the watchdog is fed every loop turn unless the
+  health supervisor has evidence of a stall its recovery did not fix: a
+  stack deadline overdue for 10 s, or transmissions handed to the driver
+  that never complete for 30 s while frames are queued. Silence is never
+  such evidence, so an idle network or one with only sleepy sensors never
+  resets the hub (an earlier unreleased build reset after 120 s without
+  a transmission). A suspected stall first re-arms the radio (no flash
+  write, no network change); only a confirmed one resets, its cause is
+  stored and reported once by the next boot, and a boot that followed a
+  watchdog reset never escalates again (no reset loops).
+* `panweave-hub`: an IAS zone status that arrives before the zone type is
+  interpreted as soon as the type is known; a compatibility profile's
+  power-source correction applies once the identity is read.
+* `panweave-runtime`: the Trust Center's link-key table holds 32 entries
+  (`LINK_KEYS`; 8 with `small-tables`), as many devices as the hub
+  registers.
+* `panweave-security`: `TrustCenterPolicy::node_join_timeout_s`
+  (`bdbTrustCenterNodeJoinTimeout`, default 15).
+
+### Security
+
+* `panweave-runtime`: `bdbTrustCenterRequireKeyExchange` is enforced
+  (`authorization`). A device that received the network key is pending
+  until it holds a verified unique Trust Center link key (APS key
+  exchange, dynamic link key negotiation, Smart Energy CBKE or swap-out
+  renewal); meanwhile its application frames are dropped and
+  `StackEvent::DeviceAuthorized` is not raised (`KeyExchangePending`
+  instead); after `node_join_timeout_s` its link key is removed and it is
+  asked to leave (`KeyExchangeTimedOut`). Authorization is derived from
+  the persisted key-pair entry, so a restart never promotes a pending
+  device. Per-device exemptions (`Stack::set_key_exchange_exemption`)
+  are the only relaxation. Previously the flag was never read and every
+  device that received the network key was authorized.
+* `panweave-runtime`: TCLK Request Key honours
+  `allowTrustCenterLinkKeyRequests` (previously only "never" was checked,
+  so a verified device could replace its key at will); a device inside
+  its key-exchange window may repeat its request, and a device restored
+  from a swap-out backup may renew its key once.
+* `panweave-hub`: devices without application access are neither
+  registered nor interviewed; administrator exemptions are Admin-only,
+  bounded in time until the device joins, persisted with it, at most 8.
+* `panweave-hub`: radio capture no longer relies on NWK security to decide
+  what is safe to export: sanitized captures keep headers only.
+* `panweave-runtime`: every application frame (APS data outside ZDO) is
+  decided on its originator: admitted only from an authorized or
+  admitted-exempt device; an originator whose IEEE address is unknown is
+  held (2 frames, 10 s) while the Trust Center asks for it and refused
+  if it cannot be resolved; a claimed address that contradicts the
+  address map, a source without a key-pair entry, and pending or
+  incomplete devices are refused, counted by reason. Group and broadcast
+  frames follow the same rule. Green Power infrastructure frames (alias
+  sources) and Key Establishment for pending devices are the documented
+  exceptions. Previously frames whose source could not be attributed
+  were delivered.
+* `panweave-runtime`: key-exchange exemptions are a single-use
+  commissioning grant (at most 3600 s, never extended by a repeated
+  request, not restored after a restart) consumed by the device's
+  initial join, then an admission that a new unsecured join withdraws;
+  removing a device revokes its exemption and key. An exemption cannot
+  authenticate a claimed IEEE address (documented limitation).
+
+### Fixed
+
+* `panweave-aps`: a frame the NWK layer refuses for lack of buffers (its
+  pending table full, typically with frames held for sleepy children) is
+  offered again after 1 s, at most 8 times, acknowledged or not;
+  previously an acknowledged frame spent all its retries in the same
+  turn and an unacknowledged one failed at once. Three sleepy sensors
+  pairing together lost Trust Center key-exchange replies and were
+  removed for not completing the key exchange; they now all complete
+  (`hub_devices` tests). `PENDING_TX` stays 4.
+* `panweave-hub`: a BatteryPercentageRemaining above 200 (out of range)
+  is ignored instead of being shown as 100 %.
+
+### Removed
+
+* ESP32-C6 crate feature `legacy-joiners`: it cleared the Trust Center's
+  `require_key_exchange` flag, which was not enforced then. The
+  requirement is enforced now; a legacy device is admitted only through
+  an explicit, per-device exemption (`security exempt`).
 
 ## [0.1.0] - 2026-09-18
 

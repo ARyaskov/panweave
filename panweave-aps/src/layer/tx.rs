@@ -31,6 +31,12 @@ pub(crate) enum TxState {
     CounterPending,
     /// Handed to the NWK layer; waiting for NLDE-DATA.confirm.
     AwaitingNwkConfirm,
+    /// Refused locally by the NWK layer (no buffer); offered again at
+    /// `until`.
+    Deferred {
+        /// When to offer the frame again.
+        until: Instant,
+    },
     /// Waiting for the APS acknowledgement.
     AwaitingAck {
         /// `apscAckWaitDuration` deadline.
@@ -99,6 +105,8 @@ pub(crate) struct PendingTx {
     pub block: u8,
     pub block_size: usize,
     pub retries: u8,
+    /// Local NWK refusals so far ([`constants::MAX_LOCAL_DEFERRALS`]).
+    pub deferrals: u8,
     pub state: TxState,
     pub post: Option<PostAction>,
     pub wrap: Option<Wrap>,
@@ -484,6 +492,7 @@ impl<
             block: 0,
             block_size,
             retries: 0,
+            deferrals: 0,
             state: TxState::Ready,
             post: p.post,
             wrap: p.wrap,
@@ -729,6 +738,18 @@ impl<
             }
             return;
         }
+        // A local refusal (the NWK layer had no buffer: nothing went on
+        // the air) is offered again a little later, acknowledged or not,
+        // a bounded number of times. Retrying at once would meet the same
+        // full table and spend the whole retry budget in one turn.
+        if status == NwkStatus::FrameNotBuffered && p.deferrals < constants::MAX_LOCAL_DEFERRALS {
+            p.deferrals += 1;
+            p.state = TxState::Deferred {
+                until: self.now.saturating_add(constants::LOCAL_RETRY_DELAY),
+            };
+            self.stats.deferrals = self.stats.deferrals.saturating_add(1);
+            return;
+        }
         // NWK failure: acknowledged frames retry like a lost
         // acknowledgement; others fail with the NWK status.
         if p.ack && p.retries < constants::MAX_FRAME_RETRIES {
@@ -793,6 +814,13 @@ impl<
             let Some(p) = self.pending.get_mut(idx) else {
                 break;
             };
+            if let TxState::Deferred { until } = p.state
+                && now.has_reached(until)
+            {
+                p.state = TxState::Ready;
+                idx += 1;
+                continue;
+            }
             if let TxState::AwaitingAck { deadline } = p.state
                 && now.has_reached(deadline)
             {

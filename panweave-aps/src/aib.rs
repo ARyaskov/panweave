@@ -15,6 +15,17 @@ pub mod constants {
     pub const MAX_FRAME_RETRIES: u8 = 3;
     /// `apscAckWaitDuration`: 0.05 × (2 × nwkcMaxDepth) + 0.1 s = 1.6 s.
     pub const ACK_WAIT_DURATION: Duration = Duration::from_millis(1600);
+    /// Delay before a frame the NWK layer refused for lack of buffers
+    /// (`NwkStatus::FrameNotBuffered`, a local refusal: nothing was
+    /// transmitted) is offered again. Not a specification constant: the
+    /// specification leaves local buffering to the implementation.
+    pub const LOCAL_RETRY_DELAY: Duration = Duration::from_millis(1000);
+    /// Most times one transmission is deferred after local refusals
+    /// before it fails: with [`LOCAL_RETRY_DELAY`] about eight seconds,
+    /// longer than a frame held for a sleepy child occupies a NWK slot
+    /// (`macTransactionPersistenceTime`). Separate from
+    /// [`MAX_FRAME_RETRIES`], which counts transmissions that happened.
+    pub const MAX_LOCAL_DEFERRALS: u8 = 8;
     /// `apscMinDuplicateRejectionTableSize`.
     pub const MIN_DUPLICATE_REJECTION_TABLE_SIZE: usize = 1;
     /// `apscMinHeaderOverhead`: minimum octets the APS adds to an ASDU.

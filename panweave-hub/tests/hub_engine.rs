@@ -22,6 +22,18 @@ use panweave_types::time::Duration;
 use panweave_types::{ExtendedAddress, MacCapability, ShortAddress};
 use panweave_zcl::clusters::ias_zone::EnrollMode;
 
+/// A hub on a formed network whose Trust Center does not require the
+/// link-key exchange: these tests inject stack events for devices that do
+/// not exist on the simulated radio (no key-pair entry, so a requiring
+/// Trust Center would rightly refuse them). Authorization itself is
+/// covered by `trust_center_policy.rs` in panweave-runtime and
+/// `hub_security.rs` here.
+fn engine_network() -> (Simulator, usize) {
+    let (mut sim, c) = network();
+    sim.stack(c).config.trust_center_policy.require_key_exchange = false;
+    (sim, c)
+}
+
 /// Delivers `event` to the hub as if the stack had raised it.
 fn inject(sim: &mut Simulator, c: usize, event: StackEvent) {
     let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
@@ -52,7 +64,7 @@ fn joined_events(events: &[Event]) -> Vec<(u64, u16, bool)> {
 
 #[test]
 fn nwk_address_changes_follow_the_ieee_address() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     inject(&mut sim, c, announce(0x1111, 0x1001));
     sim.run_for(Duration::from_secs(40));
     take_hub_events(&mut sim, c);
@@ -76,7 +88,7 @@ fn nwk_address_changes_follow_the_ieee_address() {
 
 #[test]
 fn a_device_that_left_is_unknown_until_it_rejoins() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     let s = join(
         &mut sim,
         c,
@@ -148,7 +160,7 @@ fn a_device_that_left_is_unknown_until_it_rejoins() {
 
 #[test]
 fn registry_overflow_keeps_the_known_devices() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     for i in 0..MAX_DEVICES as u64 {
         inject(
             &mut sim,
@@ -194,7 +206,7 @@ fn registry_overflow_keeps_the_known_devices() {
 
 #[test]
 fn a_full_event_queue_reports_how_many_events_were_lost() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     take_hub_events(&mut sim, c);
     // Feed the hub directly, without draining its queue.
     {
@@ -224,7 +236,7 @@ fn a_full_event_queue_reports_how_many_events_were_lost() {
 
 #[test]
 fn the_registry_survives_a_restart_and_bad_records_are_skipped() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     join(
         &mut sim,
         c,
@@ -278,7 +290,7 @@ fn the_registry_survives_a_restart_and_bad_records_are_skipped() {
 
 #[test]
 fn removal_from_the_registry_and_from_the_network() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     let b = join(&mut sim, c, "bulb", bulb(), BULB);
     assert_eq!(
         request(
@@ -323,7 +335,7 @@ fn removal_from_the_registry_and_from_the_network() {
 
 #[test]
 fn the_permit_join_window_is_bounded_and_closes_the_trust_center() {
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     assert!(sim.stack(c).config.trust_center_policy.allow_joins);
     assert_eq!(
         request(&mut sim, c, &Request::PermitJoin { seconds: 0 }),
@@ -357,7 +369,7 @@ fn a_reset_sensor_that_rejoins_is_enrolled_again() {
     use panweave_types::Endpoint;
     use panweave_zcl::clusters::ias_zone;
     use panweave_zcl::{Role, Value};
-    let (mut sim, c) = network();
+    let (mut sim, c) = engine_network();
     let s = join(
         &mut sim,
         c,

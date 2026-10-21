@@ -17,11 +17,11 @@ use panweave_mac::radio::RxMetadata;
 use panweave_mac::service::{MacEvent, RxDisposition, TxStatus};
 use panweave_nwk::interface::{InterfaceType, MacInterfaceEntry};
 use panweave_nwk::layer::{JoinMethod, JoinParams};
-use panweave_nwk::layer::{NwkAction, NwkEvent, RxOutcome};
+use panweave_nwk::layer::{NwkAction, NwkError, NwkEvent, RxOutcome};
 use panweave_nwk::tlv::{DeviceCapabilityExtension, GlobalTlvs, SupportedKeyNegotiationMethods};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
-use panweave_security::trust_center::{JoinDecision, JoinKind, TclkRequestPolicy};
+use panweave_security::trust_center::{JoinDecision, JoinKind};
 use panweave_storage::{Key, Kind, Storage};
 use panweave_types::time::Duration;
 use panweave_types::{
@@ -64,7 +64,8 @@ const ASDU_BUF: usize = panweave_aps::MAX_ASDU;
 /// An owned copy of an APS data indication (the APS layer borrows itself
 /// while an indication is alive; copying lets the ZDO/ZCL handlers
 /// reach the APS again).
-struct OwnedIndication {
+#[derive(Clone, Debug)]
+pub(crate) struct OwnedIndication {
     src: ShortAddress,
     src_ieee: Option<ExtendedAddress>,
     src_endpoint: Endpoint,
@@ -95,6 +96,11 @@ impl OwnedIndication {
             counter: ind.counter,
             nwk_broadcast: ind.nwk_broadcast,
         })
+    }
+
+    /// The originator's NWK address.
+    pub(crate) fn src(&self) -> ShortAddress {
+        self.src
     }
 
     fn borrow(&self) -> DataIndication<'_> {
@@ -369,6 +375,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     if cluster == cluster::response_of(cluster::SECURITY_CHALLENGE_REQ) {
                         self.on_challenge_response(data);
                     }
+                    if (cluster == cluster::response_of(cluster::IEEE_ADDR_REQ)
+                        || cluster == cluster::response_of(cluster::NWK_ADDR_REQ))
+                        && let Ok(rsp) = panweave_zdo::zdp::AddrRsp::decode_exact(data)
+                        && rsp.status.is_success()
+                    {
+                        // Originators of held application frames
+                        // (crate::authorization).
+                        self.on_address_resolved(rsp.ieee, rsp.short);
+                    }
                     if cluster == cluster::response_of(cluster::PARENT_ANNCE) {
                         self.on_parent_annce_rsp(src, data);
                     }
@@ -419,6 +434,50 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
             return;
         }
+        // Green Power infrastructure: a proxy tunnels GPD frames to the
+        // Green Power endpoint with the GPD's *alias* as NWK source (GP
+        // 1.1 §A.3.5.2), never a resolvable device; the sink applies the
+        // GPD's own security to them. Only the GP cluster on the GP
+        // endpoint and profile qualifies.
+        let green_power = ind.profile == ProfileId::GREEN_POWER
+            && ind.cluster.0 == 0x0021
+            && matches!(
+                ind.delivery,
+                Delivery::Endpoint(Endpoint::GREEN_POWER) | Delivery::Group(_)
+            );
+        if green_power {
+            self.deliver_application(ind);
+            return;
+        }
+        // Trust Center policy: application frames reach the application
+        // only from an authorized originator (crate::authorization).
+        match self.authorize_application_frame(ind.src, ind.src_ieee, ind.cluster.0) {
+            crate::authorization::FrameVerdict::Admit => {}
+            crate::authorization::FrameVerdict::Hold => {
+                self.hold_for_resolution(ind);
+                return;
+            }
+            crate::authorization::FrameVerdict::Deny(_) => return,
+        }
+        self.deliver_application(ind);
+    }
+
+    /// A held frame whose originator was resolved: decided again.
+    pub(crate) fn dispatch_held(&mut self, ind: &OwnedIndication) {
+        match self.authorize_application_frame(ind.src, ind.src_ieee, ind.cluster.0) {
+            crate::authorization::FrameVerdict::Admit => self.deliver_application(ind),
+            // Still unknown after resolution: refused, not held again.
+            crate::authorization::FrameVerdict::Hold => {
+                self.authorization.denied.unresolved =
+                    self.authorization.denied.unresolved.saturating_add(1);
+            }
+            crate::authorization::FrameVerdict::Deny(_) => {}
+        }
+    }
+
+    /// Delivers an authorized application frame to the ZCL.
+    fn deliver_application(&mut self, ind: &OwnedIndication) {
+        let borrowed = ind.borrow();
         let out = self.zcl.on_data(&borrowed, &mut self.aps.groups);
         if ind.cluster == panweave_zcl::clusters::groups::ID {
             // A Groups server command may have changed apsGroupTable.
@@ -483,9 +542,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     device,
                     capability,
                     lqi,
-                } => self
-                    .nwk
-                    .on_mac_associate_indication(device, capability, lqi),
+                } => {
+                    self.trace_join(
+                        device,
+                        None,
+                        crate::join_trace::JoinStage::AssociationRequest,
+                        capability.raw(),
+                    );
+                    self.nwk
+                        .on_mac_associate_indication(device, capability, lqi);
+                }
                 MacEvent::AssociateConfirm {
                     short_address,
                     status,
@@ -1043,6 +1109,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 UpdateDeviceStatus::SecuredRejoin
             }
         };
+        self.trace_join(
+            device,
+            Some(short),
+            crate::join_trace::JoinStage::ChildJoined,
+            status.raw(),
+        );
         if self.aps.config.is_trust_center {
             self.trust_center_authorize(device, short, status, None, joiner_tlvs);
         } else if self.aps.aib.is_distributed() {
@@ -1075,7 +1147,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     let seq = self.network_key_sequence;
                     self.send_basic_authorization_key(device, short, seq, route, true);
                 } else {
-                    self.send_network_key(device, short, route);
+                    self.send_network_key(device, short, route, true);
                 }
             }
         } else {
@@ -1099,6 +1171,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         parent: Option<ShortAddress>,
         joiner_tlvs: &[u8],
     ) {
+        if parent.is_some() {
+            self.trace_join(
+                device,
+                Some(short),
+                crate::join_trace::JoinStage::UpdateDevice,
+                status.raw(),
+            );
+        }
         if status == UpdateDeviceStatus::DeviceLeft {
             // §4.6.3.6.1: the device left through its parent; drop the
             // network-layer bookkeeping and inform the application. The
@@ -1108,6 +1188,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
             let _ = self.nwk.neighbors.remove_extended(device);
             self.nwk.address_map.remove_extended(device);
+            self.forget_key_exchange(device);
             self.push_event(StackEvent::DeviceLeft {
                 ieee: device,
                 rejoin: false,
@@ -1159,6 +1240,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 None,
             )
         };
+        let code = match decision {
+            JoinDecision::NegotiateKey { .. } => crate::join_trace::decision::NEGOTIATE_KEY,
+            JoinDecision::TransportNetworkKey { .. } => {
+                crate::join_trace::decision::TRANSPORT_NETWORK_KEY
+            }
+            JoinDecision::Allow => crate::join_trace::decision::ALLOW,
+            JoinDecision::Ignore => crate::join_trace::decision::IGNORE,
+            JoinDecision::Remove => crate::join_trace::decision::REMOVE,
+        };
+        self.trace_join(
+            device,
+            Some(short),
+            crate::join_trace::JoinStage::Decision,
+            code,
+        );
         if virtual_device {
             self.admit_virtual_device(device, short, parent, decision);
             return;
@@ -1183,14 +1279,14 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         nwk_secure: false,
                     },
                 };
-                self.send_network_key(device, short, route);
+                // A Trust Center rejoin redelivers the key to a device
+                // that joined before; only an unsecured join is initial.
+                self.send_network_key(device, short, route, kind == JoinKind::UnsecuredJoin);
             }
             JoinDecision::Allow => {
-                self.nwk.authenticate_child(device);
-                self.push_event(StackEvent::DeviceAuthorized {
-                    ieee: device,
-                    short,
-                });
+                // A secured rejoin: the device holds the network key
+                // already; the key-exchange requirement still applies.
+                self.admit_or_hold(device, short, parent, false);
             }
             JoinDecision::Ignore => {}
             JoinDecision::Remove => {
@@ -1295,6 +1391,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ieee: device,
                 short,
                 request,
+                parent: None,
+                initial_join: true,
             });
         }
     }
@@ -1755,6 +1853,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if let Some(s) = short {
             self.fragmentation.forget(s);
         }
+        self.forget_key_exchange(ieee);
         self.push_event(StackEvent::DeviceLeft { ieee, rejoin });
     }
 
@@ -1869,16 +1968,29 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         device: ExtendedAddress,
         short: ShortAddress,
         route: KeyRoute,
+        initial_join: bool,
     ) {
         let seq = self.network_key_sequence;
         let Some(key) = self.nwk.security.keys.get(seq).map(|s| s.key.clone()) else {
             return;
         };
+        let parent = match route {
+            KeyRoute::Tunnel { parent } => Some(parent),
+            _ => None,
+        };
         if let Ok(request) = self.aps.transport_network_key(device, &key, seq, route) {
+            self.trace_join(
+                device,
+                Some(short),
+                crate::join_trace::JoinStage::KeyTransportSent,
+                0,
+            );
             let _ = self.pending_children.push(PendingChild {
                 ieee: device,
                 short,
                 request,
+                parent,
+                initial_join,
             });
         }
     }
@@ -1915,9 +2027,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                                 .on_nwk_data_confirm(handle, NwkStatus::FrameNotBuffered);
                         }
                     }
-                    Err(_) => self
-                        .aps
-                        .on_nwk_data_confirm(handle, NwkStatus::InvalidRequest),
+                    // A full NWK table is a local, transient refusal: the
+                    // APS layer offers the frame again later.
+                    Err(e) => self.aps.on_nwk_data_confirm(
+                        handle,
+                        if e == NwkError::Busy {
+                            NwkStatus::FrameNotBuffered
+                        } else {
+                            NwkStatus::InvalidRequest
+                        },
+                    ),
                 },
                 ApsAction::CounterReservation {
                     partner,
@@ -1960,12 +2079,29 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ApsEvent::CommandConfirm { id, status, .. } => {
                     if let Some(i) = self.pending_children.iter().position(|p| p.request == id) {
                         let child = self.pending_children.swap_remove(i);
+                        let stage = if status.is_success() {
+                            crate::join_trace::JoinStage::KeyDelivered
+                        } else {
+                            crate::join_trace::JoinStage::KeyDeliveryFailed
+                        };
+                        self.trace_join(child.ieee, Some(child.short), stage, status.raw());
                         if status.is_success() {
-                            self.nwk.authenticate_child(child.ieee);
-                            self.push_event(StackEvent::DeviceAuthorized {
-                                ieee: child.ieee,
-                                short: child.short,
-                            });
+                            if self.virtual_devices.iter().any(|(d, _)| *d == child.ieee) {
+                                // A Zigbee Direct Virtual Device: its Basic
+                                // authorization key is its authorization.
+                                self.nwk.authenticate_child(child.ieee);
+                                self.push_event(StackEvent::DeviceAuthorized {
+                                    ieee: child.ieee,
+                                    short: child.short,
+                                });
+                            } else {
+                                self.admit_or_hold(
+                                    child.ieee,
+                                    child.short,
+                                    child.parent,
+                                    child.initial_join,
+                                );
+                            }
                         }
                     }
                 }
@@ -2066,8 +2202,21 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                             self.on_application_key_request(src, src_short, partner);
                         }
                     } else if key_type == RequestKeyType::TrustCenterLinkKey
-                        && self.config.trust_center_policy.tclk_requests != TclkRequestPolicy::Never
+                        && !self.tclk_request_allowed(src)
                     {
+                        self.trace_join(
+                            src,
+                            Some(src_short),
+                            crate::join_trace::JoinStage::TclkRequested,
+                            0,
+                        );
+                    } else if key_type == RequestKeyType::TrustCenterLinkKey {
+                        self.trace_join(
+                            src,
+                            Some(src_short),
+                            crate::join_trace::JoinStage::TclkRequested,
+                            1,
+                        );
                         let mut k = [0u8; 16];
                         self.nwk.rng().fill_bytes(&mut k);
                         // Link-Key Features & Capabilities: this Trust
@@ -2104,7 +2253,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     partner, relayed, ..
                 } => {
                     if self.aps.config.is_trust_center {
+                        let short = AddrView(&self.nwk).short_of(partner);
+                        self.trace_join(
+                            partner,
+                            short,
+                            crate::join_trace::JoinStage::TclkVerified,
+                            0,
+                        );
                         self.on_joiner_key_verified(partner, relayed);
+                        self.on_link_key_verified(partner);
                     }
                 }
                 ApsEvent::ConfirmKey { src, status, .. } => {

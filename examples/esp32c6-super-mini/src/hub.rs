@@ -18,7 +18,24 @@ use esp_hal::usb::usb_serial_jtag::{UsbSerialJtag, UsbSerialJtagRx, UsbSerialJta
 use panweave::storage::{Key, Kind, Storage, StorageError};
 use panweave_hub::Session;
 
+use embedded_storage::nor_flash::NorFlash;
+use panweave_hub::protocol::StoreUsage;
+use panweave_storage::nor_flash::NorFlashStore;
+
 use crate::board::SharedStore;
+
+/// A flash store's counters and room, for the hub's storage diagnostics.
+pub fn store_usage<F: NorFlash>(s: &NorFlashStore<F>) -> StoreUsage {
+    StoreUsage {
+        capacity: s.capacity(),
+        free: s.free(),
+        writes: s.stats.writes,
+        compactions: s.stats.compactions,
+        corrupt_records: s.stats.corrupt_records,
+        io_errors: s.stats.io_errors,
+        formatted_at_open: s.stats.formatted_at_open,
+    }
+}
 
 /// Octets read from USB per loop turn: bounds the time spent on the host
 /// before the radio is served again.
@@ -36,6 +53,10 @@ pub struct UsbLink {
     buf: [u8; RX_BUDGET],
     len: usize,
     last_progress: u64,
+    /// Octets received from the host (wrapping).
+    pub rx_bytes: u32,
+    /// Octets handed to the controller (wrapping).
+    pub tx_bytes: u32,
 }
 
 impl UsbLink {
@@ -48,6 +69,8 @@ impl UsbLink {
             buf: [0; RX_BUDGET],
             len: 0,
             last_progress: 0,
+            rx_bytes: 0,
+            tx_bytes: 0,
         }
     }
 
@@ -59,6 +82,7 @@ impl UsbLink {
                 Ok(b) => {
                     self.buf[self.len] = b;
                     self.len += 1;
+                    self.rx_bytes = self.rx_bytes.wrapping_add(1);
                 }
                 Err(_) => break,
             }
@@ -76,19 +100,24 @@ impl UsbLink {
     }
 
     /// Sends what the session has queued, as far as the controller's FIFO
-    /// takes it; drops the queue after [`STALL_MS`] without progress.
-    pub fn transmit<const TX: usize>(&mut self, session: &mut Session<TX>, now_ms: u64) {
+    /// takes it; drops the queue after [`STALL_MS`] without progress and
+    /// returns how many octets were dropped then.
+    pub fn transmit<const TX: usize>(&mut self, session: &mut Session<TX>, now_ms: u64) -> usize {
         let tx = &mut self.tx;
         let sent = session.transmit(|b| tx.write_byte_nb(b).is_ok());
+        self.tx_bytes = self
+            .tx_bytes
+            .wrapping_add(u32::try_from(sent).unwrap_or(u32::MAX));
         if sent > 0 {
             let _ = self.tx.flush_tx_nb();
             self.last_progress = now_ms;
         } else if session.tx_len() == 0 {
             self.last_progress = now_ms;
         } else if now_ms.saturating_sub(self.last_progress) > STALL_MS {
-            session.discard_tx();
             self.last_progress = now_ms;
+            return session.discard_tx();
         }
+        0
     }
 }
 

@@ -11,15 +11,25 @@
 )]
 
 use heapless::Vec as HVec;
+use panweave_hub::capture::{CaptureMode, CapturedFrame, MAX_FRAME, flags};
+use panweave_hub::diag::{Category, DiagRecord, Severity, code};
 use panweave_hub::model::{
     Capabilities, ContactState, DeviceCategory, DeviceState, Flag, InterviewStage, InterviewStatus,
     LeakState, LogicalType, PowerSource,
 };
 use panweave_hub::protocol::frame::{FrameDecoder, MAX_BODY, MAX_WIRE};
 use panweave_hub::protocol::{
-    AttributeData, CommandStage, DEVICE_PAGE, DeviceInfo, DeviceList, DeviceSummary, Diagnostics,
-    EndpointDescriptor, ErrorCode, Event, HubInfo, LightCommand, Message, NetworkInfo,
-    NetworkState, NetworkStatus, ProtocolError, Request, Response, SensorEvent, ZoneInfo,
+    AttributeData, BootReport, CapturePage, CommandStage, DEVICE_PAGE, DeviceInfo, DeviceList,
+    DeviceSummary, Diagnostics, EndpointDescriptor, ErrorCode, Event, HubInfo, LightCommand,
+    MAX_BOOT_FINDINGS, MAX_BOOT_PARTITIONS, MAX_CAPTURE_PAGE, MAX_TRACE_PAGE, Message, NetworkInfo,
+    NetworkRestore, NetworkState, NetworkStatus, PartitionEntry, PartitionFinding, ProtocolError,
+    QueueUsage, RadioDiagnostics, RadioDriverStats, Request, ResetKind, Response,
+    RuntimeDiagnostics, SensorEvent, StorageDiagnostics, StoreUsage, TraceConfiguration, TracePage,
+    ZoneInfo,
+};
+use panweave_hub::protocol::{
+    DeviceAuthorization, ExemptionInfo, MAX_EXEMPTIONS, MAX_UNAUTHORIZED, SecurityStatus,
+    TargetMetrics,
 };
 
 fn full_state() -> DeviceState {
@@ -88,6 +98,284 @@ fn largest_device() -> DeviceInfo {
     }
 }
 
+/// The largest boot report: every partition and finding slot used.
+fn largest_boot_report() -> BootReport {
+    let mut partitions = HVec::new();
+    for i in 0..MAX_BOOT_PARTITIONS {
+        partitions
+            .push(PartitionEntry {
+                label: HVec::from_slice(&[b'p'; 16]).unwrap(),
+                kind: 1,
+                subtype: u8::try_from(i).unwrap(),
+                offset: 0x9000 + u32::try_from(i).unwrap() * 0x1000,
+                size: 0x1000,
+            })
+            .unwrap();
+    }
+    let mut findings = HVec::new();
+    for i in 0..MAX_BOOT_FINDINGS {
+        findings
+            .push(PartitionFinding {
+                code: u8::try_from(i + 1).unwrap(),
+                partition: if i == 0 { 0xff } else { 2 },
+            })
+            .unwrap();
+    }
+    BootReport {
+        chip: HVec::from_slice(b"ESP32-C6").unwrap(),
+        chip_revision: Some(1),
+        firmware: HVec::from_slice(b"0.2.1").unwrap(),
+        build: HVec::from_slice(&[b'b'; 24]).unwrap(),
+        reset: Some(ResetKind::WatchdogReset),
+        reset_raw: Some(0x07),
+        cpu_mhz: Some(160),
+        flash_size: Some(0x40_0000),
+        partition_table_read: true,
+        partitions,
+        findings,
+        hubdata: Some((0x31_0000, 0x1_0000)),
+        ieee: 0x0011_2233_4455_6677,
+        radio_channel: Some(15),
+        network: Some(NetworkRestore::CorruptNotFormed),
+        registry_devices: Some(32),
+        registry_persistent: true,
+        usb_ready: true,
+        watchdog_s: Some(8),
+        boot_ms: Some(812),
+    }
+}
+
+/// A trace record with every field present.
+fn full_record(i: u32) -> DiagRecord {
+    let mut r = DiagRecord::new(
+        Category::Interview,
+        Severity::Warning,
+        code::INTERVIEW_TIMEOUT,
+    )
+    .ieee(0x0011_2233_4455_6677)
+    .short(0x1234)
+    .endpoint(1)
+    .cluster(0x0500)
+    .tsn(200)
+    .status(3)
+    .arg(0x0102 + i);
+    r.seq = (u32::MAX - 5).wrapping_add(i);
+    r.at_ms = u32::MAX - 1000 + i;
+    r
+}
+
+fn largest_trace_page() -> TracePage {
+    let mut records = HVec::new();
+    for i in 0..MAX_TRACE_PAGE {
+        records
+            .push(full_record(u32::try_from(i).unwrap()))
+            .unwrap();
+    }
+    TracePage {
+        uptime_ms: u64::from(u32::MAX) + 5,
+        next: 7,
+        first_available: u32::MAX - 5,
+        dropped: 1000,
+        records,
+    }
+}
+
+fn largest_capture_page() -> CapturePage {
+    let mut frames = HVec::new();
+    for i in 0..MAX_CAPTURE_PAGE {
+        frames
+            .push(CapturedFrame {
+                seq: u32::try_from(i).unwrap(),
+                at_ms: 99,
+                channel: 26,
+                flags: flags::RX | flags::REDACTED,
+                rssi: Some(-90),
+                lqi: Some(30),
+                original_len: 127,
+                data: HVec::from_slice(&[0x5a; MAX_FRAME]).unwrap(),
+            })
+            .unwrap();
+    }
+    CapturePage {
+        active: true,
+        mode: CaptureMode::Sanitized,
+        remaining_s: 3600,
+        dropped: 17,
+        queued: 16,
+        uptime_ms: 123_456,
+        frames,
+    }
+}
+
+fn largest_security_status() -> SecurityStatus {
+    let mut s = SecurityStatus {
+        require_key_exchange: true,
+        node_join_timeout_s: 15,
+        pending_key_exchanges: 8,
+        key_exchange_timeouts: 3,
+        unauthorized_frames_dropped: 70_000,
+        link_keys: 31,
+        link_key_capacity: 32,
+        ..SecurityStatus::default()
+    };
+    for i in 0..MAX_EXEMPTIONS {
+        s.exemptions
+            .push(ExemptionInfo {
+                ieee: 0x1000 + u64::try_from(i).unwrap(),
+                remaining_s: (i % 2 == 0).then_some(3600),
+            })
+            .unwrap();
+    }
+    for i in 0..MAX_UNAUTHORIZED {
+        s.unauthorized
+            .push((
+                0x2000 + u64::try_from(i).unwrap(),
+                DeviceAuthorization::from_code(u8::try_from(i).unwrap()),
+            ))
+            .unwrap();
+    }
+    s
+}
+
+fn store_usage() -> StoreUsage {
+    StoreUsage {
+        capacity: 0x8000,
+        free: 0x1234,
+        writes: 99,
+        compactions: 2,
+        corrupt_records: 1,
+        io_errors: 0,
+        formatted_at_open: false,
+    }
+}
+
+fn queue(len: u16) -> QueueUsage {
+    QueueUsage {
+        len,
+        capacity: 32,
+        high_water: 31,
+    }
+}
+
+fn diagnostic_responses() -> Vec<Response> {
+    vec![
+        Response::BootReport(largest_boot_report()),
+        Response::BootReport(BootReport::default()),
+        Response::RadioDiagnostics(RadioDiagnostics {
+            channel: Some(11),
+            tx_power_dbm: Some(-3),
+            energy_detection: false,
+            driver: Some(RadioDriverStats {
+                tx_attempts: 1,
+                tx_acked: 2,
+                tx_no_ack: 3,
+                tx_cca_failures: 4,
+                tx_faults: 5,
+                rx_frames: 6,
+                rx_malformed: 7,
+                config_errors: 8,
+                config_flushes: 9,
+                last_rssi: Some(-70),
+                last_lqi: None,
+            }),
+            mac_tx_ucast: 10,
+            mac_tx_ucast_retry: 11,
+            mac_tx_ucast_fail: 12,
+            mac_rx_ucast: 13,
+            mac_tx_bcast: 14,
+            mac_rx_bcast: 15,
+            mac_queue_full: 16,
+            nwk_malformed: 17,
+            nwk_security_failures: 18,
+            nwk_replays: 19,
+            nwk_no_route: 20,
+            nwk_pending_full: 21,
+            nwk_pending_high_water: 4,
+            nwk_pending: 3,
+            nwk_pending_held: 2,
+            nwk_pending_capacity: 4,
+            aps_tx_success: 22,
+            aps_retries: 23,
+            aps_ack_failures: 24,
+            aps_security_dropped: 25,
+            aps_malformed: 26,
+        }),
+        Response::RadioDiagnostics(RadioDiagnostics::default()),
+        Response::StorageDiagnostics(StorageDiagnostics {
+            registry_persistent: true,
+            registry_devices: 5,
+            registry_writes: 6,
+            registry_errors: 7,
+            registry_full_errors: 8,
+            records_skipped: 9,
+            last_error: Some(1),
+            network: Some(NetworkRestore::Restored),
+            stack_store: Some(store_usage()),
+            hub_store: None,
+        }),
+        Response::RuntimeDiagnostics(RuntimeDiagnostics {
+            uptime_ms: u64::MAX,
+            loop_iterations: Some(1),
+            loop_max_us: Some(2),
+            loop_overruns: None,
+            radio_step_max_us: Some(3),
+            watchdog_s: Some(8),
+            hub_events: queue(1),
+            pending: queue(2),
+            commands: queue(3),
+            trace: queue(4),
+            session_tx: queue(5),
+            capture: queue(6),
+            hub_events_dropped: 7,
+            stack_events_dropped: 8,
+            trace_dropped: 9,
+            join_trace_dropped: 10,
+            capture_dropped: 11,
+            usb_rx_bytes: Some(12),
+            usb_tx_bytes: None,
+            usb_discards: 13,
+            devices: 14,
+            max_devices: 32,
+            interviews_active: 2,
+            interviews_stalled: 1,
+            target: TargetMetrics {
+                stack_size: Some(400_000),
+                stack_peak: Some(180_000),
+                heap_size: Some(32_768),
+                heap_used: Some(20_000),
+                heap_peak: None,
+                loop_over_20ms: Some(3),
+                hub_poll_max_us: Some(12_000),
+                radio_idle_ms: Some(15_000),
+                rx_bursts_cut: None,
+                health: Some(2),
+                radio_recoveries: Some(1),
+            },
+        }),
+        Response::TraceConfiguration(TraceConfiguration {
+            min_severity: Severity::Debug,
+            categories: 0x8001,
+            capacity: 128,
+            stored: 77,
+            dropped: 5,
+            filtered: 6,
+        }),
+        Response::TracePage(largest_trace_page()),
+        Response::CapturePage(largest_capture_page()),
+        Response::SecurityStatus(largest_security_status()),
+        Response::SecurityStatus(SecurityStatus::default()),
+        Response::CapturePage(CapturePage {
+            active: false,
+            mode: CaptureMode::Metadata,
+            remaining_s: 0,
+            dropped: 0,
+            queued: 0,
+            uptime_ms: 0,
+            frames: HVec::new(),
+        }),
+    ]
+}
+
 fn every_message() -> Vec<Message> {
     let ieee = 0x0011_2233_4455_6677;
     let attr = AttributeData {
@@ -149,6 +437,38 @@ fn every_message() -> Vec<Message> {
         },
         Request::RemoveDevice { ieee, leave: true },
         Request::GetDiagnostics,
+        Request::GetBootReport,
+        Request::GetRadioDiagnostics,
+        Request::GetStorageDiagnostics,
+        Request::GetRuntimeDiagnostics,
+        Request::GetTraceConfiguration,
+        Request::SetTraceConfiguration {
+            min_severity: 1,
+            categories: 0xffff,
+        },
+        Request::ReadTrace {
+            from: u32::MAX,
+            max: 12,
+            ieee: Some(ieee),
+        },
+        Request::ReadTrace {
+            from: 0,
+            max: 1,
+            ieee: None,
+        },
+        Request::ClearTrace,
+        Request::StartCapture {
+            seconds: 3600,
+            mode: CaptureMode::Raw,
+        },
+        Request::StopCapture,
+        Request::ReadCapture { max: 3 },
+        Request::SetKeyExchangeExemption {
+            ieee,
+            seconds: 3600,
+        },
+        Request::SetKeyExchangeExemption { ieee, seconds: 0 },
+        Request::GetSecurityStatus,
     ];
     let mut devices = HVec::new();
     for i in 0..DEVICE_PAGE as u64 {
@@ -295,7 +615,11 @@ fn every_message() -> Vec<Message> {
             request,
         });
     }
-    for (i, response) in responses.into_iter().enumerate() {
+    for (i, response) in responses
+        .into_iter()
+        .chain(diagnostic_responses())
+        .enumerate()
+    {
         out.push(Message::Response {
             id: u16::try_from(i).unwrap() + 1000,
             response,
@@ -354,6 +678,18 @@ fn the_largest_messages_fit_one_frame() {
         }),
     };
     assert!(list.encode(&mut body).unwrap() <= MAX_BODY);
+    // The diagnostic pages are sized to fit one frame when full.
+    for response in [
+        Response::BootReport(largest_boot_report()),
+        Response::TracePage(largest_trace_page()),
+        Response::CapturePage(largest_capture_page()),
+        Response::SecurityStatus(largest_security_status()),
+    ] {
+        let n = Message::Response { id: 1, response }
+            .encode(&mut body)
+            .unwrap();
+        assert!(n <= MAX_BODY, "{n}");
+    }
     assert_eq!(
         Message::decode(&[2, 1, 5, 0, 1]),
         Err(ProtocolError::UnsupportedVersion {
@@ -410,4 +746,45 @@ fn the_v1_wire_format_is_stable() {
     .encode(&mut body)
     .unwrap();
     assert_eq!(&body[..n], &[1, 3, 3, 0, 0x09, 1, 0, 0, 0, 0, 0, 0, 0]);
+    // v0.2.1 added requests after the existing tags: none renumbered.
+    for (request, tag) in [
+        (Request::GetDiagnostics, 0x11),
+        (Request::GetBootReport, 0x12),
+        (Request::ReadCapture { max: 3 }, 0x1c),
+    ] {
+        let n = Message::Request { id: 1, request }
+            .encode(&mut body)
+            .unwrap();
+        assert_eq!(body[4], tag);
+        assert!(n >= 5);
+    }
+    let n = Message::Request {
+        id: 2,
+        request: Request::ReadTrace {
+            from: 0x0102_0304,
+            max: 12,
+            ieee: None,
+        },
+    }
+    .encode(&mut body)
+    .unwrap();
+    assert_eq!(&body[..n], &[1, 1, 2, 0, 0x18, 4, 3, 2, 1, 12, 0]);
+}
+
+#[test]
+fn an_older_hub_answers_new_requests_with_unknown_request() {
+    // A firmware from before diagnostics decodes the frame header and
+    // fails on the tag; its session answers UnknownRequest to the id.
+    let mut body = [0u8; MAX_BODY];
+    let n = Message::Request {
+        id: 9,
+        request: Request::GetBootReport,
+    }
+    .encode(&mut body)
+    .unwrap();
+    body[4] = 0x7f;
+    assert!(matches!(
+        Message::decode(&body[..n]),
+        Err(ProtocolError::UnknownTag(0x7f))
+    ));
 }

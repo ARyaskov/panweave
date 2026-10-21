@@ -130,6 +130,10 @@ pub struct Device {
     pub last_seen: Option<Instant>,
     /// Link quality from the neighbor table.
     pub lqi: Option<u8>,
+    /// An administrator exempted the device from the Trust Center's
+    /// key-exchange requirement (persisted; applied to the stack at
+    /// start-up).
+    pub key_exchange_exempt: bool,
     /// The record must be written to storage.
     pub(crate) dirty: bool,
     /// The state must be read again (after a reboot or a rejoin) the next
@@ -174,6 +178,7 @@ impl Device {
             interview: Interview::default(),
             last_seen: None,
             lqi: None,
+            key_exchange_exempt: false,
             dirty: true,
             needs_sync: false,
             last_sync: None,
@@ -204,9 +209,26 @@ impl Device {
         self.endpoint_serving(cluster).is_some()
     }
 
+    /// The commercial profile of the device (`crate::compat`), from its
+    /// Basic identity — interpretation only, never security.
+    pub fn profile(&self) -> Option<&'static crate::compat::Profile> {
+        crate::compat::lookup(&self.manufacturer, &self.model)
+    }
+
+    /// Whether a mains-powered claim in the device's MAC capability octet
+    /// is to be ignored (a profile says it runs on a battery).
+    pub fn ignores_mac_mains_claim(&self) -> bool {
+        self.profile()
+            .is_some_and(|p| p.corrections.battery_despite_mac_mains_flag)
+    }
+
     /// Derives category and capabilities from the descriptors, the zone
     /// type and the attributes the device answered for.
     pub fn classify(&mut self) {
+        // A profile's power-source correction, once the identity is known.
+        if self.ignores_mac_mains_claim() && self.power_source == PowerSource::Mains {
+            self.power_source = PowerSource::Battery;
+        }
         let mut caps = Capabilities::default();
         let mut light_device = false;
         let mut outputs_only = true;

@@ -11,8 +11,13 @@ is connected.
 > **Status.** Everything described here builds, lints and is tested in
 > simulation (the real Panweave stack on both sides of a virtual radio).
 > **Nothing has been run on an ESP32-C6 board or against a commercial
-> device yet.** Compatibility with the Sber and Yandex devices below is
-> unverified until the hardware checklist at the end has been run.
+> device yet.** Compatibility with the Aqara, Sber and Yandex devices below
+> is unverified until the hardware checklist at the end has been run.
+>
+> Bring-up and diagnostics (boot report, trace, counters, radio capture,
+> smoke test, hardware-in-the-loop checks) are described in
+> [esp32c6-diagnostics.md](esp32c6-diagnostics.md) and
+> [esp32c6-hardware-testing.md](esp32c6-hardware-testing.md).
 
 ## Contents
 
@@ -95,7 +100,25 @@ Features of the crate that apply to the hub:
 | Feature | Effect |
 |---|---|
 | `small-tables` | Smaller ZCL tables (8 clusters × 24 attributes per endpoint); the hub endpoint then carries fewer client clusters |
-| `legacy-joiners` | Admit devices that never complete the Trust Center link key exchange (pre-Zigbee-3.0). Off by default; see [Security](#security) |
+| `capture` (default) | Bounded radio frame capture for diagnostics (enables `panweave-hub/radio-capture`), off at run time until an Admin host starts one, sanitized by default ([esp32c6-diagnostics.md](esp32c6-diagnostics.md#radio-capture)) |
+
+Build without capture — the engine then holds no capture buffer and
+answers the capture requests `NotSupported`:
+
+```bash
+cargo build --release --bin hub --no-default-features
+```
+
+The `legacy-joiners` feature of 0.2.0 is gone. It cleared the Trust
+Center's `require_key_exchange` flag, which the runtime did not enforce
+then; it is enforced now, and the only relaxation is an explicit,
+per-device exemption (see [Security](#security)).
+
+The build checks `partitions-hub.csv` against the hub's partition rules
+for the 4 MiB flash (`build.rs`) and fails on an overlapping or
+misplaced layout; it also stamps the image with the source revision
+(`PANWEAVE_BUILD_ID`, `git rev-parse` plus `-dirty`), which the boot
+report shows.
 
 Build the CLI (host):
 
@@ -133,6 +156,14 @@ not text. Use the CLI instead.
 * Flashed with espflash's default partition table instead, the hub finds
   no `hubdata` partition: it runs with a RAM-only registry, reports
   `persistent: false` in `GetHubInfo`, and writes nothing outside `nvs`.
+* Check a modified table before flashing it (no hub needed):
+
+  ```bash
+  panweave-hub-cli partitions check examples/esp32c6-super-mini/partitions-hub.csv --image target/riscv32imac-unknown-none-elf/release/hub
+  ```
+
+  At boot the hub validates the table it reads from flash with the same
+  rules, without writing anything, and reports findings in its boot report.
 
 ## Connecting over USB and the CLI
 
@@ -182,6 +213,26 @@ network and registry) but drops the requests in flight.
 * **Later boots**: the stack resumes the network from `nvs`, frame counters
   never roll back; event `NetworkRestored`. The registry is restored from
   `hubdata`.
+* **A new network is formed only from a clean, empty store.** The boot
+  policy (`NetworkRestore::decide`):
+
+  | Stack storage at boot | Network |
+  |---|---|
+  | holds a network | resumed (`restored`) |
+  | empty, no damaged records | a new one is formed (`formed`) |
+  | empty, but damaged records were skipped | none: `corrupt-not-formed` |
+  | a network that cannot be used: half written (NIB without keys or the reverse), a format from a newer firmware, undecodable | none: `stored-unusable`, plus `network-record-unusable` with the reason |
+  | unreadable after 3 attempts | none for now: `read-failed`; read again after 10 s, then at growing intervals up to 5 min (`network-restore-retry`); the network resumes as soon as a read succeeds |
+
+  Every refusal is a Critical trace record. The hub stays up without a
+  network (`network` shows `down`) so the host can read the diagnostics;
+  forming a new network would silently orphan every paired device, and
+  restoring never writes, so the stored keys stay as they were. A storage
+  that failed and later reads *empty* is not trusted to be factory new:
+  the hub stays without a network. Recovery from a refusal is a
+  deliberate factory reset (BOOT for 10 s), after reading the
+  diagnostics. Version 0.2.0 formed a new network on a read error, and
+  any undecodable network record counted as "empty".
 * **Closed by default**: after boot no device can join. The network opens
   for at most 254 s:
   * `PermitJoin { seconds }` (CLI `permit-join`), or
@@ -356,6 +407,13 @@ compaction switches halves atomically.
   cause a flash write.
 * **Capacity**: 32 devices (`MAX_DEVICES`); a device record is typically
   under 200 octets.
+* **Failures are reported**: a failed write (store full or flash I/O
+  error) keeps the device in RAM, emits `HubError StorageFailure` once per
+  failing period, records `store-failed` in the trace and is retried
+  after 30 s; a record that cannot be decoded at boot is skipped and
+  recorded (`record-skipped` with its IEEE address). `diagnostics storage`
+  shows both stores' free space, writes, compactions, damaged records and
+  I/O errors.
 
 ## Factory reset and recovery
 
@@ -368,6 +426,7 @@ compaction switches halves atomically.
 | Remove a device from the network | `device <ieee> remove --leave` (Trust Center Remove Device / NWK Leave, or Mgmt_Leave_req) |
 | Start over | Hold BOOT for 10 s: leave, erase `nvs` and the registry, form a new network. Every device must join again |
 | Corrupted registry | `espflash erase-region 0x310000 0x10000`, then re-interview devices (the network stays) |
+| `network` shows `down` after a reboot | Read `diagnostics system` and `diagnostics storage` first: `read-failed` or `corrupt-not-formed` means the stack's storage could not be used and the hub refused to replace the network. Only then decide on a factory reset |
 
 Factory reset is deliberately not available over the protocol.
 
@@ -375,16 +434,90 @@ Factory reset is deliberately not available over the protocol.
 
 * **Keys**: the network key is generated by the TRNG at formation and never
   leaves the device; it is never logged or sent to the host (the protocol
-  has no message carrying a key). Unique Trust Center link keys follow the
-  BDB 3.1 policy of the stack (`require_key_exchange` on).
+  has no message carrying a key, and no diagnostic record has a field
+  that could hold one). Joiners may request a unique Trust Center link
+  key, and the trace records whether they did (`join-tclk-requested`,
+  `join-tclk-verified`).
+* **The key exchange is required** (`bdbTrustCenterRequireKeyExchange`,
+  default on; `panweave_runtime::authorization`). Receiving the network key
+  is not authorization:
+
+  | Step | Trust Center state | What the device may do |
+  |---|---|---|
+  | joins (MAC association, NWK commissioning or rejoin) | policy decision (`join-decision`) | nothing yet |
+  | network key delivered | **pending** (`join-key-exchange-pending`), for `bdbTrustCenterNodeJoinTimeout` = 15 s | use the network and the ZDO — what the exchange needs (Node_Desc_req, key negotiation, APS Request / Verify Key, Smart Energy Key Establishment). Its other application frames are dropped by the stack (counted) and the hub neither registers nor interviews it |
+  | holds a verified unique Trust Center link key | **authorized** (`join-authorized`) | everything; the hub registers and interviews it |
+  | window passed | key-pair entry removed, device asked to leave (`join-key-exchange-timeout`) | nothing |
+
+  Every valid way to the verified key counts: APS Request Key → Transport
+  Key → Verify Key (Zigbee 3.0), dynamic link key negotiation with or
+  without an install code (R23, verified before the network key is
+  sent), Smart Energy CBKE (the key it installs is proven by its own
+  confirmation), and Trust Center swap-out renewal. A secured rejoin of an
+  authorized device stays authorized; a device that never completed the
+  exchange gets a new window when it rejoins. Authorization is derived
+  from the persisted key-pair entry, so it survives a reboot — and a
+  pending device never becomes authorized by one. Replayed frames are
+  rejected by the NWK and APS frame counters; a duplicate Verify Key
+  changes nothing. `security` (CLI) shows the policy, pending devices,
+  removals, dropped frames and registered devices without access.
+* **Application frames are decided on their originator**
+  (`Stack::authorize_application_frame`). Every APS data frame outside
+  the ZDO — unicast, group or broadcast — is attributed to the device
+  that originated it (the NWK source; the key-pair entry of an APS
+  secured frame) and admitted only if that device is authorized or an
+  admitted exempt device:
+
+  | Originator | Verdict | Counter (`security`) |
+  |---|---|---|
+  | authorized, or exempt and admitted | delivered | — |
+  | IEEE address unknown | held (at most 2 frames, 10 s) while the Trust Center asks for it (IEEE_addr_req); delivered or refused when the answer comes | `unresolved` if never resolved |
+  | claimed IEEE address contradicts the address map | refused | `inconsistent` |
+  | no key-pair entry (never joined through this Trust Center, removed) | refused | `unknown` |
+  | inside its key-exchange window | refused | `pending` |
+  | key exchange not completed | refused | `incomplete` |
+
+  Two documented exceptions: Green Power infrastructure frames (GP
+  cluster on endpoint 242 or a group: proxies forward them with an alias
+  source that belongs to no device) and Smart Energy Key Establishment
+  for a pending device (it is how such a device completes the exchange).
+  Before v0.3.0 a frame whose source could not be attributed was
+  delivered.
+* **Legacy devices** (that never request a unique key) are refused by
+  default. An administrator can exempt *one device*:
+  `security exempt <ieee> --seconds 120` (Admin). The exemption is a
+  **single-use commissioning grant**: it waives only the key exchange,
+  for that IEEE address, for the first device with that address that
+  joins (unsecured, through the Trust Center) within the window — at most
+  3600 s, never extended by repeating the request, and not restored by a
+  reboot (an unused grant simply ends). The join consumes it and the
+  device becomes **admitted** (persisted in its registry record) until
+  `security revoke <ieee>`, its removal, or a new unsecured join with its
+  address, which withdraws the admission (`join-exemption-withdrawn`) and
+  sends the joiner through the normal key exchange. A secured rejoin of
+  the admitted device keeps it admitted. At most 8 exemptions; grants
+  used and expired are counted. Encryption and MIC checks are never
+  relaxed. Caveats: such a device keeps the well-known (or its
+  pre-shared) link key, so anyone who captured its join can derive the
+  network key; and **an IEEE address is only what the joiner claims** —
+  an impostor joining first with the exempted address during the window
+  is admitted in its place (tested: `an_exemption_does_not_authenticate_a_claimed_identity`).
+  The short, single-use window is the only bound. Exemptions are never
+  inferred from manufacturer or model strings or from compatibility
+  profiles.
+* **Key table**: the Trust Center keys up to 32 devices individually
+  (`LINK_KEYS`, 8 with `small-tables`), as many as the registry holds;
+  0.2.0 held 8, which would have made the requirement refuse a ninth
+  device.
+* **Diagnostics**: changing the trace configuration, clearing it, the
+  radio capture and exemptions are `Admin`; reading counters, the trace
+  and the security status is `Monitor`. Captures are off by default,
+  time-limited (≤ 1 h) and sanitized by default: frames keep their
+  headers, no payload that could carry a key
+  ([esp32c6-diagnostics.md](esp32c6-diagnostics.md#security)).
 * **Joining**: closed by default; opened only for a bounded window (≤ 254 s)
   by the host or the button; the Trust Center admits new devices only
   during the window plus 30 s.
-* **`legacy-joiners`**: turns off `require_key_exchange` so devices that
-  never request a unique link key are not removed. Such devices keep the
-  well-known global link key: anyone who captures their join learns the
-  network key. Enable only if a device needs it, and only while pairing
-  it is acceptable.
 * **Frame counters** are reserved in flash before use and never roll back
   across reboots (`docs/storage-model.md`).
 * **Trust boundary of USB**: whoever is physically connected to the USB
@@ -430,6 +563,40 @@ A request of another version is answered `UnsupportedVersion`.
 | `LightOn` / `LightOff` / `LightToggle` / `LightSetBrightness` (0x0C–0x0F) | Control | `Accepted` → … |
 | `RemoveDevice { ieee, leave }` (0x10) | Admin | `Done` |
 | `GetDiagnostics` (0x11) | Monitor | `Diagnostics`: radio, stack, registry, storage and link counters |
+| `GetBootReport` (0x12) | Monitor | `BootReport`: chip, firmware, build, reset reason, clock, flash, partitions, network outcome |
+| `GetRadioDiagnostics` (0x13) | Monitor | `RadioDiagnostics`: driver, MAC, NWK (pending unicasts) and APS counters |
+| `GetStorageDiagnostics` (0x14) | Monitor | `StorageDiagnostics`: both stores, registry writes and errors |
+| `GetRuntimeDiagnostics` (0x15) | Monitor | `RuntimeDiagnostics`: loop timing, queue use and high-water marks, drops |
+| `GetTraceConfiguration` (0x16) | Monitor | `TraceConfiguration` |
+| `SetTraceConfiguration` (0x17) | Admin | `TraceConfiguration` |
+| `ReadTrace { from, max, ieee }` (0x18) | Monitor | `TracePage` (≤ 12 records) |
+| `ClearTrace` (0x19) | Admin | `Done` |
+| `StartCapture { seconds, mode }` (0x1A) | Admin | `Done`; `NotSupported` without the `capture` feature. Modes: 1 metadata, 2 sanitized, 3 raw (0 is rejected) |
+| `StopCapture` (0x1B) | Admin | `Done` (`NotSupported` without capture) |
+| `ReadCapture { max }` (0x1C) | Admin | `CapturePage` (≤ 3 frames, each with its original length) |
+| `SetKeyExchangeExemption { ieee, seconds }` (0x1D) | Admin | `Done`; 0 seconds revokes |
+| `GetSecurityStatus` (0x1E) | Monitor | `SecurityStatus` (response tag 0x10) |
+
+Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
+renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
+answers them `UnknownRequest`, which the CLI reports as "firmware does not
+support diagnostics". Their responses use tags 0x09–0x10. The same CLI
+serves firmware built with and without capture: the capability shows as
+`NotSupported`.
+
+**Compatibility across versions.** The protocol version stays 1.
+
+| Change | Versions | Wire effect |
+|---|---|---|
+| Requests 0x12–0x1E, responses 0x09–0x10 | 0.2.0 → later | appended tags; 0.2.0 frames byte-identical (golden frames). A 0.2.0 host never sends the new tags; a new host talking to 0.2.0 firmware gets `UnknownRequest` |
+| `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
+| `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
+| `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
+| Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
+
+Everything changed since 0.2.0 is unreleased, so no released host or
+firmware is affected; between builds of this tree, use the CLI and the
+firmware from the same commit.
 
 Events: `NetworkStarted`, `NetworkRestored`, `PermitJoinChanged`,
 `DeviceJoined`, `DeviceLeft`, `DeviceInterviewCompleted`,
@@ -462,18 +629,57 @@ and fuzzed (`fuzz/fuzz_targets/hub_protocol.rs`).
   queued output is dropped (a returning host resynchronizes at the next
   frame and sees `EventsDropped`). Responses always have room ahead of
   events.
-* **Watchdog**: the RTC watchdog resets the chip if the loop stalls for
-  10 s.
+* **Watchdog and health** (`panweave_hub::supervisor`): the RTC watchdog
+  resets the chip if the loop stops for 10 s. The loop feeds it every
+  turn unless the health supervisor has *evidence* of a stall:
+
+  | Health | Meaning |
+  |---|---|
+  | `healthy-idle` | nothing to do; silence is normal (an empty network, only sleepy sensors, no host) |
+  | `healthy-active` | frames transmitted or received in the last 60 s |
+  | `degraded` | unacknowledged frames, CCA failures, a full queue — the radio still completes frames |
+  | `suspected-stall` | the stack's deadline overdue for 10 s, or 5 transmissions handed to the driver that never completed within 30 s while frames wait |
+  | `confirmed-stall` | the same evidence 60 s after a recovery |
+
+  A suspected stall is first recovered without side effects: the radio
+  configuration is applied again and reception restarted
+  (`stall-suspected`, `radio_recoveries`); nothing is written to flash
+  and the network is untouched. Only a confirmed stall withholds the
+  feed (`stall-confirmed`); its cause is stored first and the next boot
+  reports it once (`previous-stall-reset`, Critical). A boot that
+  followed a watchdog reset never escalates again — the stall is
+  reported and the loop keeps running — so a persistent fault cannot
+  become a reset loop. `diagnostics runtime` shows the health and the
+  recoveries. The boot report tells a watchdog reset from a power-on,
+  software or USB reset.
+* **Timing**: a loop turn over 50 ms is recorded (`loop-overrun`), turns
+  over 20 ms are counted (`loop_over_20ms`: a sleepy child that polled
+  may stop listening before the loop serves its frame), and a radio step
+  handles at most 32 received frames before the rest of the loop runs
+  (`rx_bursts_cut`). See
+  [esp32c6-diagnostics.md](esp32c6-diagnostics.md#timing-and-the-watchdog).
 * **Sizes** (release, `riscv32imac`, measured with `scripts/elf_size.py`):
 
   | Image | Flash | Static RAM |
   |---|---|---|
-  | `hub` | 1 066.2 KiB | 37.0 KiB (32 KiB of it the `esp-radio` heap) |
-  | `coordinator` (for comparison) | 1 021.6 KiB | 37.6 KiB |
+  | `hub` 0.3.0 (default features, capture) | 1 149.1 KiB | 37.2 KiB (32 KiB of it the `esp-radio` heap) |
+  | `hub` 0.3.0 (`--no-default-features`, no capture) | 1 148.3 KiB | 37.2 KiB |
+  | `hub` (0.2.1 hardening, capture) | 1 135.2 KiB | 37.1 KiB |
+  | `hub` (0.2.1 hardening, no capture) | 1 134.8 KiB | 37.1 KiB |
+  | `hub` (0.2.1 before hardening) | 1 122.8 KiB | 37.1 KiB |
+  | `hub` (0.2.0) | 1 066.2 KiB | 37.0 KiB |
+  | `coordinator` (for comparison) | 1 028.1 KiB | 37.6 KiB |
 
-  The hub engine is about 21 KiB and the session 5 KiB (host measurement,
-  `size_of`), on the main stack next to the `Node` (~141 KiB,
-  `docs/footprint.md`); the linker leaves about 400 KiB of stack.
+  Static RAM does not show the engine: the hub engine, the session and
+  the `Node` are locals of `main`, on the main stack. Their sizes, measured
+  on the host with `size_of` (the ESP32-C6 layout may differ slightly):
+  hub engine 28 736 octets with capture, **26 248 without** (the 2 488-octet
+  capture buffer is compiled out), session 5 216; the stack's own
+  structures grew by about 2.8 KiB with the 32-entry key table. What the
+  target actually uses is measured on the target: `diagnostics runtime`
+  reports the main stack's watermark and the heap
+  ([esp32c6-diagnostics.md](esp32c6-diagnostics.md#target-memory)) — not
+  yet observed on hardware.
 
 ## Bluetooth LE and Wi-Fi
 
@@ -505,14 +711,30 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
 
 ## Limitations
 
-* **Hardware**: not yet run on a board; no commercial device tested.
+* **Hardware**: not yet run on a board; no commercial device tested. The
+  three v0.3.0 target devices are supported from public documentation
+  and simulation only ([device-compatibility.md](device-compatibility.md)).
+* **Identities are claims**: an IEEE address, a manufacturer name and a
+  model identifier are what a device says. Authorization rests on the
+  key exchange; an exemption (and nothing else) admits a device without
+  it, for whoever joins first with the exempted address.
+* **Exemptions after a factory reset of the device**: a re-paired legacy
+  device needs a new exemption only if it was removed; its stored
+  exemption follows its IEEE address.
 * **Stack frame budget**: the stack keeps four unicasts in flight in total
   (`panweave_nwk::layer::PENDING_TX`), and a frame for a sleepy child
-  occupies a slot until the child polls. The hub sends one request at a
-  time per device and paces frames around IAS enrolment, but with many
-  sleepy devices waiting at once, commands can fail with `SendFailed` /
-  `Busy` until they poll. Raising `PENDING_TX` is the fix; it is a stack
-  change not made here.
+  occupies a slot until the child polls. When the table is full the APS
+  layer offers the frame again after 1 s, up to 8 times (about 8 s,
+  longer than a held frame can occupy a slot); before v0.3.0 such frames
+  were lost, and three sleepy sensors pairing together lost their key
+  exchange (simulation: `hub_devices`). With many sleepy devices waiting
+  at once, a frame can still fail after its deferrals. `PENDING_TX` is
+  unchanged: the failure was the immediate retry, not the slot count.
+  `diagnostics radio` shows the table's use, its high-water mark and how
+  often it was full.
+* **Vendor clusters**: the Aqara sensor's manufacturer-specific cluster
+  0xFCC0 (battery voltage among other values) is not read: the hub has
+  no client for it. The standard Power Configuration attributes are used.
 * **Channel**: formation uses channel 11 (no energy detection in the
   driver).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
@@ -526,24 +748,34 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
 
 ## Compatibility matrix
 
-Nothing about these devices was assumed: no manufacturer names, model
-identifiers, endpoints or clusters are hard-coded. Their descriptors are
-unknown until interviewed.
+Generic, standards-based handling covers every device; the compatibility
+profiles in `panweave_hub::compat` only recognize a product and correct
+how its data is read where evidence shows a deviation. Details, evidence
+and fingerprints: [device-compatibility.md](device-compatibility.md).
 
-| Device | Join | Interview | Reporting | Control | Hardware tested |
+| Device | Zigbee identity | Join | Interview | Reporting | Hardware tested |
 |---|---|---|---|---|---|
-| Sber water leak sensor | Requires hardware testing | Requires hardware testing | Requires hardware testing | n/a (sensor) | No |
-| Yandex water leak sensor | Requires hardware testing | Requires hardware testing | Requires hardware testing | n/a (sensor) | No |
-| Sber door/window contact sensor | Requires hardware testing | Requires hardware testing | Requires hardware testing | n/a (sensor) | No |
-| Sber E27 smart bulb | Requires hardware testing | Requires hardware testing | Requires hardware testing | Requires hardware testing (On/Off; dimming / color only if its descriptors declare them) | No |
-| Simulated IAS water sensor (Auto-Enroll-Request) | Tested in simulation | Tested in simulation | Tested in simulation | n/a | — |
-| Simulated IAS contact sensor (Trip-to-Pair) | Tested in simulation | Tested in simulation | Tested in simulation | n/a | — |
-| Simulated dimmable light (router) | Tested in simulation | Tested in simulation | Tested in simulation | Tested in simulation | — |
+| Aqara Water Leak Sensor T1 (WL-S02D, SJCGQ12LM) | `LUMI` / `lumi.flood.agl02` | Verified in simulation (synthetic identity) | Verified in simulation | Verified in simulation (IAS Alarm1) | No — Hardware Test Required |
+| Sber opening sensor SBDV-00030 | `_TYZB01_epni2jgy` / `TS0203` | Verified in simulation (synthetic identity) | Verified in simulation | Verified in simulation (IAS Alarm1) | No — Hardware Test Required |
+| Yandex water leak sensor YNDX-00527 | `YNDX-00527` | Verified in simulation (synthetic identity) | Verified in simulation | Verified in simulation (IAS Alarm1) | No — Hardware Test Required |
+| Sber E27 smart bulb SBDV-00115 | none: Wi-Fi and Bluetooth LE only | out of scope, never paired over Zigbee | — | — | — |
+| Simulated IAS water sensor (Auto-Enroll-Request) | — | Tested in simulation | Tested in simulation | Tested in simulation | — |
+| Simulated IAS contact sensor (Trip-to-Pair) | — | Tested in simulation | Tested in simulation | Tested in simulation | — |
+| Simulated dimmable light (router) | — | Tested in simulation | Tested in simulation | Tested in simulation | — |
+
+"Synthetic identity": the simulator's standard IAS sensor answering with
+the product's documented Basic strings. It proves the hub's generic
+paths and the profile matching, not the product's behaviour.
 
 ## Hardware verification
 
-Run, for each target device, and record the results (a capture with an
-802.15.4 sniffer on the hub's channel makes any deviation diagnosable):
+Start with the automated smoke test and the guided device checks of
+[esp32c6-hardware-testing.md](esp32c6-hardware-testing.md)
+(`self-test`, `hil light|contact|leak`, and for the v0.3.0 targets
+`hil aqara-leak|sber-contact|yandex-leak` with `device <ieee>
+fingerprint --json`). Then run, for each target
+device, and record the results (`capture export` or an external 802.15.4
+sniffer on the hub's channel makes any deviation diagnosable):
 
 1. Flash the hub with `partitions-hub.csv`; `info` shows `persistent`;
    `network` shows `up`, the PAN and channel.
@@ -553,7 +785,8 @@ Run, for each target device, and record the results (a capture with an
    triggering it during the interview).
 3. `device <ieee>`: record manufacturer, model, endpoints, clusters, zone
    type, power source, interview status. A partial interview: note which
-   stage (`--verbose` shows the failures).
+   stage (`diagnostics interview <ieee>` shows every request, answer,
+   timeout and skipped step).
 4. Sensors: trigger leak / dry and open / close; expect exactly one event
    per change. Check `zone-status` for unexpected bits; if Alarm2 or
    another bit carries the state, capture it — that is the evidence an
@@ -561,7 +794,8 @@ Run, for each target device, and record the results (a capture with an
 5. Battery: `read <ieee> <ep> 0x0001 0x0021` and `0x0020`; wait for a
    battery report (hours).
 6. Tamper: open the case if the device has a tamper switch.
-7. Bulb: `light <ieee> on`, `off`, `toggle`, `brightness 1`, `50`, `100`;
+7. A Zigbee bulb, if one is available (the Sber SBDV-00115 is not a
+   Zigbee device): `light <ieee> on`, `off`, `toggle`, `brightness 1`, `50`, `100`;
    each must end `confirmed`. Switch the bulb at the wall and back: the
    bulb rejoins or announces; expect `rejoined` and a state update.
 8. Unplug the hub for 10 s and plug it back: the network resumes, devices
@@ -573,12 +807,16 @@ Run, for each target device, and record the results (a capture with an
 10. `device <ieee> remove --leave`: the device leaves (and usually resets
     itself).
 11. `diagnostics`: no `frames_corrupt`, `storage_errors`, unexpected
-    `command_timeouts`.
+    `command_timeouts`; `diagnostics export --output run.jsonl` keeps the
+    trace with the results.
 
-Remaining work for verified Sber / Yandex compatibility: run this
+Remaining work for verified Aqara / Sber / Yandex compatibility: run this
 checklist per device; add `ias::OVERRIDES` entries only for deviations
 captured on air; test whether each device completes the Trust Center
-link key exchange (if not, document it and decide on `legacy-joiners`);
+link key exchange (`security` and the trace show it; a device that does
+not is removed after 15 s unless exempted, see [Security](#security));
 measure the sleepy devices' poll intervals and confirm interviews finish
-within their awake time; test the bulb as a parent of the sensors
-(routing through it).
+within their awake time; test a Zigbee router (a mains-powered bulb or
+plug) as a parent of the sensors. A profile's verification status
+changes only with a hardware report (`hil … --report`) and a reviewed
+code change ([device-compatibility.md](device-compatibility.md)).

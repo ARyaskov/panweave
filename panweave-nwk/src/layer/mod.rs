@@ -732,6 +732,12 @@ pub struct NwkStats {
     /// Children that moved to another parent (rejoined elsewhere or
     /// claimed by another router).
     pub children_moved: u32,
+    /// Unicasts refused because all [`PENDING_TX`] slots were in use
+    /// (frames held for sleepy children occupy theirs until the child
+    /// polls).
+    pub pending_full: u32,
+    /// Most [`PENDING_TX`] slots ever in use at once.
+    pub pending_high_water: u32,
 }
 
 impl<
