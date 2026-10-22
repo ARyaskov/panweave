@@ -23,6 +23,7 @@
 extern crate alloc;
 
 use core::cell::RefCell;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embedded_storage::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
 use esp_hal::clock::CpuClock;
@@ -34,7 +35,7 @@ use esp_storage::FlashStorage;
 use panweave::types::ExtendedAddress;
 use panweave::types::rng::{CryptoRng, Rng as PanweaveRng};
 use panweave_hub::partitions::{MAX_PARTITIONS, Partition, kind as partition_kind};
-use panweave_storage::nor_flash::NorFlashStore;
+use panweave_storage::nor_flash::{NorFlashStore, SharedNorFlash};
 
 use crate::radio::Radio;
 
@@ -78,7 +79,31 @@ impl CryptoRng for Rng {}
 /// loop and flash is never touched from an interrupt, so a `RefCell` is
 /// enough: every operation borrows the driver for its own duration.
 #[derive(Clone, Copy)]
-pub struct SharedFlash(&'static RefCell<FlashStorage<'static>>);
+pub struct SharedFlash(SharedNorFlash<'static, FlashStorage<'static>>);
+
+static FLASH_READ_US: AtomicU32 = AtomicU32::new(0);
+static FLASH_WRITE_US: AtomicU32 = AtomicU32::new(0);
+static FLASH_ERASE_US: AtomicU32 = AtomicU32::new(0);
+
+/// Takes cumulative Flash read, write and erase durations since the last
+/// call, in microseconds. Includes failed operations; no Flash is written.
+pub fn take_flash_time_us() -> [u32; 3] {
+    [
+        FLASH_READ_US.swap(0, Ordering::Relaxed),
+        FLASH_WRITE_US.swap(0, Ordering::Relaxed),
+        FLASH_ERASE_US.swap(0, Ordering::Relaxed),
+    ]
+}
+
+fn time_flash<T>(counter: &AtomicU32, operation: impl FnOnce() -> T) -> T {
+    let started = esp_hal::time::Instant::now();
+    let result = operation();
+    let us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sum| {
+        Some(sum.saturating_add(us))
+    });
+    result
+}
 
 impl ErrorType for SharedFlash {
     type Error = <FlashStorage<'static> as ErrorType>::Error;
@@ -88,11 +113,13 @@ impl ReadNorFlash for SharedFlash {
     const READ_SIZE: usize = <FlashStorage<'static> as ReadNorFlash>::READ_SIZE;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.borrow_mut().read(offset, bytes)
+        time_flash(&FLASH_READ_US, || {
+            ReadNorFlash::read(&mut self.0, offset, bytes)
+        })
     }
 
     fn capacity(&self) -> usize {
-        self.0.borrow().capacity()
+        ReadNorFlash::capacity(&self.0)
     }
 }
 
@@ -101,11 +128,13 @@ impl NorFlash for SharedFlash {
     const ERASE_SIZE: usize = <FlashStorage<'static> as NorFlash>::ERASE_SIZE;
 
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
-        self.0.borrow_mut().erase(from, to)
+        time_flash(&FLASH_ERASE_US, || NorFlash::erase(&mut self.0, from, to))
     }
 
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.0.borrow_mut().write(offset, bytes)
+        time_flash(&FLASH_WRITE_US, || {
+            NorFlash::write(&mut self.0, offset, bytes)
+        })
     }
 }
 
@@ -148,11 +177,31 @@ impl Parts {
     /// needs, the radio, the TRNG, the LED and the button; returns the
     /// flash driver alongside.
     fn init() -> (Self, FlashStorage<'static>) {
-        let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+        Self::init_with_watchdog(None)
+    }
+
+    fn init_with_watchdog(seconds: Option<u64>) -> (Self, FlashStorage<'static>) {
+        use panweave_hub::boot::{StartupStage, arm_startup_watchdog};
+        let mark = |stage| {
+            if seconds.is_some() {
+                crate::startup::mark(stage);
+            }
+        };
+        mark(StartupStage::Hal);
+        let mut p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+        let reset = esp_hal::rtc_cntl::reset_reason(esp_hal::system::Cpu::ProCpu).map(|r| r as u8);
+        if let Some(seconds) = seconds
+            && arm_startup_watchdog(panweave_hub::esp32c6::classify_reset(reset))
+        {
+            crate::hub::Watchdog::arm_early(p.RTC_TIMER.reborrow(), seconds);
+        }
         esp_alloc::heap_allocator!(size: 32 * 1024);
         let ieee = ieee_address();
+        mark(StartupStage::Radio);
         let radio = Radio::new(p.IEEE802154, ieee);
+        mark(StartupStage::Storage);
         let flash = FlashStorage::new(p.FLASH);
+        mark(StartupStage::Entropy);
         let source = TrngSource::new(p.RNG, p.ADC1);
         let trng = Trng::try_new().unwrap_or_else(|_| panic!("TRNG source"));
         let led = Output::new(p.GPIO15, Level::Low, OutputConfig::default());
@@ -215,15 +264,28 @@ impl Board<SharedStore> {
     /// partition (or a malformed one), in which case nothing is written
     /// outside the stack's region.
     pub fn init_hub() -> (Self, Option<SharedStore>, PartitionScan) {
-        let (parts, mut flash) = Parts::init();
+        Self::init_hub_inner(None)
+    }
+
+    /// Hub initialization with early watchdog protection. A watchdog reset
+    /// skips the early arm so a repeated initialization fault cannot loop.
+    pub fn init_hub_with_watchdog(seconds: u64) -> (Self, Option<SharedStore>, PartitionScan) {
+        Self::init_hub_inner(Some(seconds))
+    }
+
+    fn init_hub_inner(seconds: Option<u64>) -> (Self, Option<SharedStore>, PartitionScan) {
+        let (parts, mut flash) = Parts::init_with_watchdog(seconds);
+        if seconds.is_some() {
+            crate::startup::mark(panweave_hub::boot::StartupStage::Storage);
+        }
         let scan = scan_partitions(&mut flash);
         let hub_region = scan.hubdata;
         let flash: &'static RefCell<FlashStorage<'static>> =
             alloc::boxed::Box::leak(alloc::boxed::Box::new(RefCell::new(flash)));
-        let storage = NorFlashStore::new(SharedFlash(flash), STORE_OFFSET, STORE_LEN)
+        let shared = SharedFlash(SharedNorFlash::new(flash));
+        let storage = NorFlashStore::new(shared, STORE_OFFSET, STORE_LEN)
             .unwrap_or_else(|_| panic!("storage region {STORE_OFFSET:#x}+{STORE_LEN:#x}"));
-        let hub = hub_region
-            .and_then(|(offset, len)| NorFlashStore::new(SharedFlash(flash), offset, len).ok());
+        let hub = hub_region.and_then(|(offset, len)| NorFlashStore::new(shared, offset, len).ok());
         (parts.with_storage(storage), hub, scan)
     }
 }

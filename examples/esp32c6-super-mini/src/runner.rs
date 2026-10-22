@@ -2,7 +2,9 @@
 //!
 //! ```ignore
 //! let board = Board::init();
-//! let mut node = Router::new(board.ieee).build(board.rng, board.storage);
+//! let mut node = Router::new(board.ieee)
+//!     .mac(Radio::mac_config())
+//!     .build(board.rng, board.storage);
 //! let mut runner = Runner::new(board.radio);
 //! loop {
 //!     let deadline = runner.step(&mut node);

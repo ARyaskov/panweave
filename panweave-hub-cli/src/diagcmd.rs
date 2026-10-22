@@ -1,7 +1,6 @@
 //! `diagnostics …`: the hub's boot report, counters and trace.
 
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -991,24 +990,46 @@ fn export(hub: &mut Hub, args: &[&str]) -> Result<(), String> {
         Some(i) => Some(ieee(args.get(i + 1).ok_or("--ieee needs a value")?)?),
         None => None,
     };
-    let (records, uptime, lost) = read_all(hub, target)?;
     let mut f = std::fs::File::create(path).map_err(|e| format!("{path}: {e}"))?;
-    if lost > 0 {
-        writeln!(
-            f,
-            "{}",
-            Obj::new()
-                .str("gap", "records dropped before export")
-                .int("count", lost.into())
-                .finish()
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    for r in &records {
-        writeln!(f, "{}", record_json(r, uptime)).map_err(|e| e.to_string())?;
-    }
-    println!("{} record(s) written to {path}", records.len());
+    let written = export_pages(&mut f, |from| read_page(hub, from, target))?;
+    println!("{written} record(s) written to {path}");
     Ok(())
+}
+
+// Flush each completed page so a later timeout leaves a usable partial file.
+fn export_pages(
+    out: &mut impl std::io::Write,
+    mut read: impl FnMut(u32) -> Result<TracePage, String>,
+) -> Result<usize, String> {
+    let mut from = 0;
+    let mut written = 0;
+    let mut first = true;
+    loop {
+        let page = read(from).map_err(|e| {
+            format!("{e}; partial export preserved: {written} record(s), next sequence {from}")
+        })?;
+        if first && page.dropped > 0 {
+            writeln!(
+                out,
+                "{}",
+                Obj::new()
+                    .str("gap", "records dropped before export")
+                    .int("count", page.dropped.into())
+                    .finish()
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        first = false;
+        for record in &page.records {
+            writeln!(out, "{}", record_json(record, page.uptime_ms)).map_err(|e| e.to_string())?;
+            written += 1;
+        }
+        out.flush().map_err(|e| e.to_string())?;
+        if page.records.is_empty() || page.next == from {
+            return Ok(written);
+        }
+        from = page.next;
+    }
 }
 
 fn configure(hub: &mut Hub, args: &[&str], as_json: bool) -> Result<(), String> {
@@ -1119,7 +1140,68 @@ pub(crate) fn run(hub: &mut Hub, args: &[&str], as_json: bool) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+
+    #[test]
+    fn trace_export_preserves_completed_pages_on_timeout() {
+        let mut rec = DiagRecord::new(
+            Category::TrustCenter,
+            Severity::Info,
+            code::JOIN_CHILD_JOINED,
+        );
+        rec.seq = 12;
+        rec.at_ms = 100;
+        let page = TracePage {
+            uptime_ms: 200,
+            next: 13,
+            first_available: 12,
+            dropped: 12,
+            records: heapless::Vec::from_slice(&[rec]).unwrap(),
+        };
+        let mut requested = Vec::new();
+        let mut out = Vec::new();
+        let error = export_pages(&mut out, |from| {
+            requested.push(from);
+            if from == 0 {
+                Ok(page.clone())
+            } else {
+                Err("test timeout".into())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(requested, [0, 13], "do not request the first page twice");
+        let saved = String::from_utf8(out).unwrap();
+        assert_eq!(
+            saved.lines().count(),
+            2,
+            "gap marker plus the received record"
+        );
+        assert!(saved.contains("join-child-joined"));
+        assert!(error.contains("partial export preserved: 1 record(s), next sequence 13"));
+    }
+
+    #[test]
+    fn trace_export_finishes_after_an_empty_page() {
+        let mut out = Vec::new();
+        let mut calls = 0;
+        let count = export_pages(&mut out, |from| {
+            calls += 1;
+            assert_eq!(from, 0);
+            Ok(TracePage {
+                uptime_ms: 200,
+                next: 0,
+                first_available: 0,
+                dropped: 0,
+                records: heapless::Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(calls, 1);
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn timestamps_unwrap_across_the_32_bit_boundary() {

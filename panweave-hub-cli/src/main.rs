@@ -31,7 +31,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use panweave_hub::model::{ContactState, DeviceState, Flag, Ieee, LeakState, level_to_brightness};
-use panweave_hub::protocol::frame::{FrameDecoder, FrameError, MAX_WIRE};
+use panweave_hub::protocol::frame::{FrameDecoder, MAX_WIRE};
 use panweave_hub::protocol::{
     CommandStage, DeviceInfo, DeviceSummary, ErrorCode, Event, LightCommand, Message, Request,
     Response,
@@ -219,16 +219,44 @@ impl Hub {
         thread::spawn(move || {
             let mut dec = FrameDecoder::new();
             let mut buf = [0u8; 256];
+            let started = Instant::now();
             loop {
                 let n = match reader.read(&mut buf) {
                     Ok(n) => n,
                     Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-                    Err(_) => return,
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("(serial read failed: {e})");
+                        }
+                        return;
+                    }
                 };
+                if verbose && n > 0 {
+                    eprintln!(
+                        "(serial rx +{} ms, {n} bytes: {:02x?})",
+                        started.elapsed().as_millis(),
+                        &buf[..n]
+                    );
+                }
                 for &b in &buf[..n] {
                     match dec.push(b) {
                         Some(Ok(body)) => match Message::decode(body) {
                             Ok(m) => {
+                                if verbose {
+                                    match &m {
+                                        Message::Response { id, .. } => eprintln!(
+                                            "(decoded response id={id}, {} body bytes)",
+                                            body.len()
+                                        ),
+                                        Message::Event { seq, .. } => eprintln!(
+                                            "(decoded event seq={seq}, {} body bytes)",
+                                            body.len()
+                                        ),
+                                        Message::Request { id, .. } => {
+                                            eprintln!("(unexpected request id={id})");
+                                        }
+                                    }
+                                }
                                 if tx.send(m).is_err() {
                                     return;
                                 }
@@ -236,8 +264,8 @@ impl Hub {
                             Err(e) if verbose => eprintln!("(undecodable message: {e:?})"),
                             Err(_) => {}
                         },
-                        Some(Err(FrameError::Crc | FrameError::Corrupt)) if verbose => {
-                            eprintln!("(damaged frame dropped)");
+                        Some(Err(e)) if verbose => {
+                            eprintln!("(frame dropped: {e:?})");
                         }
                         _ => {}
                     }
@@ -303,6 +331,12 @@ impl Hub {
         let n = Message::Request { id, request }
             .encode_frame(&mut wire)
             .map_err(|e| format!("encoding: {e:?}"))?;
+        if self.verbose {
+            eprintln!(
+                "(serial tx request id={id}, {n} bytes: {:02x?})",
+                &wire[..n]
+            );
+        }
         self.port
             .write_all(&wire[..n])
             .and_then(|()| self.port.flush())
@@ -327,6 +361,9 @@ impl Hub {
                 Ok(other) if self.verbose => eprintln!("(ignored {other:?})"),
                 Ok(_) => {}
                 Err(RecvTimeoutError::Timeout) => {
+                    if self.verbose {
+                        eprintln!("(response timeout for request id={id})");
+                    }
                     return Err(format!(
                         "{UNREACHABLE}no response from the hub (is the hub firmware running?)"
                     ));

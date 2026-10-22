@@ -68,6 +68,15 @@ generically. Tests: `panweave-hub/src/compat.rs` (exact matching),
 
 ## Aqara Water Leak Sensor T1
 
+The [physical Aqara investigation](aqara-leak-investigation.md) records
+successful pairing, required unique TCLK verification, complete interview,
+IAS enrollment and three leak/dry cycles for LUMI / lumi.flood.agl02.
+The unit reports battery power and 3000 mV, without a percentage. Its
+association capability is 0x80, so the 0x84 correction described below
+has not been exercised by this physical unit. A subsequent manual power-loss
+test restored the network and all three registry entries; Aqara resumed
+leak/dry reporting without re-pairing. Long-term stability remains unverified.
+
 * **Identity**: manufacturer `LUMI`, model `lumi.flood.agl02`; a firmware
   variant reports `lumi.flood.agl02` followed by a tab and further bytes
   (both appear in the zigbee-herdsman-converters definitions SJCGQ12LM
@@ -98,6 +107,18 @@ generically. Tests: `panweave-hub/src/compat.rs` (exact matching),
   correctness).
 
 ## Sber opening sensor SBDV-00030
+
+Physical association debugging and the shared-Flash adapter correction
+are recorded in [Sber contact investigation](sber-contact-investigation.md).
+Hardware key delivery, unique TCLK verification, IAS enrollment, three
+closed/open pairs and battery reports passed for a user-identified Sber
+unit with manufacturer `_TYZB01_nnv2dy5m`, model `TS0203`. This is a different
+fingerprint from the exact profile below; generic handling works without
+corrections. Its interview remains partial because Configure Reporting on
+Power Configuration was rejected (0x82). A manual hub power-loss run also
+restored both this sensor and Yandex reporting without re-pairing; two
+link keys and the security policy were retained. Its retail SKU and
+long-term stability remain unverified.
 
 * **Identity**: manufacturer `_TYZB01_epni2jgy`, model `TS0203` (a Tuya
   platform device). Only this exact pair matches: the many other

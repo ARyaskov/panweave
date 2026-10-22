@@ -103,15 +103,24 @@ impl UsbLink {
     /// takes it; drops the queue after [`STALL_MS`] without progress and
     /// returns how many octets were dropped then.
     pub fn transmit<const TX: usize>(&mut self, session: &mut Session<TX>, now_ms: u64) -> usize {
-        let tx = &mut self.tx;
-        let sent = session.transmit(|b| tx.write_byte_nb(b).is_ok());
+        // Keep each explicitly flushed packet short. A full endpoint
+        // packet alone does not terminate a USB transfer on the host.
+        // Bound work per turn, and never wait for FIFO space.
+        let mut sent = 0;
+        for _ in 0..4 {
+            let tx = &mut self.tx;
+            let n =
+                panweave_hub::esp32c6::transmit_usb_chunk(session, |b| tx.write_byte_nb(b).is_ok());
+            if n == 0 {
+                break;
+            }
+            let _ = self.tx.flush_tx_nb();
+            sent += n;
+        }
         self.tx_bytes = self
             .tx_bytes
             .wrapping_add(u32::try_from(sent).unwrap_or(u32::MAX));
-        if sent > 0 {
-            let _ = self.tx.flush_tx_nb();
-            self.last_progress = now_ms;
-        } else if session.tx_len() == 0 {
+        if sent > 0 || session.tx_len() == 0 {
             self.last_progress = now_ms;
         } else if now_ms.saturating_sub(self.last_progress) > STALL_MS {
             self.last_progress = now_ms;
@@ -168,13 +177,24 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
-    /// Starts the watchdog with a `seconds` timeout.
-    pub fn start(rtc_timer: RTC_TIMER<'static>, seconds: u64) -> Self {
+    /// Arms startup protection using a temporary borrow of the RTC
+    /// peripheral. Dropping esp-hal's Rtc does not disable the watchdog.
+    pub fn arm_early(rtc_timer: RTC_TIMER<'_>, seconds: u64) {
         let mut rtc = Rtc::new(rtc_timer);
+        Self::configure(&mut rtc, seconds);
+    }
+
+    fn configure(rtc: &mut Rtc<'_>, seconds: u64) {
         rtc.rwdt
             .set_timeout(RwdtStage::Stage0, Duration::from_secs(seconds));
         rtc.rwdt.enable();
         rtc.rwdt.feed();
+    }
+
+    /// Starts the watchdog with a `seconds` timeout.
+    pub fn start(rtc_timer: RTC_TIMER<'static>, seconds: u64) -> Self {
+        let mut rtc = Rtc::new(rtc_timer);
+        Self::configure(&mut rtc, seconds);
         Watchdog { rtc }
     }
 

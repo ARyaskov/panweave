@@ -12,6 +12,67 @@
 
 use crate::protocol::{NetworkRestore, StoredNetwork};
 
+/// Last startup step reached, retained in RTC RAM by the board adapter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum StartupStage {
+    /// Entered the Rust firmware, before stack watermark painting.
+    Entry = 1,
+    /// Configuring clocks and peripherals with esp-hal.
+    Hal = 2,
+    /// Initializing the PHY and IEEE 802.15.4 radio.
+    Radio = 3,
+    /// Initializing Flash or opening persistent stores.
+    Storage = 4,
+    /// Initializing entropy, GPIO and temperature sensing.
+    Entropy = 5,
+    /// Building the node and endpoint tables.
+    Node = 6,
+    /// Restoring the hub's registry.
+    Registry = 7,
+    /// Initializing the USB protocol transport.
+    Usb = 8,
+    /// Restoring the stack's network state.
+    Network = 9,
+    /// Startup completed; entering the supervised main loop.
+    Ready = 10,
+}
+
+impl StartupStage {
+    /// A checked RTC RAM marker: magic, stage byte and its complement.
+    pub const fn marker(self) -> u32 {
+        let stage = self as u8;
+        0xb007_0000 | ((stage as u32) << 8) | ((!stage) as u32)
+    }
+
+    /// Rejects uninitialized or interrupted RTC writes and unknown stages.
+    pub const fn from_marker(marker: u32) -> Option<Self> {
+        let stage = ((marker >> 8) & 0xff) as u8;
+        if marker >> 16 != 0xb007 || (marker & 0xff) != (!stage) as u32 {
+            return None;
+        }
+        match stage {
+            1 => Some(Self::Entry),
+            2 => Some(Self::Hal),
+            3 => Some(Self::Radio),
+            4 => Some(Self::Storage),
+            5 => Some(Self::Entropy),
+            6 => Some(Self::Node),
+            7 => Some(Self::Registry),
+            8 => Some(Self::Usb),
+            9 => Some(Self::Network),
+            10 => Some(Self::Ready),
+            _ => None,
+        }
+    }
+}
+
+/// Permit one startup recovery; a watchdog boot does not arm another
+/// startup watchdog, preventing an automatic startup reset chain.
+pub const fn arm_startup_watchdog(reset: crate::protocol::ResetKind) -> bool {
+    !matches!(reset, crate::protocol::ResetKind::WatchdogReset)
+}
+
 /// First retry this long after the failed boot attempt.
 pub const RESTORE_RETRY_FIRST_MS: u64 = 10_000;
 /// Longest interval between retries.
@@ -115,6 +176,44 @@ pub fn stored_network(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_markers_validate_retained_ram() {
+        for stage in [
+            StartupStage::Entry,
+            StartupStage::Hal,
+            StartupStage::Radio,
+            StartupStage::Storage,
+            StartupStage::Entropy,
+            StartupStage::Node,
+            StartupStage::Registry,
+            StartupStage::Usb,
+            StartupStage::Network,
+            StartupStage::Ready,
+        ] {
+            assert_eq!(StartupStage::from_marker(stage.marker()), Some(stage));
+            for bit in 0..32 {
+                assert_eq!(StartupStage::from_marker(stage.marker() ^ (1 << bit)), None);
+            }
+        }
+        for marker in [0, u32::MAX, 0xb007_00ff, 0xb007_0bf4] {
+            assert_eq!(StartupStage::from_marker(marker), None);
+        }
+    }
+
+    #[test]
+    fn early_watchdog_does_not_repeat_after_watchdog_reset() {
+        use crate::protocol::ResetKind;
+        assert!(!arm_startup_watchdog(ResetKind::WatchdogReset));
+        for reset in [
+            ResetKind::ColdBoot,
+            ResetKind::SoftwareReset,
+            ResetKind::OtherReset,
+            ResetKind::UnknownResetReason,
+        ] {
+            assert!(arm_startup_watchdog(reset));
+        }
+    }
 
     #[test]
     fn only_read_failures_are_retried_with_backoff() {

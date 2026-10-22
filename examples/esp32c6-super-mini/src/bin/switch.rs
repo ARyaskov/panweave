@@ -36,6 +36,7 @@ fn main() -> ! {
     println!("panweave on/off switch, IEEE {:?}", board.ieee);
     let mut node = EndDevice::new(board.ieee)
         .identity(b"panweave", b"esp32c6-switch")
+        .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     let (descriptor, endpoint) = endpoints::on_off_light_switch(SWITCH).expect("switch endpoint");
     node.add_endpoint(descriptor, endpoint).expect("endpoint");

@@ -41,6 +41,16 @@ Captures are sanitized by default (frame headers only); `--mode raw`
 needs `--allow-raw`. `--json` gives machine-readable output; exit codes are 0 (success),
 1 (failure), 2 (usage) and 3 (hub unreachable).
 
+`--verbose` writes transmitted request bytes, received serial chunks with
+elapsed times, decoded message IDs, framing/decoding errors and the timed-out
+request ID to stderr. Use it to distinguish an absent response from a partial
+frame or a rejected message. Redirect both stdout and stderr to retain the
+complete transport log.
+
+Trace export flushes each completed page to the output file. If a later page
+times out, the error includes the number of preserved records and the next
+sequence; the partial JSONL remains available for analysis.
+
 This is a development utility, not the desktop application. The guides
 are `docs/esp32c6-hub.md`, `docs/esp32c6-diagnostics.md` and
 `docs/esp32c6-hardware-testing.md` and `docs/device-compatibility.md` in

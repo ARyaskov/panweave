@@ -49,6 +49,220 @@ fn responses(messages: &[Message]) -> Vec<(u16, Response)> {
 }
 
 #[test]
+fn radio_diagnostics_with_driver_stats_survives_usb_sized_chunks() {
+    use panweave_hub::protocol::RadioDriverStats;
+    let (mut sim, c) = network();
+    let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+    let driver = RadioDriverStats {
+        tx_attempts: u32::MAX,
+        tx_acked: u32::MAX,
+        tx_no_ack: u32::MAX,
+        tx_cca_failures: u32::MAX,
+        tx_faults: u32::MAX,
+        rx_frames: u32::MAX,
+        rx_malformed: u32::MAX,
+        config_errors: u32::MAX,
+        config_flushes: u32::MAX,
+        last_rssi: Some(-128),
+        last_lqi: Some(255),
+    };
+    for driver in [None, Some(driver)] {
+        app.hub.platform.driver = driver;
+        app.hub.platform.tx_power_dbm = Some(10);
+        let expected = app.hub.handle(stack, &Request::GetRadioDiagnostics);
+        let mut body = [0; panweave_hub::protocol::frame::MAX_BODY];
+        let n = Message::Response {
+            id: 42,
+            response: expected.clone(),
+        }
+        .encode(&mut body)
+        .unwrap();
+        assert!(
+            n <= 123,
+            "fully populated radio diagnostics fits comfortably in MAX_BODY=512"
+        );
+        for chunk in [1, 63, 64, 65, 256] {
+            let mut session: Session = Session::new(Access::Admin);
+            for bytes in frame(42, Request::GetRadioDiagnostics).chunks(chunk) {
+                session.receive(bytes, &mut app.hub, stack);
+            }
+            let mut decoder = FrameDecoder::new();
+            let mut received = Vec::new();
+            while session.tx_len() > 0 {
+                let mut sent = 0;
+                session.transmit(|b| {
+                    if sent == chunk {
+                        return false;
+                    }
+                    sent += 1;
+                    if let Some(result) = decoder.push(b) {
+                        received.push(Message::decode(result.unwrap()).unwrap());
+                    }
+                    true
+                });
+            }
+            assert_eq!(
+                received,
+                vec![Message::Response {
+                    id: 42,
+                    response: expected.clone()
+                }]
+            );
+            assert_eq!(session.stats.responses_dropped, 0);
+            assert_eq!(session.stats.oversize, 0);
+            assert_eq!(session.stats.malformed, 0);
+        }
+    }
+}
+
+#[test]
+fn usb_short_packets_release_exact_endpoint_sized_radio_responses() {
+    use panweave_hub::protocol::RadioDriverStats;
+    // A USB host may withhold full endpoint packets until a short packet
+    // terminates the transfer. A full FIFO auto-flushes and is busy until
+    // the next turn; flushing it while busy does not send a trailing ZLP.
+    #[derive(Default)]
+    struct Endpoint {
+        fifo: Vec<u8>,
+        buffered: Vec<u8>,
+        delivered: Vec<u8>,
+        busy: bool,
+    }
+    impl Endpoint {
+        fn write(&mut self, b: u8) -> bool {
+            if self.busy {
+                return false;
+            }
+            self.fifo.push(b);
+            if self.fifo.len() == 64 {
+                self.buffered.append(&mut self.fifo);
+                self.busy = true;
+            }
+            true
+        }
+        fn flush(&mut self) {
+            if !self.busy {
+                self.buffered.append(&mut self.fifo);
+                self.delivered.append(&mut self.buffered);
+                self.busy = true;
+            }
+        }
+        fn tick(&mut self) {
+            self.busy = false;
+        }
+    }
+    let (mut sim, c) = network();
+    let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+    app.hub.platform.driver = Some(RadioDriverStats {
+        last_rssi: Some(-30),
+        last_lqi: Some(255),
+        ..RadioDriverStats::default()
+    });
+    app.hub.platform.tx_power_dbm = Some(10);
+    for corrected in [false, true] {
+        let mut session: Session = Session::new(Access::Admin);
+        session.receive(
+            &frame(42, Request::GetRadioDiagnostics),
+            &mut app.hub,
+            stack,
+        );
+        let expected = Message::Response {
+            id: 42,
+            response: app.hub.handle(stack, &Request::GetRadioDiagnostics),
+        };
+        let mut bytes = [0; MAX_WIRE];
+        let n = expected.encode_frame(&mut bytes).unwrap();
+        assert_eq!(
+            n, 128,
+            "radio response lands exactly on endpoint boundaries"
+        );
+        let mut endpoint = Endpoint::default();
+        while session.tx_len() > 0 {
+            let sent = if corrected {
+                panweave_hub::esp32c6::transmit_usb_chunk(&mut session, |b| endpoint.write(b))
+            } else {
+                session.transmit(|b| endpoint.write(b))
+            };
+            assert!(sent > 0);
+            endpoint.flush();
+            endpoint.tick();
+        }
+        if corrected {
+            assert_eq!(endpoint.delivered, bytes[..n]);
+            assert_eq!(
+                panweave_hub::esp32c6::transmit_usb_chunk(&mut session, |_| {
+                    panic!("empty queue must not write or keep the link busy")
+                }),
+                0
+            );
+            let mut decoder = FrameDecoder::new();
+            let messages: Vec<_> = endpoint
+                .delivered
+                .into_iter()
+                .filter_map(|b| {
+                    decoder
+                        .push(b)
+                        .map(|r| Message::decode(r.unwrap()).unwrap())
+                })
+                .collect();
+            assert_eq!(messages, vec![expected]);
+        } else {
+            assert!(
+                endpoint.delivered.is_empty(),
+                "legacy sender can finish its queue with no host-visible response"
+            );
+            assert_eq!(endpoint.buffered, bytes[..n]);
+        }
+    }
+
+    let mut session: Session = Session::new(Access::Admin);
+    session.receive(
+        &frame(42, Request::GetRadioDiagnostics),
+        &mut app.hub,
+        stack,
+    );
+    let expected = Message::Response {
+        id: 42,
+        response: app.hub.handle(stack, &Request::GetRadioDiagnostics),
+    };
+    let mut wire = [0; MAX_WIRE];
+    let n = expected.encode_frame(&mut wire).unwrap();
+    let mut received = Vec::new();
+    assert_eq!(
+        panweave_hub::esp32c6::transmit_usb_chunk(&mut session, |_| false),
+        0
+    );
+    assert_eq!(
+        session.tx_len(),
+        n,
+        "a full FIFO must not consume queued output"
+    );
+    let mut accepted = 0;
+    let sent = panweave_hub::esp32c6::transmit_usb_chunk(&mut session, |b| {
+        if accepted == 7 {
+            return false;
+        }
+        accepted += 1;
+        received.push(b);
+        true
+    });
+    assert_eq!(sent, 7);
+    assert_eq!(session.tx_len(), n - 7);
+    while session.tx_len() > 0 {
+        let sent = panweave_hub::esp32c6::transmit_usb_chunk(&mut session, |b| {
+            received.push(b);
+            true
+        });
+        assert!((1..=63).contains(&sent));
+    }
+    assert_eq!(
+        received,
+        wire[..n],
+        "FIFO backpressure must not lose or duplicate a byte"
+    );
+}
+
+#[test]
 fn corrupted_and_oversized_frames_are_dropped_and_the_stream_recovers() {
     let (mut sim, c) = network();
     let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();

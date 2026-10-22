@@ -16,9 +16,61 @@
 //! alignment) and, when the half is full, a compaction: one sector erase
 //! per sector of a half plus the live records rewritten.
 
-use embedded_storage::nor_flash::NorFlash;
+use core::cell::RefCell;
+use embedded_storage::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
 
 use crate::{Key, Kind, Storage, StorageError};
+
+/// A borrowed NOR driver shared by disjoint stores in a single execution
+/// context. Each operation borrows the driver for its duration and forwards
+/// explicitly to the NOR traits, even if the driver also has an inherent
+/// `write` method with sector-erasing read/modify/write semantics.
+pub struct SharedNorFlash<'a, F>(&'a RefCell<F>);
+
+impl<'a, F> SharedNorFlash<'a, F> {
+    /// Shares a driver. The caller keeps each store's region disjoint and
+    /// must not access the cell recursively or concurrently from interrupts.
+    pub const fn new(flash: &'a RefCell<F>) -> Self {
+        Self(flash)
+    }
+}
+
+impl<F> Copy for SharedNorFlash<'_, F> {}
+
+impl<F> Clone for SharedNorFlash<'_, F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<F: ErrorType> ErrorType for SharedNorFlash<'_, F> {
+    type Error = F::Error;
+}
+
+impl<F: ReadNorFlash> ReadNorFlash for SharedNorFlash<'_, F> {
+    const READ_SIZE: usize = F::READ_SIZE;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        ReadNorFlash::read(&mut *self.0.borrow_mut(), offset, bytes)
+    }
+
+    fn capacity(&self) -> usize {
+        ReadNorFlash::capacity(&*self.0.borrow())
+    }
+}
+
+impl<F: NorFlash> NorFlash for SharedNorFlash<'_, F> {
+    const WRITE_SIZE: usize = F::WRITE_SIZE;
+    const ERASE_SIZE: usize = F::ERASE_SIZE;
+
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        NorFlash::write(&mut *self.0.borrow_mut(), offset, bytes)
+    }
+
+    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        NorFlash::erase(&mut *self.0.borrow_mut(), from, to)
+    }
+}
 
 /// Largest record payload.
 pub const MAX_RECORD: usize = 512;
@@ -492,6 +544,17 @@ mod tests {
         fuel: Option<u32>,
     }
 
+    impl RamFlash {
+        // Match drivers such as esp-storage that expose both interfaces.
+        #[allow(dead_code)]
+        fn write(&mut self, _offset: u32, _bytes: &[u8]) -> Result<(), E> {
+            panic!(
+                "inherent write would erase a sector ({} erases so far); use NorFlash::write",
+                self.erases
+            );
+        }
+    }
+
     #[derive(Debug)]
     struct E;
 
@@ -553,6 +616,47 @@ mod tests {
             erases: 0,
             fuel: None,
         }
+    }
+
+    #[test]
+    fn shared_stores_append_without_sector_erases_and_reopen() {
+        let driver = RefCell::new(flash());
+        let shared = SharedNorFlash::new(&driver);
+        let mut first = NorFlashStore::new(shared, 0, 2 * S).unwrap();
+        let mut second = NorFlashStore::new(shared, 2 * S, 2 * S).unwrap();
+        let erases = driver.borrow().erases;
+        for value in 0..16u8 {
+            first.store(Key::single(Kind::Nib), &[value; 32]).unwrap();
+            second
+                .store(Key::single(Kind::Application), &[value; 12])
+                .unwrap();
+        }
+        assert_eq!(
+            driver.borrow().erases,
+            erases,
+            "appends only program erased space"
+        );
+        let mut first = NorFlashStore::new(shared, 0, 2 * S).unwrap();
+        let mut second = NorFlashStore::new(shared, 2 * S, 2 * S).unwrap();
+        let mut buf = [0; 32];
+        assert_eq!(
+            first.load(Key::single(Kind::Nib), &mut buf).unwrap(),
+            Some(32)
+        );
+        assert_eq!(buf, [15; 32]);
+        assert_eq!(
+            second
+                .load(Key::single(Kind::Application), &mut buf)
+                .unwrap(),
+            Some(12)
+        );
+        assert_eq!(&buf[..12], &[15; 12]);
+        driver.borrow_mut().fuel = Some(0);
+        assert_eq!(
+            first.store(Key::single(Kind::Nib), &[99; 32]),
+            Err(StorageError::Io)
+        );
+        assert_eq!(driver.borrow().erases, erases);
     }
 
     #[test]

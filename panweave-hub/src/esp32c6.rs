@@ -1,7 +1,28 @@
-//! ESP32-C6 facts the hub's diagnostics need, as plain tables (testable
-//! on the host, shared by the firmware and the CLI).
+//! ESP32-C6 diagnostics and USB transport helpers, testable on the host.
 
 use crate::protocol::ResetKind;
+
+/// Writes one short USB Serial/JTAG packet, without blocking.
+///
+/// Full 64-byte packets can remain buffered by the host until a short
+/// packet terminates the transfer. The board flushes after this helper;
+/// limiting the payload to 63 bytes makes every flushed packet short,
+/// including responses whose wire length is a multiple of 64. Empty
+/// queues do not produce packets. Refused bytes remain in the session.
+#[cfg(feature = "engine")]
+pub fn transmit_usb_chunk<const TX: usize>(
+    session: &mut crate::Session<TX>,
+    mut write: impl FnMut(u8) -> bool,
+) -> usize {
+    let mut sent = 0;
+    session.transmit(|b| {
+        if sent == 63 || !write(b) {
+            return false;
+        }
+        sent += 1;
+        true
+    })
+}
 
 /// The name of an ESP32-C6 reset reason code as the ROM reports it
 /// (`esp_hal::rtc_cntl::SocResetReason` for the ESP32-C6).

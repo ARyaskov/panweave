@@ -457,7 +457,15 @@ formatted on the chip.
 
 ## USB behaviour
 
+For the ESP32-C6 MAC capability mismatch, association regression coverage
+and evidence to collect when `diagnostics radio` times out, see the
+[MAC/radio investigation](esp32c6-mac-investigation.md).
+
 * The session never writes anything but protocol frames.
+* The ESP32-C6 sender flushes packets of at most 63 bytes so the host
+  receives a short USB packet even when a protocol response has a wire
+  length divisible by the 64-byte endpoint size. Each loop turn attempts
+  at most four chunks and never waits for FIFO space.
 * A host that stops reading: after 2 s without progress the hub discards
   its queued output (`usb-output-discarded`, counted in
   `usb_discards`); a host that comes back resynchronizes at the next

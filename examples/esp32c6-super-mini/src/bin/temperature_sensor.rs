@@ -37,6 +37,7 @@ fn main() -> ! {
     println!("panweave temperature sensor, IEEE {:?}", board.ieee);
     let mut node = EndDevice::new(board.ieee)
         .identity(b"panweave", b"esp32c6-tsens")
+        .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     let (descriptor, endpoint) = endpoints::temperature_sensor(SENSOR).expect("sensor endpoint");
     node.add_endpoint(descriptor, endpoint).expect("endpoint");

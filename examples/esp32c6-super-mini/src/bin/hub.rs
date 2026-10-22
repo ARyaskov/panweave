@@ -38,8 +38,9 @@ use panweave::types::time::Instant;
 use panweave::{Coordinator, Event, endpoints};
 use panweave_esp32c6::hub::{HubStore, UsbLink, Watchdog, store_usage};
 use panweave_esp32c6::memory::{self, StackMonitor};
+use panweave_esp32c6::startup;
 use panweave_esp32c6::{Board, Runner, Traffic, now};
-use panweave_hub::boot::{RestoreRetry, RetryOutcome, stored_network};
+use panweave_hub::boot::{RestoreRetry, RetryOutcome, StartupStage, stored_network};
 use panweave_hub::capture::flags;
 use panweave_hub::diag::{Category, DiagRecord, Severity, code};
 use panweave_hub::protocol::ResetKind;
@@ -81,16 +82,19 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
 
 #[esp_hal::main]
 fn main() -> ! {
+    let previous_startup = startup::begin();
     // First: paint the free stack for the watermark (src/memory.rs).
     let stack_monitor = StackMonitor::paint();
-    let (mut board, hub_flash, scan) = Board::init_hub();
+    let (mut board, hub_flash, scan) = Board::init_hub_with_watchdog(u64::from(WATCHDOG_SECONDS));
     let mut watchdog = Watchdog::start(board.rtc_timer, u64::from(WATCHDOG_SECONDS));
     let reset_raw = esp_hal::rtc_cntl::reset_reason(esp_hal::system::Cpu::ProCpu).map(|r| r as u8);
     let persistent = hub_flash.is_some();
     let store = hub_flash.map_or(HubStore::None, HubStore::Flash);
 
+    startup::mark(StartupStage::Node);
     let mut node = Coordinator::new(board.ieee)
         .identity(b"panweave", b"esp32c6-hub")
+        .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     let (descriptor, endpoint) = hub_endpoint(HUB_EP).expect("hub endpoint");
     node.add_endpoint(descriptor, endpoint)
@@ -109,6 +113,17 @@ fn main() -> ! {
         store,
     );
     hub.attach(&mut node.stack);
+    if let Some(stage) = previous_startup {
+        let severity = if stage == StartupStage::Ready {
+            Severity::Info
+        } else {
+            Severity::Warning
+        };
+        hub.log(
+            DiagRecord::new(Category::Boot, severity, code::PREVIOUS_BOOT_STAGE)
+                .status(stage as u8),
+        );
+    }
     hub.log(
         DiagRecord::new(Category::Watchdog, Severity::Info, code::WATCHDOG_ARMED)
             .arg(u32::from(WATCHDOG_SECONDS)),
@@ -134,16 +149,19 @@ fn main() -> ! {
     }
     // A registry that cannot be read is reported; the network still
     // starts.
+    startup::mark(StartupStage::Registry);
     let registry = hub.restore().ok();
 
     // The USB link: a local, physical connection with full access (the
     // trust boundary is documented in docs/esp32c6-hub.md).
+    startup::mark(StartupStage::Usb);
     let mut session: Session = Session::new(Access::Admin);
     let mut usb = UsbLink::new(board.usb);
     let mut runner = Runner::new(board.radio);
 
     // Never replace an existing network behind the user's back: form one
     // only when the storage was read and genuinely holds none.
+    startup::mark(StartupStage::Network);
     let mut restored = node.initialize();
     for _ in 1..RESTORE_ATTEMPTS {
         if restored.is_ok() {
@@ -242,9 +260,12 @@ fn main() -> ! {
     );
     let mut stack_peak = stack_monitor.peak();
     let mut next_stack_scan = now().as_millis() + STACK_SCAN_MS;
+    startup::mark(StartupStage::Ready);
     watchdog.feed();
     loop {
         let turn = esp_hal::time::Instant::now();
+        // Measure the radio step separately from boot and USB/hub work.
+        let _ = panweave_esp32c6::board::take_flash_time_us();
         let deadline = runner.step_observed(&mut node, |t, channel| {
             if !hub.capture_active() {
                 return;
@@ -271,6 +292,10 @@ fn main() -> ! {
                 }
             }
         });
+        let flash_time = panweave_esp32c6::board::take_flash_time_us();
+        let flash_total = flash_time
+            .iter()
+            .fold(0u32, |sum, us| sum.saturating_add(*us));
         while let Some(event) = node.next_event() {
             if let Event::Stack(e) = event {
                 hub.on_stack_event(&mut node.stack, &e);
@@ -319,6 +344,23 @@ fn main() -> ! {
         hub.poll(&mut node.stack);
         hub_poll_max_us = hub_poll_max_us
             .max(u32::try_from(poll_started.elapsed().as_micros()).unwrap_or(u32::MAX));
+
+        // Hub::poll refreshed the diagnostic clock and drained join records.
+        if u64::from(flash_total) >= INDIRECT_WINDOW_US {
+            for (status, us) in [(1, flash_time[0]), (2, flash_time[1]), (3, flash_time[2])] {
+                if us > 0 {
+                    hub.log(
+                        DiagRecord::new(
+                            Category::Persistence,
+                            Severity::Warning,
+                            code::FLASH_RADIO_STEP_TIME,
+                        )
+                        .status(status)
+                        .arg(us),
+                    );
+                }
+            }
+        }
 
         // A boot that could not read the stack's storage tries again.
         if retry.due(now().as_millis()) {

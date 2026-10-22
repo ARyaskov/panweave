@@ -2265,6 +2265,311 @@ mod tests {
         );
     }
 
+    fn hardware_caps(retries: bool) -> RadioCapabilities {
+        RadioCapabilities {
+            auto_ack: true,
+            ack_wait: true,
+            retries,
+            ..RadioCapabilities::default()
+        }
+    }
+
+    #[test]
+    fn hardware_ack_software_retries_are_bounded_and_preserve_frame() {
+        for hardware_retries in [false, true] {
+            let mut s = svc(hardware_caps(hardware_retries));
+            let handle = s
+                .data_request(
+                    PanId(0x1234),
+                    MacAddress::Short(ShortAddress(2)),
+                    &[9],
+                    true,
+                    false,
+                )
+                .unwrap();
+            let (_, first, _) = take_transmit(&mut s);
+            let attempts = if hardware_retries {
+                1
+            } else {
+                1 + constants::MAX_FRAME_RETRIES
+            };
+            for attempt in 0..attempts {
+                if attempt > 0 {
+                    let (_, retry, options) = take_transmit(&mut s);
+                    assert_eq!(retry, first);
+                    assert!(options.ack_request);
+                }
+                s.on_tx_complete(Ok(TxResult::default()));
+            }
+            assert_eq!(
+                s.next_event(),
+                Some(MacEvent::DataConfirm {
+                    handle,
+                    status: TxStatus::NoAck,
+                    frame_pending: false,
+                })
+            );
+            s.poll_timers(Instant::from_millis(100));
+            assert!(s.next_action().is_none());
+            assert!(s.next_event().is_none());
+        }
+    }
+
+    #[test]
+    fn hardware_ack_success_cancels_wait_and_preserves_pending() {
+        for miss_first in [false, true] {
+            let mut s = svc(hardware_caps(false));
+            let handle = s
+                .data_request(
+                    PanId(0x1234),
+                    MacAddress::Short(ShortAddress(2)),
+                    &[9],
+                    true,
+                    false,
+                )
+                .unwrap();
+            let (_, first, _) = take_transmit(&mut s);
+            if miss_first {
+                s.on_tx_complete(Ok(TxResult::default()));
+                assert!(s.next_event().is_none());
+                assert_eq!(take_transmit(&mut s).1, first);
+            }
+            s.on_tx_complete(Ok(TxResult {
+                acked: true,
+                frame_pending: true,
+                timestamp_us: None,
+            }));
+            assert_eq!(
+                s.next_event(),
+                Some(MacEvent::DataConfirm {
+                    handle,
+                    status: TxStatus::Success,
+                    frame_pending: true,
+                })
+            );
+            s.poll_timers(Instant::from_millis(100));
+            assert!(
+                s.next_action().is_none(),
+                "hardware success must not start a software ACK wait"
+            );
+            assert!(s.next_event().is_none());
+        }
+    }
+
+    #[test]
+    fn hardware_fault_and_broadcast_complete_without_ack_wait() {
+        for (broadcast, result, status) in [
+            (false, Err(RadioError::HardwareFault), TxStatus::RadioError),
+            (true, Ok(TxResult::default()), TxStatus::Success),
+        ] {
+            let mut s = svc(hardware_caps(false));
+            let dst = if broadcast {
+                ShortAddress::BROADCAST_ALL
+            } else {
+                ShortAddress(2)
+            };
+            let handle = s
+                .data_request(PanId(0x1234), MacAddress::Short(dst), &[9], true, false)
+                .unwrap();
+            let (_, frame, options) = take_transmit(&mut s);
+            assert_eq!(options.ack_request, !broadcast);
+            assert_eq!(
+                Frame::decode_exact(&frame)
+                    .unwrap()
+                    .header
+                    .frame_control
+                    .ack_request(),
+                !broadcast
+            );
+            s.on_tx_complete(result);
+            assert_eq!(
+                s.next_event(),
+                Some(MacEvent::DataConfirm {
+                    handle,
+                    status,
+                    frame_pending: false
+                })
+            );
+            s.poll_timers(Instant::from_millis(100));
+            assert!(s.next_action().is_none());
+        }
+    }
+
+    fn child_command(s: &mut MacService, device: ExtendedAddress, seq: u8, cmd: MacCommand) {
+        let h = Header::new(
+            FrameType::Command,
+            seq,
+            s.pib.pan_id,
+            MacAddress::Short(s.pib.short_address),
+            s.pib.pan_id,
+            MacAddress::Extended(device),
+        );
+        let h = Header {
+            frame_control: h.frame_control.with_ack_request(true),
+            ..h
+        };
+        let frame = MacService::build_frame(&h, &cmd).unwrap();
+        s.on_receive(&frame, RxMetadata::default());
+    }
+
+    #[test]
+    fn hardware_ack_indirect_association_delivery_outcomes() {
+        for outcome in [
+            TxStatus::Success,
+            TxStatus::NoAck,
+            TxStatus::RadioError,
+            TxStatus::TransactionExpired,
+        ] {
+            let mut s = svc(hardware_caps(false));
+            s.set_association_permit(true);
+            let device = ExtendedAddress(0x1020);
+            child_command(
+                &mut s,
+                device,
+                1,
+                MacCommand::AssociationRequest {
+                    capability: MacCapability::from_raw(0x80),
+                },
+            );
+            assert!(
+                matches!(s.next_event(), Some(MacEvent::AssociateIndication { device: d, .. }) if d == device)
+            );
+            assert!(
+                s.next_action().is_none(),
+                "hardware auto-ACK must suppress software ACKs"
+            );
+            s.associate_response(device, ShortAddress(0x1000), MacStatus::Success)
+                .unwrap();
+            assert_eq!(s.indirect_len(), 1);
+            if outcome == TxStatus::TransactionExpired {
+                s.poll_timers(Instant::ZERO + s.config.transaction_persistence);
+            } else {
+                child_command(&mut s, device, 2, MacCommand::DataRequest);
+                assert!(matches!(
+                    s.next_event(),
+                    Some(MacEvent::PollIndication { .. })
+                ));
+                let (_, first, options) = take_transmit(&mut s);
+                assert!(options.ack_request);
+                let f = Frame::decode_exact(&first).unwrap();
+                assert_eq!(f.header.dst, MacAddress::Extended(device));
+                assert_eq!(
+                    MacCommand::decode_exact(f.payload).unwrap(),
+                    MacCommand::AssociationResponse {
+                        short_address: ShortAddress(0x1000),
+                        status: MacStatus::Success,
+                    }
+                );
+                // Repeated polls while the response is in flight cannot enqueue it twice.
+                child_command(&mut s, device, 3, MacCommand::DataRequest);
+                assert!(matches!(
+                    s.next_event(),
+                    Some(MacEvent::PollIndication { .. })
+                ));
+                match outcome {
+                    TxStatus::Success => s.on_tx_complete(Ok(TxResult {
+                        acked: true,
+                        ..TxResult::default()
+                    })),
+                    TxStatus::RadioError => s.on_tx_complete(Err(RadioError::HardwareFault)),
+                    _ => {
+                        for attempt in 0..=constants::MAX_FRAME_RETRIES {
+                            if attempt > 0 {
+                                assert_eq!(take_transmit(&mut s).1, first);
+                            }
+                            s.on_tx_complete(Ok(TxResult::default()));
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                s.next_event(),
+                Some(MacEvent::CommStatus {
+                    device,
+                    status: outcome
+                })
+            );
+            assert_eq!(s.indirect_len(), 0);
+            s.poll_timers(Instant::from_millis(100_000));
+            assert!(s.next_action().is_none());
+            assert!(s.next_event().is_none());
+        }
+    }
+
+    #[test]
+    fn hardware_ack_multiple_children_and_duplicate_requests_expire_boundedly() {
+        let mut s = svc(hardware_caps(false));
+        s.set_association_permit(true);
+        for device in [ExtendedAddress(10), ExtendedAddress(20)] {
+            for _ in 0..2 {
+                child_command(
+                    &mut s,
+                    device,
+                    1,
+                    MacCommand::AssociationRequest {
+                        capability: MacCapability::from_raw(0x80),
+                    },
+                );
+                assert!(matches!(
+                    s.next_event(),
+                    Some(MacEvent::AssociateIndication { .. })
+                ));
+                s.associate_response(device, ShortAddress(0x1000), MacStatus::Success)
+                    .unwrap();
+            }
+        }
+        // Existing transactions survive closure; a new request is refused.
+        s.set_association_permit(false);
+        child_command(
+            &mut s,
+            ExtendedAddress(30),
+            1,
+            MacCommand::AssociationRequest {
+                capability: MacCapability::from_raw(0x80),
+            },
+        );
+        assert!(s.next_event().is_none());
+        child_command(&mut s, ExtendedAddress(30), 2, MacCommand::DataRequest);
+        assert!(matches!(
+            s.next_event(),
+            Some(MacEvent::PollIndication { .. })
+        ));
+        let (_, frame, _) = take_transmit(&mut s);
+        assert!(matches!(
+            MacCommand::decode_exact(Frame::decode_exact(&frame).unwrap().payload).unwrap(),
+            MacCommand::AssociationResponse {
+                status: MacStatus::PanAccessDenied,
+                ..
+            }
+        ));
+        s.on_tx_complete(Ok(TxResult {
+            acked: true,
+            ..TxResult::default()
+        }));
+        assert!(matches!(
+            s.next_event(),
+            Some(MacEvent::CommStatus {
+                device: ExtendedAddress(30),
+                status: TxStatus::Success
+            })
+        ));
+        s.poll_timers(Instant::ZERO + s.config.transaction_persistence);
+        let mut expired = 0;
+        while let Some(event) = s.next_event() {
+            assert!(matches!(
+                event,
+                MacEvent::CommStatus {
+                    status: TxStatus::TransactionExpired,
+                    ..
+                }
+            ));
+            expired += 1;
+        }
+        assert_eq!(expired, 4);
+        assert_eq!(s.indirect_len(), 0);
+        assert!(s.next_action().is_none());
+    }
+
     #[test]
     fn broadcast_data_is_not_acked() {
         let mut s = svc(RadioCapabilities::default());

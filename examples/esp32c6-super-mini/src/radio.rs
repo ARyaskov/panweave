@@ -23,6 +23,7 @@ use panweave::mac::constants::MAX_MAC_FRAME_SIZE;
 use panweave::mac::radio::{
     RadioCapabilities, RadioConfig, RadioError, RxMetadata, TxOptions, TxResult,
 };
+use panweave::mac::service::MacServiceConfig;
 use panweave::types::{Channel, ExtendedAddress, PanId, ShortAddress};
 use panweave_hub::protocol::RadioDriverStats;
 
@@ -70,6 +71,14 @@ pub struct Radio {
 }
 
 impl Radio {
+    /// MAC configuration matching this driver's hardware acknowledgement support.
+    pub fn mac_config() -> MacServiceConfig {
+        MacServiceConfig {
+            radio: Self::CAPABILITIES,
+            ..MacServiceConfig::default()
+        }
+    }
+
     /// What the hardware does for the MAC service.
     pub const CAPABILITIES: RadioCapabilities = RadioCapabilities {
         auto_ack: true,

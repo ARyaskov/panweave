@@ -253,6 +253,8 @@ pub mod code {
     /// Reading the stack's storage was retried (`arg`: attempts so far;
     /// `status`: 0 still unreadable, 1 restored, 2 gave up).
     pub const NETWORK_RESTORE_RETRY: u16 = 0x010b;
+    /// Last startup stage retained across a warm reset; status is StartupStage.
+    pub const PREVIOUS_BOOT_STAGE: u16 = 0x010c;
 
     // USB.
     /// Queued output was dropped: the host took nothing for too long
@@ -449,6 +451,9 @@ pub mod code {
     pub const INDEX_CORRUPT: u16 = 0x0d03;
     /// A registry record was written.
     pub const RECORD_WRITTEN: u16 = 0x0d04;
+    /// Cumulative Flash time in one radio step (`status`: 1 read, 2 write,
+    /// 3 erase; `arg`: microseconds), recorded by the board adapter.
+    pub const FLASH_RADIO_STEP_TIME: u16 = 0x0d05;
 
     // Watchdog.
     /// The watchdog was armed (`arg`: timeout in seconds).
@@ -473,6 +478,7 @@ pub const fn code_name(c: u16) -> &'static str {
         CAPTURE_STARTED => "capture-started",
         CAPTURE_STOPPED => "capture-stopped",
         BOOT_COMPLETED => "boot-completed",
+        PREVIOUS_BOOT_STAGE => "previous-boot-stage",
         NETWORK_RESTORED => "network-restored",
         NETWORK_FORMED => "network-formed",
         NETWORK_RESTORE_FAILED => "network-restore-failed",
@@ -494,6 +500,7 @@ pub const fn code_name(c: u16) -> &'static str {
         STALL_SUSPECTED => "stall-suspected",
         STALL_CONFIRMED => "stall-confirmed",
         PREVIOUS_STALL_RESET => "previous-stall-reset",
+        FLASH_RADIO_STEP_TIME => "flash-radio-step-time",
         NWK_PENDING_FULL => "nwk-pending-full",
         JOIN_ASSOCIATION_REQUEST => "join-association-request",
         JOIN_CHILD_JOINED => "join-child-joined",

@@ -41,6 +41,7 @@ fn main() -> ! {
     println!("panweave coordinator, IEEE {:?}", board.ieee);
     let mut node = Coordinator::new(board.ieee)
         .identity(b"panweave", b"esp32c6-coordinator")
+        .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     // Any device may join while the network is open; production
     // deployments restrict this (`TrustCenterPolicy`, install codes).

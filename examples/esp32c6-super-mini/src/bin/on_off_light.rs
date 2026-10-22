@@ -30,6 +30,7 @@ fn main() -> ! {
     println!("panweave on/off light, IEEE {:?}", board.ieee);
     let mut node = Router::new(board.ieee)
         .identity(b"panweave", b"esp32c6-light")
+        .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     let (descriptor, endpoint) = endpoints::on_off_light(LIGHT).expect("light endpoint");
     node.add_endpoint(descriptor, endpoint).expect("endpoint");
