@@ -36,6 +36,24 @@ pub enum StartupStage {
     Network = 9,
     /// Startup completed; entering the supervised main loop.
     Ready = 10,
+    /// Starting Wi-Fi for an experimental notification attempt.
+    WifiStart = 11,
+    /// Associating with the configured Wi-Fi access point.
+    WifiAssociate = 12,
+    /// Waiting for a DHCP address.
+    WifiAddress = 13,
+    /// Resolving the notification server's name.
+    WifiDns = 14,
+    /// Connecting the notification TCP socket.
+    WifiConnect = 15,
+    /// Performing the notification TLS handshake.
+    WifiTls = 16,
+    /// Sending the notification request.
+    WifiRequest = 17,
+    /// Waiting for the notification response.
+    WifiResponse = 18,
+    /// Stopping Wi-Fi and restoring Zigbee reception.
+    WifiRestore = 19,
 }
 
 impl StartupStage {
@@ -62,6 +80,15 @@ impl StartupStage {
             8 => Some(Self::Usb),
             9 => Some(Self::Network),
             10 => Some(Self::Ready),
+            11 => Some(Self::WifiStart),
+            12 => Some(Self::WifiAssociate),
+            13 => Some(Self::WifiAddress),
+            14 => Some(Self::WifiDns),
+            15 => Some(Self::WifiConnect),
+            16 => Some(Self::WifiTls),
+            17 => Some(Self::WifiRequest),
+            18 => Some(Self::WifiResponse),
+            19 => Some(Self::WifiRestore),
             _ => None,
         }
     }
@@ -190,13 +217,22 @@ mod tests {
             StartupStage::Usb,
             StartupStage::Network,
             StartupStage::Ready,
+            StartupStage::WifiStart,
+            StartupStage::WifiAssociate,
+            StartupStage::WifiAddress,
+            StartupStage::WifiDns,
+            StartupStage::WifiConnect,
+            StartupStage::WifiTls,
+            StartupStage::WifiRequest,
+            StartupStage::WifiResponse,
+            StartupStage::WifiRestore,
         ] {
             assert_eq!(StartupStage::from_marker(stage.marker()), Some(stage));
             for bit in 0..32 {
                 assert_eq!(StartupStage::from_marker(stage.marker() ^ (1 << bit)), None);
             }
         }
-        for marker in [0, u32::MAX, 0xb007_00ff, 0xb007_0bf4] {
+        for marker in [0, u32::MAX, 0xb007_00ff, 0xb007_ff00] {
             assert_eq!(StartupStage::from_marker(marker), None);
         }
     }

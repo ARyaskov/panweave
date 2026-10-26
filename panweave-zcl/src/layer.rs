@@ -611,6 +611,32 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         self.endpoints.push(ep)
     }
 
+    /// Registers an empty endpoint and returns it, to be filled in place
+    /// (an instance is tens of KiB: built by value and passed down, it is
+    /// copied on the caller's stack). `None` when the endpoint exists or
+    /// the table is full.
+    pub fn add_empty_endpoint(
+        &mut self,
+        endpoint: Endpoint,
+        profile: ProfileId,
+    ) -> Option<&mut EndpointInstance<C, A>> {
+        if self.endpoints.iter().any(|e| e.endpoint == endpoint) {
+            return None;
+        }
+        self.endpoints
+            .push(EndpointInstance::new(endpoint, profile))
+            .ok()?;
+        self.endpoints.last_mut()
+    }
+
+    /// Removes the endpoint registered last (undoes
+    /// [`Zcl::add_empty_endpoint`] when filling it failed).
+    pub fn remove_last_endpoint(&mut self) {
+        // Dropped in place: `pop` would return the instance by value.
+        self.endpoints
+            .truncate(self.endpoints.len().saturating_sub(1));
+    }
+
     /// The endpoint instance.
     pub fn endpoint(&self, endpoint: Endpoint) -> Option<&EndpointInstance<C, A>> {
         self.endpoints.iter().find(|e| e.endpoint == endpoint)

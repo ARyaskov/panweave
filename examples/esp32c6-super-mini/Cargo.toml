@@ -1,6 +1,6 @@
 [package]
 name = "panweave-esp32c6"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
@@ -25,6 +25,18 @@ embedded-storage = "0.3.1"
 # Interrupts off while the hub paints its stack for the watermark
 # (`src/memory.rs`); already in the tree through esp-hal.
 critical-section = "1.2.0"
+# Experimental Wi-Fi notifications only (feature `wifi-alerts`): the
+# preemptive scheduler Wi-Fi needs.
+esp-rtos = { version = "0.4.0", features = ["esp32c6", "esp-radio", "esp-alloc"], optional = true }
+# ... and the network of a delivery: DHCP, DNS, TCP (embassy-net, its
+# time driver from esp-rtos) and TLS 1.3 with certificate verification
+# (embedded-tls; `rsa` for the RSA chain of api.telegram.org).
+embassy-net = { version = "0.9.1", default-features = false, features = ["proto-ipv4", "medium-ethernet", "dhcpv4", "dns", "tcp"], optional = true }
+# The hub polls futures with Waker::noop(), outside an Embassy executor.
+# esp-rtos otherwise defaults to an integrated timer queue which assumes
+# every waker belongs to an Embassy task (DHCP's first timer would panic).
+embassy-time-queue-utils = { version = "0.3", features = ["generic-queue-8"], optional = true }
+embedded-tls = { version = "0.19.0", default-features = false, features = ["rustpki", "rsa"], optional = true }
 
 [features]
 default = ["capture"]
@@ -36,6 +48,20 @@ small-tables = ["panweave/small-tables"]
 # default, off until an Admin host starts one; docs/esp32c6-diagnostics.md).
 # Without it the hub engine holds no capture buffer.
 capture = ["panweave-hub/radio-capture"]
+# EXPERIMENTAL: Zigbee -> Wi-Fi -> Zigbee on the one radio
+# (docs/esp32c6-wifi-alerts.md). Builds only from
+# `examples/esp32c6-wifi-alerts`, whose patched esp-radio allows Wi-Fi
+# and 802.15.4 in one image for strictly sequential use; enabled here it
+# hits esp-radio's own build guard, on purpose.
+wifi-alerts = [
+    "esp-radio/wifi",
+    "dep:esp-rtos",
+    "esp-rtos/embassy",
+    "dep:embassy-net",
+    "dep:embassy-time-queue-utils",
+    "dep:embedded-tls",
+    "panweave-hub/alerts",
+]
 
 [profile.release]
 opt-level = "s"

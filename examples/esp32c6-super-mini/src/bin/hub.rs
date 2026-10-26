@@ -33,8 +33,8 @@
 
 use esp_backtrace as _;
 use panweave::security::cipher::SoftwareAes;
-use panweave::types::Endpoint;
 use panweave::types::time::Instant;
+use panweave::types::{Endpoint, ProfileId};
 use panweave::{Coordinator, Event, endpoints};
 use panweave_esp32c6::hub::{HubStore, UsbLink, Watchdog, store_usage};
 use panweave_esp32c6::memory::{self, StackMonitor};
@@ -46,7 +46,7 @@ use panweave_hub::diag::{Category, DiagRecord, Severity, code};
 use panweave_hub::protocol::ResetKind;
 use panweave_hub::protocol::{BootReport, NetworkRestore, PartitionEntry, PartitionFinding};
 use panweave_hub::supervisor::{HealthSupervisor, Observation, Supervision};
-use panweave_hub::{Access, Hub, HubConfig, Session, esp32c6, hub_endpoint, partitions};
+use panweave_hub::{Access, Hub, HubConfig, Session, esp32c6, hub_endpoint_into, partitions};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -80,6 +80,110 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     }
 }
 
+/// The hub's Zigbee node.
+type HubNode = panweave::Node<SoftwareAes, panweave_esp32c6::Rng, panweave_esp32c6::SharedStore>;
+
+// `main` never returns, so its frame holds the stack for the firmware's
+// life. What exists only at boot stays out of it: the endpoints are
+// built in place in the node's tables (`add_endpoint_with`; built by
+// value and passed down, a 51 KiB instance was copied three times), and
+// the hub engine is built in a function of its own. With both inlined
+// into `main`, its frame was about 370 KiB, more than the `hub-wifi`
+// image has.
+
+/// Adds the hub's endpoint and the Trust Center utility endpoint to
+/// `node`.
+#[inline(never)]
+fn add_endpoints(node: &mut HubNode) {
+    let ha = ProfileId::HOME_AUTOMATION;
+    node.add_endpoint_with(HUB_EP, ha, hub_endpoint_into)
+        .expect("hub endpoint");
+    let _ = node.add_endpoint_with(UTILITY_EP, ha, endpoints::trust_center_utility_into);
+}
+
+/// Builds the hub engine.
+#[inline(never)]
+fn build_hub(persistent: bool, store: HubStore) -> Hub<HubStore> {
+    Hub::new(
+        HubConfig {
+            endpoint: HUB_EP,
+            firmware: env!("CARGO_PKG_VERSION"),
+            persistent,
+            ..HubConfig::default()
+        },
+        store,
+    )
+}
+
+/// EXPERIMENTAL, `hub-wifi` image only: one radio-switch experiment
+/// (`deliver == false`: 802.15.4 off, Wi-Fi on and joined, Wi-Fi off,
+/// 802.15.4 back) or one Telegram delivery (the same, plus DHCP, DNS,
+/// TCP, TLS and the request). Its frame — the network buffers, the
+/// request and the response, the TLS state — exists only during the
+/// call. The request and the buffers that held it are wiped before
+/// returning.
+#[cfg(feature = "wifi-alerts")]
+#[inline(never)]
+fn wifi_attempt(
+    hub: &mut Hub<HubStore>,
+    wifi: esp_hal::peripherals::WIFI<'_>,
+    radio: &mut panweave_esp32c6::Radio,
+    watchdog: &mut Watchdog,
+    deliver: bool,
+) {
+    use panweave_esp32c6::wifi_switch::{
+        AccessPointPin, FirmwareClock, NetBuffers, WifiNetwork, ZigbeeSwitch,
+    };
+    use panweave_hub::alert::{attempt, telegram};
+    let mut buffers = NetBuffers::new();
+    if !deliver {
+        let budget = hub.alert_probe_budget_ms();
+        let (report, failure, scan) = {
+            // WPA3-only is not read: this firmware joins nothing else.
+            let (bssid, channel, _) = hub.alert_wifi_pin();
+            let pin = AccessPointPin { bssid, channel };
+            let (ssid, password) = hub.alert_wifi_credentials();
+            let mut net = WifiNetwork::new(wifi, ssid, password, pin, &mut buffers, watchdog);
+            let mut clock = FirmwareClock { watchdog };
+            let report = attempt::run_probe(&mut clock, &mut ZigbeeSwitch(radio), &mut net, budget);
+            (report, net.wifi_failure(), net.wifi_scan())
+        };
+        hub.note_wifi_failure(failure);
+        hub.note_wifi_scan(scan);
+        hub.finish_probe(&report);
+        return;
+    }
+    // The request holds the bot token.
+    let mut request = [0u8; 4096];
+    let mut response = [0u8; 4096];
+    if let Some(prepared) = hub.prepare_alert(&mut request) {
+        let (report, failure) = {
+            // WPA3-only is not read: this firmware joins nothing else.
+            let (bssid, channel, _) = hub.alert_wifi_pin();
+            let pin = AccessPointPin { bssid, channel };
+            let (ssid, password) = hub.alert_wifi_credentials();
+            let mut net = WifiNetwork::new(wifi, ssid, password, pin, &mut buffers, watchdog);
+            let mut clock = FirmwareClock { watchdog };
+            let report = attempt::run(
+                &mut clock,
+                &mut ZigbeeSwitch(radio),
+                &mut net,
+                prepared.budget_ms,
+                telegram::HOST,
+                telegram::PORT,
+                &request[..prepared.len],
+                &mut response,
+            );
+            (report, net.wifi_failure())
+        };
+        hub.note_wifi_failure(failure);
+        hub.finish_alert(&prepared, &report, &response);
+    }
+    telegram::wipe(&mut request);
+    // The TLS buffers held the request in plaintext too.
+    buffers.wipe();
+}
+
 #[esp_hal::main]
 fn main() -> ! {
     let previous_startup = startup::begin();
@@ -92,27 +196,20 @@ fn main() -> ! {
     let store = hub_flash.map_or(HubStore::None, HubStore::Flash);
 
     startup::mark(StartupStage::Node);
-    let mut node = Coordinator::new(board.ieee)
+    let mut node: HubNode = Coordinator::new(board.ieee)
         .identity(b"panweave", b"esp32c6-hub")
         .mac(panweave_esp32c6::Radio::mac_config())
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
-    let (descriptor, endpoint) = hub_endpoint(HUB_EP).expect("hub endpoint");
-    node.add_endpoint(descriptor, endpoint)
-        .expect("hub endpoint");
-    if let Some((descriptor, endpoint)) = endpoints::trust_center_utility(UTILITY_EP) {
-        let _ = node.add_endpoint(descriptor, endpoint);
-    }
-
-    let mut hub = Hub::new(
-        HubConfig {
-            endpoint: HUB_EP,
-            firmware: env!("CARGO_PKG_VERSION"),
-            persistent,
-            ..HubConfig::default()
-        },
-        store,
-    );
+    add_endpoints(&mut node);
+    let mut hub = build_hub(persistent, store);
     hub.attach(&mut node.stack);
+    // EXPERIMENTAL, `hub-wifi` image only (examples/esp32c6-wifi-alerts):
+    // the radio-switch experiment and Telegram delivery.
+    #[cfg(feature = "wifi-alerts")]
+    {
+        hub.set_radio_probe_supported(true);
+        hub.set_alert_radio_switching(true);
+    }
     if let Some(stage) = previous_startup {
         let severity = if stage == StartupStage::Ready {
             Severity::Info
@@ -404,6 +501,29 @@ fn main() -> ! {
             hub.log(
                 DiagRecord::new(Category::Usb, Severity::Warning, code::USB_OUTPUT_DISCARDED)
                     .arg(u32::try_from(dropped).unwrap_or(u32::MAX)),
+            );
+        }
+
+        // EXPERIMENTAL, `hub-wifi` image only (`wifi_attempt`), between
+        // stack steps so that no 802.15.4 frame is in flight. Nothing is
+        // serviced meanwhile (USB, stack); the stack's timers catch up with
+        // the real elapsed time afterwards. A requested probe goes first.
+        #[cfg(feature = "wifi-alerts")]
+        if hub.take_radio_probe() {
+            wifi_attempt(
+                &mut hub,
+                board.wifi.reborrow(),
+                &mut runner.radio,
+                &mut watchdog,
+                false,
+            );
+        } else if hub.alert_due() {
+            wifi_attempt(
+                &mut hub,
+                board.wifi.reborrow(),
+                &mut runner.radio,
+                &mut watchdog,
+                true,
             );
         }
 

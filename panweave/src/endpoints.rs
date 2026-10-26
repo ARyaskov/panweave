@@ -388,10 +388,31 @@ pub fn device(
     extra_clients: &[ClusterId],
     declare_unimplemented: bool,
 ) -> Option<Built> {
+    let mut ep = EndpointInstance::new(endpoint, ProfileId::HOME_AUTOMATION);
+    let desc = device_into(
+        &mut ep,
+        device,
+        extra_servers,
+        extra_clients,
+        declare_unimplemented,
+    )?;
+    Some((desc, ep))
+}
+
+/// [`device`] filling `ep` (an empty Home Automation endpoint) in place,
+/// for [`crate::Node::add_endpoint_with`]; returns its simple
+/// descriptor. On failure `ep` may hold some clusters.
+pub fn device_into(
+    ep: &mut StackEndpoint,
+    device: DeviceId,
+    extra_servers: &[ClusterId],
+    extra_clients: &[ClusterId],
+    declare_unimplemented: bool,
+) -> Option<SimpleDescriptor> {
+    let endpoint = ep.endpoint;
     let dt = DeviceType::lookup(device)?;
     let mut servers: Vec<ClusterId, 16> = Vec::new();
     let mut clients: Vec<ClusterId, 16> = Vec::new();
-    let mut ep = EndpointInstance::new(endpoint, ProfileId::HOME_AUTOMATION);
     for c in dt.servers.iter().chain(extra_servers) {
         if servers.contains(c) {
             continue;
@@ -423,15 +444,14 @@ pub fn device(
             None => {}
         }
     }
-    let desc = SimpleDescriptor::new(
+    SimpleDescriptor::new(
         endpoint,
         ProfileId::HOME_AUTOMATION,
         device,
         1,
         &servers,
         &clients,
-    )?;
-    Some((desc, ep))
+    )
 }
 
 /// On/Off Light (device 0x0100, DTL §21): Identify, Groups, Scenes and
@@ -464,6 +484,17 @@ pub fn dimmer_switch(endpoint: Endpoint) -> Option<Built> {
 pub fn trust_center_utility(endpoint: Endpoint) -> Option<Built> {
     device(
         endpoint,
+        DeviceId(0x0005),
+        &[keep_alive::ID],
+        &[poll_control::ID],
+        false,
+    )
+}
+
+/// [`trust_center_utility`] filling `ep` in place ([`device_into`]).
+pub fn trust_center_utility_into(ep: &mut StackEndpoint) -> Option<SimpleDescriptor> {
+    device_into(
+        ep,
         DeviceId(0x0005),
         &[keep_alive::ID],
         &[poll_control::ID],

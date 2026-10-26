@@ -227,3 +227,70 @@ fn builders_form_join_and_bind() {
     assert_eq!(w.nodes[s2].0.stack.short_address(), old_short);
     assert_eq!(w.nodes[s2].0.stack.aps.bindings.len(), 1);
 }
+
+/// The `(cluster, role)` pairs of an endpoint, in order.
+fn clusters_of(node: &N, endpoint: Endpoint) -> Vec<(u16, bool)> {
+    node.stack
+        .zcl
+        .endpoint(endpoint)
+        .unwrap()
+        .clusters
+        .iter()
+        .map(|c| (c.def.id.0, c.role == panweave::zcl::Role::Server))
+        .collect()
+}
+
+#[test]
+fn an_endpoint_built_in_place_matches_one_passed_by_value() {
+    let build = || {
+        Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0002))
+            .build::<SoftwareAes, _, _>(TestRng::seed(2), MemoryStorage::new())
+    };
+    let mut by_value: N = build();
+    let (d, ep) = endpoints::trust_center_utility(Endpoint(5)).unwrap();
+    by_value.add_endpoint(d, ep).unwrap();
+    let mut in_place: N = build();
+    in_place
+        .add_endpoint_with(
+            Endpoint(5),
+            panweave::types::ProfileId::HOME_AUTOMATION,
+            endpoints::trust_center_utility_into,
+        )
+        .unwrap();
+    assert_eq!(
+        by_value.stack.zdo.endpoint(Endpoint(5)),
+        in_place.stack.zdo.endpoint(Endpoint(5))
+    );
+    let clusters = clusters_of(&in_place, Endpoint(5));
+    assert_eq!(clusters_of(&by_value, Endpoint(5)), clusters);
+    assert!(clusters.contains(&(0x0000, true)), "Basic server added");
+
+    // A second registration of the endpoint, a cancelled fill and a
+    // descriptor for another endpoint leave nothing behind.
+    let ha = panweave::types::ProfileId::HOME_AUTOMATION;
+    assert!(
+        in_place
+            .add_endpoint_with(Endpoint(5), ha, endpoints::trust_center_utility_into)
+            .is_err()
+    );
+    assert!(
+        in_place
+            .add_endpoint_with(Endpoint(6), ha, |_| None)
+            .is_err()
+    );
+    assert!(
+        in_place
+            .add_endpoint_with(Endpoint(7), ha, |ep| {
+                let (d, _) = endpoints::on_off_light(Endpoint(8))?;
+                endpoints::device_into(ep, panweave::types::DeviceId(0x0100), &[], &[], false)
+                    .filter(|_| d.endpoint == Endpoint(7))
+                    .or(Some(d))
+            })
+            .is_err()
+    );
+    for e in [6, 7, 8] {
+        assert!(in_place.stack.zcl.endpoint(Endpoint(e)).is_none());
+        assert!(in_place.stack.zdo.endpoint(Endpoint(e)).is_none());
+    }
+    assert_eq!(clusters_of(&in_place, Endpoint(5)), clusters);
+}

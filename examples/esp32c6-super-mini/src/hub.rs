@@ -173,7 +173,7 @@ impl Storage for HubStore {
 
 /// The RTC watchdog: resets the chip when the loop stops feeding it.
 pub struct Watchdog {
-    rtc: Rtc<'static>,
+    rtc: core::cell::RefCell<Rtc<'static>>,
 }
 
 impl Watchdog {
@@ -195,11 +195,18 @@ impl Watchdog {
     pub fn start(rtc_timer: RTC_TIMER<'static>, seconds: u64) -> Self {
         let mut rtc = Rtc::new(rtc_timer);
         Self::configure(&mut rtc, seconds);
-        Watchdog { rtc }
+        Watchdog {
+            rtc: core::cell::RefCell::new(rtc),
+        }
     }
 
     /// Feeds the watchdog.
     pub fn feed(&mut self) {
-        self.rtc.rwdt.feed();
+        self.feed_shared();
+    }
+
+    /// Shared by the main-thread attempt clock and bounded network poller.
+    pub(crate) fn feed_shared(&self) {
+        self.rtc.borrow_mut().rwdt.feed();
     }
 }

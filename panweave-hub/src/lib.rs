@@ -35,6 +35,8 @@
     )
 )]
 
+#[cfg(feature = "alerts")]
+pub mod alert;
 pub mod boot;
 pub mod capture;
 pub mod compat;
@@ -49,6 +51,8 @@ pub mod supervisor;
 mod endpoint;
 #[cfg(feature = "engine")]
 mod hub;
+#[cfg(feature = "alerts")]
+mod hub_alerts;
 #[cfg(feature = "engine")]
 mod hub_diag;
 #[cfg(feature = "engine")]
@@ -67,8 +71,10 @@ mod session;
 mod zcl;
 
 #[cfg(feature = "engine")]
-pub use endpoint::hub_endpoint;
+pub use endpoint::{hub_endpoint, hub_endpoint_into};
 #[cfg(feature = "engine")]
 pub use hub::{Hub, HubConfig, HubCounters, PlatformCounters};
+#[cfg(feature = "alerts")]
+pub use hub_alerts::PreparedAlert;
 #[cfg(feature = "engine")]
 pub use session::{Access, LinkStats, Session};

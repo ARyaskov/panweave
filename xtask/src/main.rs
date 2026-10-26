@@ -369,6 +369,13 @@ fn gate() -> Result<(), String> {
         "cargo",
         &["test", "-p", "panweave-hub", "--features", "radio-capture"],
     )?;
+    // The experimental Wi-Fi notifications (queue, schedule, Telegram,
+    // attempt orchestrator, end to end with mocked radio switching).
+    run(
+        &root,
+        "cargo",
+        &["test", "-p", "panweave-hub", "--features", "alerts"],
+    )?;
     // The small-tables profile changes the dimensions of every endpoint
     // type: it must at least build with every feature (CI tests it).
     run(
@@ -432,6 +439,19 @@ fn gate() -> Result<(), String> {
             &root,
             "cargo",
             &["check", "-p", "panweave-hub", "--target", &target],
+        )?;
+        run(
+            &root,
+            "cargo",
+            &[
+                "check",
+                "-p",
+                "panweave-hub",
+                "--features",
+                "alerts",
+                "--target",
+                &target,
+            ],
         )?;
     } else {
         println!("gate: target {target} not installed; skipping bare-metal no_std check");

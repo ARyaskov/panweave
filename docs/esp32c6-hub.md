@@ -711,6 +711,9 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
 
 ## Limitations
 
+* **Wi-Fi notifications**: an experimental, not yet functional mode;
+  see [esp32c6-wifi-alerts.md](esp32c6-wifi-alerts.md) for the
+  feasibility assessment and what is implemented.
 * **Hardware**: not yet run on a board; no commercial device tested. The
   three v0.3.0 target devices are supported from public documentation
   and simulation only ([device-compatibility.md](device-compatibility.md)).

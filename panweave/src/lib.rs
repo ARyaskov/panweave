@@ -75,7 +75,7 @@ use panweave_storage::{Storage, StorageError};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, Key128,
-    LogicalDeviceType, NwkStatus,
+    LogicalDeviceType, NwkStatus, ProfileId,
 };
 use panweave_zdo::descriptor::SimpleDescriptor;
 
@@ -353,6 +353,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         instance: panweave_runtime::StackEndpoint,
     ) -> Result<(), EndpointError> {
         self.stack.add_endpoint(descriptor, instance)
+    }
+
+    /// [`Node::add_endpoint`] with the instance built in place in the
+    /// node's own table (`fill` adds the clusters and returns the simple
+    /// descriptor, `None` cancels): no endpoint-sized copies on the
+    /// caller's stack. [`endpoints::device_into`] and the other `*_into`
+    /// builders fill an endpoint this way.
+    pub fn add_endpoint_with(
+        &mut self,
+        endpoint: Endpoint,
+        profile: ProfileId,
+        fill: impl FnOnce(&mut panweave_runtime::StackEndpoint) -> Option<SimpleDescriptor>,
+    ) -> Result<(), EndpointError> {
+        self.stack.add_endpoint_with(endpoint, profile, fill)
     }
 
     /// BDB 3.1 §7.1 initialization: restores persistent data and, when

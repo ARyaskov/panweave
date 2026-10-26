@@ -52,7 +52,9 @@ const FCF_FRAME_PENDING: u8 = 0x10;
 
 /// The 802.15.4 radio.
 pub struct Radio {
-    drv: Ieee802154<'static>,
+    /// The driver; `None` only while the radio is lent to Wi-Fi
+    /// (feature `wifi-alerts`, [`Radio::suspend`]).
+    drv: Option<Ieee802154<'static>>,
     cfg: Config,
     ieee: ExtendedAddress,
     short: ShortAddress,
@@ -97,10 +99,6 @@ impl Radio {
     /// address (the hardware filter needs it before the stack's first
     /// `Configure`).
     pub fn new(peripheral: IEEE802154<'static>, ieee: ExtendedAddress) -> Self {
-        let mut drv = Ieee802154::new(peripheral);
-        drv.set_tx_done_callback_fn(on_tx_done);
-        drv.set_tx_failed_callback_fn(on_tx_failed);
-        drv.set_rx_available_callback_fn(on_rx_available);
         let cfg = Config {
             auto_ack_tx: true,
             auto_ack_rx: true,
@@ -116,10 +114,8 @@ impl Radio {
             rx_queue_size: 16,
             ..Config::default()
         };
-        drv.set_config(cfg);
-        drv.start_receive();
         Radio {
-            drv,
+            drv: Some(Self::start_driver(peripheral, cfg)),
             cfg,
             ieee,
             short: ShortAddress::NO_SHORT_ADDRESS,
@@ -129,6 +125,25 @@ impl Radio {
             dropped: 0,
             recoveries: 0,
             stats: RadioDriverStats::default(),
+        }
+    }
+
+    /// Creates the driver with its callbacks and `cfg`, receiving.
+    fn start_driver(peripheral: IEEE802154<'static>, cfg: Config) -> Ieee802154<'static> {
+        let mut drv = Ieee802154::new(peripheral);
+        drv.set_tx_done_callback_fn(on_tx_done);
+        drv.set_tx_failed_callback_fn(on_tx_failed);
+        drv.set_rx_available_callback_fn(on_rx_available);
+        drv.set_config(cfg);
+        drv.start_receive();
+        drv
+    }
+
+    /// Hands the current configuration to the driver (kept for later
+    /// while it is suspended).
+    fn apply(&mut self) {
+        if let Some(drv) = self.drv.as_mut() {
+            drv.set_config(self.cfg);
         }
     }
 
@@ -143,7 +158,7 @@ impl Radio {
         self.cfg.coordinator = c.pan_coordinator;
         self.cfg.rx_when_idle = c.rx_on_when_idle;
         self.cfg.promiscuous = c.promiscuous;
-        self.drv.set_config(self.cfg);
+        self.apply();
         self.dirty = true;
     }
 
@@ -158,7 +173,7 @@ impl Radio {
             return Err(RadioError::InvalidChannel);
         }
         self.cfg.channel = channel.raw();
-        self.drv.set_config(self.cfg);
+        self.apply();
         self.dirty = true;
         Ok(())
     }
@@ -167,7 +182,7 @@ impl Radio {
     pub fn set_tx_power(&mut self, dbm: i8) -> i8 {
         let dbm = dbm.clamp(-24, 20);
         self.cfg.txpower = dbm;
-        self.drv.set_config(self.cfg);
+        self.apply();
         self.dirty = true;
         dbm
     }
@@ -208,8 +223,12 @@ impl Radio {
         {
             self.set_tx_power(dbm);
         }
-        if self
-            .drv
+        let Some(drv) = self.drv.as_mut() else {
+            // Lent to Wi-Fi: nothing can be sent.
+            self.stats.tx_faults = self.stats.tx_faults.wrapping_add(1);
+            return Err(RadioError::HardwareFault);
+        };
+        if drv
             .transmit_raw(&buf[..frame.len() + 2], options.csma)
             .is_err()
         {
@@ -242,7 +261,7 @@ impl Radio {
         if !options.ack_request {
             return Ok(TxResult::default());
         }
-        let Some(ack) = self.drv.get_ack_frame() else {
+        let Some(ack) = self.drv.as_ref().and_then(Ieee802154::get_ack_frame) else {
             self.stats.tx_no_ack = self.stats.tx_no_ack.wrapping_add(1);
             return Ok(TxResult::default());
         };
@@ -262,7 +281,7 @@ impl Radio {
     pub fn receive(&mut self, buf: &mut [u8; MAX_MAC_FRAME_SIZE]) -> Option<(usize, RxMetadata)> {
         loop {
             RX_READY.store(false, Ordering::SeqCst);
-            let raw = self.drv.raw_received()?;
+            let raw = self.drv.as_mut()?.raw_received()?;
             // data[0]: PSDU length including the two FCS octets, which
             // the hardware replaces by RSSI and a status octet.
             let len = usize::from(raw.data[0]);
@@ -314,8 +333,11 @@ impl Radio {
     /// and restarts reception, with the driver's documented calls
     /// (`set_config`, `start_receive`). Touches nothing persistent.
     pub fn recover(&mut self) {
-        self.drv.set_config(self.cfg);
-        self.drv.start_receive();
+        let Some(drv) = self.drv.as_mut() else {
+            return;
+        };
+        drv.set_config(self.cfg);
+        drv.start_receive();
         self.dirty = true;
         self.flush();
         self.recoveries = self.recoveries.wrapping_add(1);
@@ -340,6 +362,43 @@ impl Radio {
         self.stats.config_flushes = self.stats.config_flushes.wrapping_add(1);
         let _ = self.transmit(&f, TxOptions::UNACKED);
         self.dirty = false;
+    }
+
+    /// Releases the radio for Wi-Fi: drops the 802.15.4 driver, which
+    /// gates its clocks and releases the PHY (esp-radio's `Drop`). The
+    /// configuration is kept for [`Radio::resume`]. Call only between
+    /// stack steps: [`Radio::transmit`] waits for every frame's outcome,
+    /// so no transmission is in flight then. Received frames still in
+    /// the driver's queue are lost.
+    #[cfg(feature = "wifi-alerts")]
+    pub fn suspend(&mut self) {
+        RX_READY.store(false, Ordering::SeqCst);
+        self.drv = None;
+    }
+
+    /// Re-creates the 802.15.4 driver after Wi-Fi was dropped, applies
+    /// the stack's configuration (channel, PAN, addresses, filtering,
+    /// power) and restarts reception. Wi-Fi start reset the 802.15.4 MAC,
+    /// so nothing of the old driver state is assumed.
+    #[cfg(feature = "wifi-alerts")]
+    pub fn resume(&mut self) {
+        if self.drv.is_some() {
+            return;
+        }
+        // SAFETY: `IEEE802154` is a zero-sized token for the 802.15.4
+        // peripheral. The only instance (taken in `Radio::new`) was owned
+        // by the driver dropped in `suspend`, so this is again the only
+        // one; Wi-Fi, the other user of the shared radio, has been
+        // dropped by the caller (`alert::attempt::run`'s contract).
+        let peripheral = unsafe { IEEE802154::steal() };
+        self.drv = Some(Self::start_driver(peripheral, self.cfg));
+        self.dirty = true;
+        self.flush();
+    }
+
+    /// The driver is present (not lent to Wi-Fi).
+    pub fn is_active(&self) -> bool {
+        self.drv.is_some()
     }
 
     /// Whether a configuration change waits for a transmission.

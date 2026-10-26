@@ -15,7 +15,7 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     Channel, ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
     KeySequenceNumber, LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId,
-    ShortAddress, TransactionSequence,
+    ProfileId, ShortAddress, TransactionSequence,
 };
 use panweave_zcl::ClusterInstance;
 use panweave_zcl::clusters::basic;
@@ -65,6 +65,24 @@ pub const CLUSTER_ATTRIBUTES: usize = 24;
 pub type StackZcl = Zcl<ENDPOINTS, ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
 /// An endpoint of the stack's dimensions.
 pub type StackEndpoint = EndpointInstance<ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
+
+/// Gives an application endpoint the Basic cluster server it must have,
+/// when it has none.
+fn add_basic_server(instance: &mut StackEndpoint, config: &StackConfig) {
+    if instance
+        .cluster(basic::ID, panweave_zcl::Role::Server)
+        .is_none()
+    {
+        let power = if config.sleepy {
+            basic::power_source::BATTERY
+        } else {
+            basic::power_source::MAINS_SINGLE_PHASE
+        };
+        if let Ok(b) = basic::server(power, config.manufacturer_name, config.model) {
+            let _ = instance.add_instance(b);
+        }
+    }
+}
 /// A cluster instance of the stack's dimensions.
 pub type StackCluster = ClusterInstance<CLUSTER_ATTRIBUTES>;
 
@@ -1180,23 +1198,40 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         descriptor: SimpleDescriptor,
         mut instance: StackEndpoint,
     ) -> Result<(), EndpointError> {
-        if instance
-            .cluster(basic::ID, panweave_zcl::Role::Server)
-            .is_none()
-        {
-            let power = if self.config.sleepy {
-                basic::power_source::BATTERY
-            } else {
-                basic::power_source::MAINS_SINGLE_PHASE
-            };
-            if let Ok(b) = basic::server(power, self.config.manufacturer_name, self.config.model) {
-                let _ = instance.add_instance(b);
-            }
-        }
+        add_basic_server(&mut instance, &self.config);
         self.zdo
             .add_endpoint(descriptor)
             .map_err(|_| EndpointError)?;
         self.zcl.add_endpoint(instance).map_err(|_| EndpointError)
+    }
+
+    /// [`Stack::add_endpoint`] with the instance built in place, in the
+    /// stack's own table: `fill` adds the clusters to the empty endpoint
+    /// and returns its simple descriptor (for the same endpoint), or
+    /// `None` to cancel. An instance is tens of KiB; built by value and
+    /// passed down, it is copied several times on the caller's stack,
+    /// which a small target may not have.
+    pub fn add_endpoint_with(
+        &mut self,
+        endpoint: Endpoint,
+        profile: ProfileId,
+        fill: impl FnOnce(&mut StackEndpoint) -> Option<SimpleDescriptor>,
+    ) -> Result<(), EndpointError> {
+        let instance = self
+            .zcl
+            .add_empty_endpoint(endpoint, profile)
+            .ok_or(EndpointError)?;
+        let registered = fill(instance).and_then(|descriptor| {
+            add_basic_server(instance, &self.config);
+            (descriptor.endpoint == endpoint)
+                .then_some(())
+                .and_then(|()| self.zdo.add_endpoint(descriptor).ok())
+        });
+        if registered.is_none() {
+            self.zcl.remove_last_endpoint();
+            return Err(EndpointError);
+        }
+        Ok(())
     }
 
     /// Next application event.

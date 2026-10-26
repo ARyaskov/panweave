@@ -272,6 +272,11 @@ impl Simulator {
         &mut self.nodes[i]
     }
 
+    /// Number of nodes.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Read access to the stack of node `i`.
     pub fn stack_ref(&self, i: usize) -> &SimStack {
         &self.nodes[i].stack

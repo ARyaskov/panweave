@@ -1,6 +1,6 @@
 [package]
 name = "panweave-hub"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -30,6 +30,12 @@ std = ["panweave-types/std", "panweave-codec/std"]
 # engine holds no capture state and answers the capture requests with
 # `NotSupported`; the protocol types stay available either way.
 radio-capture = ["engine"]
+# Experimental critical-event notifications over Wi-Fi (Zigbee → Wi-Fi →
+# Zigbee on one radio): the durable alert queue, delivery schedule,
+# Telegram request / response handling and the attempt orchestrator.
+# Off by default; without it the alert requests answer `NotSupported`.
+# The radio switching itself is the firmware's (docs/esp32c6-wifi-alerts.md).
+alerts = ["engine"]
 
 [package.metadata.docs.rs]
 all-features = true

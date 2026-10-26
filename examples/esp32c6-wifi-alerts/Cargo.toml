@@ -1,0 +1,67 @@
+[package]
+name = "panweave-esp32c6-wifi-alerts"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "EXPERIMENTAL: the Panweave ESP32-C6 hub with Zigbee -> Wi-Fi -> Zigbee radio switching (docs/esp32c6-wifi-alerts.md)"
+license = "MIT OR Apache-2.0"
+
+# The same hub firmware as `examples/esp32c6-super-mini`, built with
+# `wifi-alerts`. It is a separate crate only so that the patched esp-radio
+# (vendor/esp-radio, see its PANWEAVE-PATCH.md) never reaches the normal
+# firmware, which keeps the registry esp-radio and its exact build.
+[[bin]]
+name = "hub-wifi"
+path = "../esp32c6-super-mini/src/bin/hub.rs"
+test = false
+bench = false
+
+# Diagnostic only: Wi-Fi reception with and without a prior 802.15.4 session
+# (src/bin/wifi-scan-check.rs). Not a product image.
+[[bin]]
+name = "wifi-scan-check"
+path = "src/bin/wifi-scan-check.rs"
+test = false
+bench = false
+
+[dependencies]
+panweave-esp32c6 = { path = "../esp32c6-super-mini", features = ["wifi-alerts"] }
+panweave = { path = "../../panweave", default-features = false, features = ["crypto-software"] }
+panweave-hub = { path = "../../panweave-hub", features = ["alerts"] }
+esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
+# The opt-in of the patched guard: both drivers in one image, never alive
+# at the same time.
+esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c6", "ieee802154", "wifi", "unstable", "panweave-sequential-radio"] }
+esp-backtrace = { version = "0.20.0", features = ["esp32c6", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c6"] }
+heapless = { version = "0.9", default-features = false }
+# For wifi-scan-check (the hub gets them through panweave-esp32c6).
+esp-rtos = { version = "0.4.0", features = ["esp32c6", "esp-radio", "esp-alloc"] }
+esp-alloc = { version = "0.11.0", features = ["esp32c6"] }
+esp-println = { version = "0.18.0", features = ["esp32c6"] }
+
+[features]
+default = ["wifi-alerts"]
+# Read by the shared hub.rs: the radio-switch experiment.
+wifi-alerts = []
+
+[patch.crates-io]
+esp-radio = { path = "vendor/esp-radio" }
+# The Wi-Fi blobs with a supplicant built with WPA3-Personal (SAE) for the
+# station (vendor/esp-wifi-sys-esp32c6/PANWEAVE-PATCH.md).
+esp-wifi-sys-esp32c6 = { path = "vendor/esp-wifi-sys-esp32c6" }
+
+[build-dependencies]
+panweave-hub = { path = "../../panweave-hub", default-features = false }
+
+# As in examples/esp32c6-super-mini (the radio blobs need optimization).
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true
+incremental = false
+
+[profile.dev]
+opt-level = 1

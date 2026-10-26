@@ -162,3 +162,21 @@ the uptime in seconds (little endian). The next boot reads it, logs
 It is written only on that path (never during normal operation), holds
 no key or address, and a store that cannot take it simply loses the
 report, not the reset.
+
+## Experimental notification records
+
+With the hub's `alerts` feature and the mode enabled
+([esp32c6-wifi-alerts.md](esp32c6-wifi-alerts.md)), the hub store also
+holds `Kind::Application` records with ids whose top octet is 0xFF (an
+EUI-64 with the group bit set, so never a device's IEEE address):
+
+| Id | Record |
+|---|---|
+| `0xFFFF_FFFF_FFFF_FF10` | settings: enabled, notified kinds, delay, budget, SSID, Wi-Fi password and bot token (**plain text**: no flash encryption), chat id |
+| `0xFFFF_FFFF_FFFF_FF11` | meta: boot counter, overflow count and the first and last lost event ids |
+| `0xFFFF_FFFF_FFFF_FF12` | the last delivery acknowledgement: Telegram `message_id`, the event ids it covered |
+| `0xFFFF_FFFF_FFFF_FF20` + slot (16 slots) | one pending event: id, kind, sensor, raw zone status, boot and monotonic time, attempt count, possible-repeat marker |
+
+The acknowledgement is written before the delivered slots are erased; a
+boot completes an interrupted erase. While the mode is disabled none of
+these records is read or written.

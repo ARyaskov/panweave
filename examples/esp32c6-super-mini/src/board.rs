@@ -158,6 +158,10 @@ pub struct Board<S = FlashStore> {
     pub usb: USB_DEVICE<'static>,
     /// The RTC timer peripheral (its watchdog resets a hung firmware).
     pub rtc_timer: RTC_TIMER<'static>,
+    /// The Wi-Fi peripheral, lent to `esp_radio::wifi::WifiController`
+    /// only while 802.15.4 is suspended (`wifi_switch`).
+    #[cfg(feature = "wifi-alerts")]
+    pub wifi: esp_hal::peripherals::WIFI<'static>,
 }
 
 /// Everything but the stack's storage.
@@ -170,6 +174,8 @@ struct Parts {
     tsens: TemperatureSensor<'static>,
     usb: USB_DEVICE<'static>,
     rtc_timer: RTC_TIMER<'static>,
+    #[cfg(feature = "wifi-alerts")]
+    wifi: esp_hal::peripherals::WIFI<'static>,
 }
 
 impl Parts {
@@ -196,6 +202,17 @@ impl Parts {
             crate::hub::Watchdog::arm_early(p.RTC_TIMER.reborrow(), seconds);
         }
         esp_alloc::heap_allocator!(size: 32 * 1024);
+        // Wi-Fi (experimental): the preemptive scheduler it requires,
+        // started before any Wi-Fi call, and a second heap region in the
+        // RAM the bootloader used (esp-radio's documented setup). TIMG0
+        // and the FROM_CPU_INTR0 software interrupt are used by nothing else
+        // here.
+        #[cfg(feature = "wifi-alerts")]
+        {
+            esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+            let timg0 = esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
+            esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
+        }
         let ieee = ieee_address();
         mark(StartupStage::Radio);
         let radio = Radio::new(p.IEEE802154, ieee);
@@ -220,6 +237,8 @@ impl Parts {
             tsens,
             usb: p.USB_DEVICE,
             rtc_timer: p.RTC_TIMER,
+            #[cfg(feature = "wifi-alerts")]
+            wifi: p.WIFI,
         };
         (parts, flash)
     }
@@ -235,6 +254,8 @@ impl Parts {
             tsens: self.tsens,
             usb: self.usb,
             rtc_timer: self.rtc_timer,
+            #[cfg(feature = "wifi-alerts")]
+            wifi: self.wifi,
         }
     }
 }

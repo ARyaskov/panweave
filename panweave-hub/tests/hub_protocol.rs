@@ -17,7 +17,14 @@ use panweave_hub::model::{
     Capabilities, ContactState, DeviceCategory, DeviceState, Flag, InterviewStage, InterviewStatus,
     LeakState, LogicalType, PowerSource,
 };
+use panweave_hub::protocol::alerts::{
+    MAX_BOT_TOKEN, MAX_CHAT_ID, MAX_SSID, MAX_WIFI_PASSWORD, STAGES, kinds,
+};
 use panweave_hub::protocol::frame::{FrameDecoder, MAX_BODY, MAX_WIRE};
+use panweave_hub::protocol::{
+    AlertConfigUpdate, AlertError, AlertStage, AlertState, AlertStatus, DeviceAuthorization,
+    ExemptionInfo, MAX_EXEMPTIONS, MAX_UNAUTHORIZED, SecurityStatus, TargetMetrics,
+};
 use panweave_hub::protocol::{
     AttributeData, BootReport, CapturePage, CommandStage, DEVICE_PAGE, DeviceInfo, DeviceList,
     DeviceSummary, Diagnostics, EndpointDescriptor, ErrorCode, Event, HubInfo, LightCommand,
@@ -26,10 +33,6 @@ use panweave_hub::protocol::{
     QueueUsage, RadioDiagnostics, RadioDriverStats, Request, ResetKind, Response,
     RuntimeDiagnostics, SensorEvent, StorageDiagnostics, StoreUsage, TraceConfiguration, TracePage,
     ZoneInfo,
-};
-use panweave_hub::protocol::{
-    DeviceAuthorization, ExemptionInfo, MAX_EXEMPTIONS, MAX_UNAUTHORIZED, SecurityStatus,
-    TargetMetrics,
 };
 
 fn full_state() -> DeviceState {
@@ -364,6 +367,11 @@ fn diagnostic_responses() -> Vec<Response> {
         Response::CapturePage(largest_capture_page()),
         Response::SecurityStatus(largest_security_status()),
         Response::SecurityStatus(SecurityStatus::default()),
+        Response::AlertStatus(largest_alert_status()),
+        Response::AlertStatus(AlertStatus::default()),
+        Response::WifiScan(Some(largest_wifi_scan())),
+        Response::WifiScan(Some(panweave_hub::protocol::WifiScan::default())),
+        Response::WifiScan(None),
         Response::CapturePage(CapturePage {
             active: false,
             mode: CaptureMode::Metadata,
@@ -374,6 +382,110 @@ fn diagnostic_responses() -> Vec<Response> {
             frames: HVec::new(),
         }),
     ]
+}
+
+fn largest_wifi_scan() -> panweave_hub::protocol::WifiScan {
+    use panweave_hub::protocol::alerts::{MAX_SCAN_ENTRIES, MAX_SSID, auth};
+    let entry = |i: u8| panweave_hub::protocol::ScanEntry {
+        ssid: HVec::from_slice(&[b'a' + i; MAX_SSID]).unwrap(),
+        bssid: [0x02, 0, 0, 0, 0, i],
+        channel: 13,
+        #[allow(clippy::cast_possible_wrap)]
+        rssi: -90 - i as i8,
+        auth: auth::WPA2_WPA3,
+    };
+    panweave_hub::protocol::WifiScan {
+        scan_ms: u32::MAX,
+        seen: u16::MAX,
+        target: Some(entry(9)),
+        strongest: (0..u8::try_from(MAX_SCAN_ENTRIES).unwrap())
+            .map(entry)
+            .collect(),
+    }
+}
+
+fn largest_alert_status() -> AlertStatus {
+    AlertStatus {
+        state: AlertState::RetryScheduled,
+        enabled: true,
+        ssid: HVec::from_slice(&[b's'; MAX_SSID]).unwrap(),
+        password_set: true,
+        token_set: true,
+        chat_id: HVec::from_slice(&[b'1'; MAX_CHAT_ID]).unwrap(),
+        kinds: kinds::ALL,
+        delay_ms: 50_000,
+        budget_ms: 2_000,
+        min_zigbee_ms: 30_000,
+        boot_id: u32::MAX,
+        queue_depth: 16,
+        queue_capacity: 16,
+        overflowed: 7,
+        next_attempt_ms: Some(123_456),
+        attempts: 9,
+        successes: 4,
+        failures: 5,
+        ambiguous: 1,
+        budget_overruns: 2,
+        restore_failures: 0,
+        last_downtime_ms: Some(1_840),
+        max_downtime_ms: Some(2_310),
+        stage_ms: [Some(u32::MAX); STAGES],
+        last_error: AlertError::BudgetExhausted,
+        last_error_stage: Some(AlertStage::ObtainIp),
+        last_http_status: Some(429),
+        last_message_id: Some(-1),
+        probes: 100,
+        probes_associated: 99,
+        wifi_failure: Some(panweave_hub::protocol::WifiFailure {
+            reason: 201,
+            rssi: Some(-71),
+        }),
+        bssid: Some([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        channel: Some(13),
+        wpa3_only: true,
+    }
+}
+
+fn largest_alert_update() -> AlertConfigUpdate {
+    AlertConfigUpdate {
+        enabled: Some(true),
+        kinds: Some(kinds::DEFAULT),
+        delay_ms: Some(50_000),
+        budget_ms: Some(2_000),
+        ssid: Some(HVec::from_slice(&[b's'; MAX_SSID]).unwrap()),
+        password: Some(HVec::from_slice(&[b'p'; MAX_WIFI_PASSWORD]).unwrap()),
+        token: Some(HVec::from_slice(&[b't'; MAX_BOT_TOKEN]).unwrap()),
+        chat_id: Some(HVec::from_slice(&[b'c'; MAX_CHAT_ID]).unwrap()),
+        clear_secrets: true,
+        bssid: Some(Some([0x02, 0x11, 0x22, 0x33, 0x44, 0x55])),
+        channel: Some(Some(13)),
+        wpa3_only: Some(true),
+    }
+}
+
+#[test]
+fn the_alert_messages_fit_and_the_status_carries_no_secret_fields() {
+    let mut body = [0u8; MAX_BODY];
+    let n = Message::Request {
+        id: 1,
+        request: Request::SetAlertConfig(largest_alert_update()),
+    }
+    .encode(&mut body)
+    .unwrap();
+    assert!(n <= MAX_BODY, "{n}");
+    // The status of a hub holding a password and a token: neither can
+    // appear, the message has no field for them.
+    let n = Message::Response {
+        id: 1,
+        response: Response::AlertStatus(largest_alert_status()),
+    }
+    .encode(&mut body)
+    .unwrap();
+    assert!(
+        !body[..n]
+            .windows(8)
+            .any(|w| w == [b'p'; 8] || w == [b't'; 8])
+    );
 }
 
 fn every_message() -> Vec<Message> {
@@ -469,6 +581,12 @@ fn every_message() -> Vec<Message> {
         },
         Request::SetKeyExchangeExemption { ieee, seconds: 0 },
         Request::GetSecurityStatus,
+        Request::GetAlertStatus,
+        Request::QueueTestAlert,
+        Request::RunRadioProbe,
+        Request::GetWifiScan,
+        Request::SetAlertConfig(AlertConfigUpdate::default()),
+        Request::SetAlertConfig(largest_alert_update()),
     ];
     let mut devices = HVec::new();
     for i in 0..DEVICE_PAGE as u64 {
@@ -684,6 +802,8 @@ fn the_largest_messages_fit_one_frame() {
         Response::TracePage(largest_trace_page()),
         Response::CapturePage(largest_capture_page()),
         Response::SecurityStatus(largest_security_status()),
+        Response::AlertStatus(largest_alert_status()),
+        Response::WifiScan(Some(largest_wifi_scan())),
     ] {
         let n = Message::Response { id: 1, response }
             .encode(&mut body)

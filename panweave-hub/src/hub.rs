@@ -275,6 +275,9 @@ pub struct Hub<HS: Storage> {
     pub(crate) exemption_grants: Vec<(u64, Instant), { crate::protocol::MAX_EXEMPTIONS }>,
     /// The persisted exemptions were applied to the stack.
     pub(crate) exemptions_applied: bool,
+    /// Experimental Wi-Fi notifications.
+    #[cfg(feature = "alerts")]
+    pub(crate) alerts: crate::hub_alerts::AlertEngine,
 }
 
 impl<HS: Storage> core::fmt::Debug for Hub<HS> {
@@ -334,6 +337,8 @@ impl<HS: Storage> Hub<HS> {
             join_last: Vec::new(),
             exemption_grants: Vec::new(),
             exemptions_applied: false,
+            #[cfg(feature = "alerts")]
+            alerts: crate::hub_alerts::AlertEngine::default(),
         }
     }
 
@@ -435,6 +440,8 @@ impl<HS: Storage> Hub<HS> {
             });
         }
         self.take_previous_stall_reset();
+        #[cfg(feature = "alerts")]
+        self.restore_alerts();
         Ok(self.registry.len())
     }
 
@@ -532,6 +539,9 @@ impl<HS: Storage> Hub<HS> {
     }
 
     fn emit_state_events(&mut self, ieee: u64, before: &DeviceState, after: &DeviceState) {
+        // Queued durably before the events go to the host.
+        #[cfg(feature = "alerts")]
+        self.alert_state_change(ieee, before, after);
         if before.water_leak != after.water_leak {
             let e = match after.water_leak {
                 LeakState::Leak => SensorEvent::WaterLeakDetected,
@@ -1421,6 +1431,10 @@ impl<HS: Storage> Hub<HS> {
         if let Some(t) = self.persist_due {
             consider(t);
         }
+        #[cfg(feature = "alerts")]
+        if let Some(t) = self.alert_deadline() {
+            consider(Instant::from_millis(t));
+        }
         for d in self.registry.iter() {
             if d.interview.status == InterviewStatus::InProgress
                 && !d.interview.busy
@@ -1862,6 +1876,10 @@ impl<HS: Storage> Hub<HS> {
         if let Some(r) = self.handle_security(stack, request) {
             return r.unwrap_or_else(Response::Error);
         }
+        #[cfg(feature = "alerts")]
+        if let Some(r) = self.handle_alerts(request) {
+            return r.unwrap_or_else(Response::Error);
+        }
         let r = match request {
             Request::GetHubInfo => Ok(Response::HubInfo(HubInfo {
                 protocol_version: VERSION,
@@ -2014,6 +2032,12 @@ impl<HS: Storage> Hub<HS> {
             | Request::ReadCapture { .. }
             | Request::SetKeyExchangeExemption { .. }
             | Request::GetSecurityStatus => Err(ErrorCode::UnknownRequest),
+            // Answered by `handle_alerts` with the `alerts` feature.
+            Request::GetAlertStatus
+            | Request::SetAlertConfig(_)
+            | Request::QueueTestAlert
+            | Request::RunRadioProbe
+            | Request::GetWifiScan => Err(ErrorCode::NotSupported),
         };
         r.unwrap_or_else(Response::Error)
     }

@@ -7,6 +7,18 @@ Keep a Changelog; versions follow SemVer.
 
 ### Added
 
+* Experimental Telegram notifications in periodic batches (60 s by default):
+  door open/close and leak/recovery events share the next check, empty
+  intervals leave Zigbee running, and failed deliveries retain their events.
+  `alerts configure --interval-ms` keeps `--delay-ms` as a legacy alias.
+  Local PowerShell 7 helpers obtain a channel ID and configure a hidden bot
+  token without command-line secrets; `docs/telegram-minute-alerts.md`.
+* `Node::add_endpoint_with` and `Stack::add_endpoint_with`: register an
+  endpoint built in place in the node's tables. `fill` adds the clusters
+  and returns the simple descriptor, and a failed fill leaves nothing
+  behind. `endpoints::device_into`, `endpoints::trust_center_utility_into`
+  and `panweave_hub::hub_endpoint_into` fill an endpoint this way. The
+  by-value builders are unchanged.
 * `panweave-hub`: a Zigbee hub application on the runtime — bounded
   device registry keyed by IEEE address, device interview (node, active
   endpoint and simple descriptors, Basic attributes, IAS Zone enrolment,
@@ -103,6 +115,62 @@ Keep a Changelog; versions follow SemVer.
   `JoinStage::ExemptionWithdrawn`.
 * `panweave-aps`: `ApsStats::deferrals`; `constants::LOCAL_RETRY_DELAY`,
   `MAX_LOCAL_DEFERRALS`.
+* Experimental, off by default: critical-event notifications over
+  Wi-Fi from the ESP32-C6's one radio (Zigbee → Wi-Fi → Zigbee),
+  `docs/esp32c6-wifi-alerts.md`. `panweave-hub` feature `alerts`: durable
+  bounded event queue with crash-safe delivery acknowledgements and
+  explicit overflow accounting, delivery schedule (50 s delay that later
+  events cannot postpone, bounded backoff, Telegram `retry_after`,
+  mandatory Zigbee time between attempts), Telegram `sendMessage`
+  request and response handling, an attempt orchestrator with one
+  shared Zigbee-downtime deadline (2 s default) that always restores
+  802.15.4 reception, settings and status. Hub Protocol: `GetAlertStatus`
+  (0x1F), `SetAlertConfig` (0x20), `QueueTestAlert` (0x21), response
+  `AlertStatus` (0x11); `NotSupported` without the feature.
+  `panweave-hub-cli alerts status|configure|test` (secrets from standard
+  input only), `alerts probe`. `RunRadioProbe` (0x22) and
+  `attempt::run_probe`: the radio-switch experiment (802.15.4 off, Wi-Fi
+  on and joined, back), refused within 30 s of the previous one.
+  `examples/esp32c6-wifi-alerts`: the experimental `hub-wifi` image,
+  the same `hub.rs` with `wifi-alerts`, built against a vendored
+  `esp-radio` 1.0.0-beta.1 whose "802.15.4 and Wi-Fi" build guard
+  becomes the opt-in feature `panweave-sequential-radio` (no driver
+  code changed); it runs the experiment (`esp-rtos`, `Radio::suspend`
+  and `Radio::resume`, `wifi_switch`) and delivers notifications:
+  DHCP, DNS and TCP over `embassy-net`, TLS 1.3 over `embedded-tls`
+  with Go Daddy Root G2 pinned and the chain limited to one
+  intermediate. `AlertStatus::wifi_failure`: the driver's disconnect
+  reason and the access point's signal for a failed join, shown by
+  `alerts probe` and `alerts status`. A probe scans before it joins
+  (stage `scan`): the access points heard, the strongest six, and the
+  configured SSID with its channel, signal and security. The result is
+  shown after each probe and by `alerts scan` (`GetWifiScan`, 0x23;
+  response `WifiScan`, 0x12), each access point with its BSSID.
+  Access-point pin: `alerts configure --wifi-bssid`, `--wifi-channel`,
+  `--wifi-wpa3-only` (`AlertConfigUpdate::{bssid, channel, wpa3_only}`,
+  also in `AlertStatus`). It is persisted as an optional tail of the
+  existing settings record. WPA3-only uses a second patch of the
+  vendored esp-radio, `AuthenticationMethodConfig::Wpa3Personal`, but
+  cannot join with the crates.io driver: the station side of SAE is
+  compiled out of the `esp-wifi-sys-esp32c6` 0.3.0 supplicant (reason
+  210 on a board). `hub-wifi` therefore uses a vendored
+  `esp-wifi-sys-esp32c6`. Its supplicant is rebuilt with SAE on software
+  mbedTLS: the recipe of esp-wireless-drivers-3rdparty#11 applied to the
+  C6, from the same ESP-IDF, whose baseline build reproduces the shipped
+  libraries byte for byte (`examples/esp32c6-wifi-alerts/wpa3-supplicant/`).
+  `hub-wifi` joins WPA3-Personal only: PMF is required, SAE uses H2E when
+  offered and hunt-and-peck otherwise, and transition-disable is
+  honoured. A join that heard no access point is retried within the
+  budget. +118 KiB flash. A probe reports a
+  directed SSID scan, which hidden networks answer. `wifi-scan-check`, a
+  diagnostic image, compares Wi-Fi reception before and after
+  802.15.4: no degradation measured. On a board the join reaches SAE and
+  ends in reason 202 (authentication failed). It has not yet joined. A
+  stage that runs out of time is now reported as `budget-exhausted`, no
+  longer `stage-failed`. On a board the image boots, and a
+  probe switches the radio and back in about 1.6 s. No join has
+  succeeded yet.
+* `panweave-sim`: `Simulator::node_count`.
 
 ### Changed
 
@@ -176,6 +244,15 @@ Keep a Changelog; versions follow SemVer.
 
 ### Fixed
 
+* ESP32-C6 hub images: the stack frame of `main` no longer holds the
+  boot-time copies of the endpoints. They were built by value and passed
+  down, so a 51 KiB endpoint was copied about three times; the frame was
+  about 370 KiB. The experimental `hub-wifi` image has 322 KiB of stack,
+  and it panicked in `esp_hal::init` ("stack pointer out of range") and
+  rebooted in a loop. The normal `hub` had 396 KiB and, by the frame
+  sizes, overran it while adding its endpoints. The frame of `main` is
+  now about 190 KiB in both, and the boot peak about 240 KiB. The fixed
+  `hub-wifi` boots on a board.
 * `panweave-aps`: a frame the NWK layer refuses for lack of buffers (its
   pending table full, typically with frames held for sleepy children) is
   offered again after 1 s, at most 8 times, acknowledged or not;

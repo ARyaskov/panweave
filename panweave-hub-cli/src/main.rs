@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod alertscmd;
 mod capturecmd;
 mod diagcmd;
 mod fingerprint;
@@ -76,6 +77,19 @@ commands:
   capture stop
   capture export --output FILE.pcap [--seconds N] [--metadata FILE.jsonl] [--mode M [--allow-raw]]
                                           capture radio frames to pcap (Admin)
+  alerts [status]                         experimental Wi-Fi notifications: state, queue, timings
+  alerts configure [--enable|--disable] [--wifi-ssid S] [--chat-id ID]
+      [--wifi-password-stdin] [--telegram-token-stdin] [--clear-secrets]
+      [--interval-ms N] [--budget-ms N] [--notify leak,contact,tamper,battery]
+                                          change the settings (Admin; secrets from stdin)
+  alerts configure --wifi-bssid MAC|none --wifi-channel N|none --wifi-wpa3-only|--wifi-allow-wpa2
+                                          pin the access point: only this BSSID, this
+                                          channel, WPA3-Personal only (Admin)
+  alerts test                             queue a test notification (Admin)
+  alerts probe [--count N] [--interval S] radio-switch experiment: 802.15.4 off, Wi-Fi
+                                          on, scan, join, back; downtime per stage (Admin)
+  alerts scan                             what the last experiment heard: access points,
+                                          channels, signal, the configured SSID (Admin)
   security                                Trust Center policy, unauthorized devices, exemptions
   security exempt <ieee> [--seconds N]    let one device join without the key exchange (Admin)
   security revoke <ieee>                  withdraw its exemption (Admin)
@@ -917,6 +931,7 @@ fn run(o: &Options) -> Result<(), String> {
         ["diagnostics", rest @ ..] => diagcmd::run(&mut hub, rest, as_json),
         ["capture", rest @ ..] => capturecmd::run(&mut hub, rest),
         ["security", rest @ ..] => securitycmd::run(&mut hub, rest, as_json),
+        ["alerts", rest @ ..] => alertscmd::run(&mut hub, rest, as_json),
         ["self-test", rest @ ..] => {
             let options = selftest::Options {
                 allow_reboot: rest.contains(&"--allow-reboot"),

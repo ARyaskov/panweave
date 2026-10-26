@@ -21,6 +21,17 @@ const COMBINED_INTERFACE: DeviceId = DeviceId(0x0007);
 /// Basic server the stack adds itself. Register it with
 /// `Node::add_endpoint`; devices bind their clusters to it.
 pub fn hub_endpoint(endpoint: Endpoint) -> Option<(SimpleDescriptor, StackEndpoint)> {
+    let mut ep = EndpointInstance::new(endpoint, ProfileId::HOME_AUTOMATION);
+    let desc = hub_endpoint_into(&mut ep)?;
+    Some((desc, ep))
+}
+
+/// [`hub_endpoint`] filling `ep` (an empty Home Automation endpoint) in
+/// place, for `Node::add_endpoint_with`: the instance is tens of KiB, and
+/// building it by value costs copies of it on the caller's stack. Returns
+/// its simple descriptor.
+pub fn hub_endpoint_into(ep: &mut StackEndpoint) -> Option<SimpleDescriptor> {
+    let endpoint = ep.endpoint;
     let candidates: [fn() -> StackCluster; 10] = [
         ias_zone::client,
         on_off::client,
@@ -33,7 +44,6 @@ pub fn hub_endpoint(endpoint: Endpoint) -> Option<(SimpleDescriptor, StackEndpoi
         || water_content::client(water_content::RELATIVE_HUMIDITY),
         illuminance::client,
     ];
-    let mut ep = EndpointInstance::new(endpoint, ProfileId::HOME_AUTOMATION);
     let mut clients: Vec<ClusterId, 16> = Vec::new();
     for make in candidates {
         if ep.clusters.len() + 1 >= ENDPOINT_CLUSTERS {
@@ -45,13 +55,12 @@ pub fn hub_endpoint(endpoint: Endpoint) -> Option<(SimpleDescriptor, StackEndpoi
             clients.push(id).ok()?;
         }
     }
-    let desc = SimpleDescriptor::new(
+    SimpleDescriptor::new(
         endpoint,
         ProfileId::HOME_AUTOMATION,
         COMBINED_INTERFACE,
         0,
         &[ClusterId(0x0000)],
         &clients,
-    )?;
-    Some((desc, ep))
+    )
 }

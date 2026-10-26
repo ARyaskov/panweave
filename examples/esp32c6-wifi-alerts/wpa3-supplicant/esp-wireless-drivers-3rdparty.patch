@@ -1,0 +1,114 @@
+diff --git a/helper_project/CMakeLists.txt b/helper_project/CMakeLists.txt
+index 0a89960..8728c48 100644
+--- a/helper_project/CMakeLists.txt
++++ b/helper_project/CMakeLists.txt
+@@ -30,3 +30,24 @@ if(_prefix_map_options)
+         endif()
+     endforeach()
+ endif()
++
++# Panweave (from esp-rs/esp-wireless-drivers-3rdparty#11): the supplicant's
++# WPA3-Personal (SAE) is built on mbedTLS / PSA crypto
++# (CONFIG_ESP_WIFI_MBEDTLS_CRYPTO=y). With nvs_flash in the build, the mbedtls
++# component compiles PSA's persistent-key storage (esp_psa_its.c over NVS) into
++# libmbedcrypto.a and defines ESP_PSA_ITS_AVAILABLE. The host has no NVS and no
++# need for persistent keys (SAE keys are volatile): take the storage back out.
++if(CONFIG_ESP_WIFI_MBEDTLS_CRYPTO AND TARGET tfpsacrypto)
++    foreach(_prop COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
++        get_target_property(_defs tfpsacrypto ${_prop})
++        if(_defs)
++            list(REMOVE_ITEM _defs ESP_PSA_ITS_AVAILABLE)
++            set_target_properties(tfpsacrypto PROPERTIES ${_prop} "${_defs}")
++        endif()
++    endforeach()
++    get_target_property(_srcs tfpsacrypto SOURCES)
++    if(_srcs)
++        list(FILTER _srcs EXCLUDE REGEX "esp_psa_its\\.c$")
++        set_target_properties(tfpsacrypto PROPERTIES SOURCES "${_srcs}")
++    endif()
++endif()
+diff --git a/patch/esp32c6/sdkconfig.defaults b/patch/esp32c6/sdkconfig.defaults
+index a39c14f..f388df2 100644
+--- a/patch/esp32c6/sdkconfig.defaults
++++ b/patch/esp32c6/sdkconfig.defaults
+@@ -1,17 +1,38 @@
+ CONFIG_WPA_MBEDTLS_TLS_CLIENT=n
+ CONFIG_WPA_DPP_SUPPORT=n
+-CONFIG_WPA_MBEDTLS_CRYPTO=n
++CONFIG_WPA_MBEDTLS_CRYPTO=y
+ CONFIG_ESP32_WIFI_ENABLE_WPA3_OWE_STA=n
+ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+-CONFIG_MBEDTLS_SHA1_C=n
++CONFIG_MBEDTLS_SHA1_C=y
+ CONFIG_MBEDTLS_HARDWARE_SHA=n
+ 
+-CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n
++# Panweave: WPA3-Personal (SAE) for the station, the recipe of
++# esp-rs/esp-wireless-drivers-3rdparty#11 applied to the ESP32-C6. The
++# supplicant's SAE needs mbedTLS crypto (P-256 ECP/MPI, SHA-256, AES, CMAC),
++# software only: every hardware port (AES, SHA, MPI and, on the C6, ECC) needs
++# esp_hw_support clocks and locks the host does not provide. mbedTLS allocates
++# through libc calloc/free, has no threading layer and no filesystem or
++# persistent PSA key storage (helper_project/CMakeLists.txt). SHA-1 stays on:
++# with mbedTLS crypto the supplicant takes it from mbedTLS (WPA2 PRF, 802.1X).
++# SAE-PK is off (not needed to join a WPA3-Personal network); H2E is on.
++CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
++CONFIG_ESP_WIFI_ENABLE_SAE_H2E=y
++CONFIG_ESP_WIFI_ENABLE_SAE_PK=n
+ CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA=n
+ CONFIG_ESP_WIFI_MBEDTLS_TLS_CLIENT=n
+ CONFIG_ESP_WIFI_DPP_SUPPORT=n
+-CONFIG_ESP_WIFI_MBEDTLS_CRYPTO=n
++CONFIG_ESP_WIFI_MBEDTLS_CRYPTO=y
+ CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_SOFTAP=n
++CONFIG_MBEDTLS_HARDWARE_AES=n
++CONFIG_MBEDTLS_HARDWARE_MPI=n
++CONFIG_MBEDTLS_HARDWARE_ECC=n
++# The C6's RSA digital-signature (DS) peripheral driver is selected by an
++# ESP-TLS option; neither is used here (it would need eFuse and FreeRTOS).
++CONFIG_ESP_TLS_USE_DS_PERIPHERAL=n
++CONFIG_MBEDTLS_HARDWARE_RSA_DS_PERIPHERAL=n
++CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y
++CONFIG_MBEDTLS_THREADING_C=n
++CONFIG_MBEDTLS_FS_IO=n
+ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+ 
+ CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
+diff --git a/xtask/src/main.rs b/xtask/src/main.rs
+index 18197a4..243eb04 100644
+--- a/xtask/src/main.rs
++++ b/xtask/src/main.rs
+@@ -276,6 +276,16 @@ fn process(chip: &str) {
+         );
+     }
+ 
++    // mbedTLS crypto, when the supplicant is built on it
++    // (CONFIG_ESP_WIFI_MBEDTLS_CRYPTO=y: WPA3-Personal/SAE needs it)
++    if sdkconfig_enabled("CONFIG_ESP_WIFI_MBEDTLS_CRYPTO") {
++        log::info!("Copy libmbedcrypto.a (supplicant built on mbedTLS crypto)");
++        copy_file(
++            "./helper_project/build/esp-idf/mbedtls/mbedtls/library/libmbedcrypto.a",
++            &format!("{dst}/libmbedcrypto.a"),
++        );
++    }
++
+     // blobs from ESP-IDF installation
+     let idf_path = std::env::var("IDF_PATH").unwrap();
+ 
+@@ -606,6 +616,16 @@ fn process(chip: &str) {
+     }
+ }
+ 
++/// Whether `option` came out as `=y` in the helper project's generated `sdkconfig`.
++fn sdkconfig_enabled(option: &str) -> bool {
++    let cwd = env::current_dir().unwrap();
++    let sdkconfig = fs::read_to_string(windows_safe_path(&cwd.join("helper_project/sdkconfig")))
++        .expect("helper_project/sdkconfig is written by the build");
++    sdkconfig
++        .lines()
++        .any(|line| line.trim() == format!("{option}=y"))
++}
++
+ fn remove_dir_all(path: &str) {
+     let cwd = env::current_dir().unwrap();
+     fs::remove_dir_all(windows_safe_path(&cwd.join(path))).ok();

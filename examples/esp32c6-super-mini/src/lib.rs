@@ -32,6 +32,8 @@ pub mod memory;
 pub mod radio;
 pub mod runner;
 pub mod startup;
+#[cfg(feature = "wifi-alerts")]
+pub mod wifi_switch;
 
 pub use board::{Board, FlashStore, Rng, SharedStore};
 pub use radio::Radio;

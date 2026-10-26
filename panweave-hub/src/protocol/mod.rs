@@ -20,10 +20,15 @@
 //! enumeration codes decode to their `Unknown` variant where one exists.
 //! A body never exceeds [`frame::MAX_BODY`] octets.
 
+pub mod alerts;
 pub mod diagnostics;
 pub mod frame;
 pub mod security;
 
+pub use alerts::{
+    AlertConfigUpdate, AlertError, AlertKind, AlertStage, AlertState, AlertStatus, ScanEntry,
+    WifiFailure, WifiScan,
+};
 pub use diagnostics::{
     BootReport, CapturePage, MAX_BOOT_FINDINGS, MAX_BOOT_PARTITIONS, MAX_CAPTURE_PAGE,
     MAX_CAPTURE_SECONDS, MAX_TRACE_PAGE, NetworkRestore, PartitionEntry, PartitionFinding,
@@ -261,6 +266,9 @@ pub enum LightCommand {
 }
 
 /// Requests (host → hub).
+// No allocator to box the large variant (`SetAlertConfig`): requests are
+// decoded and handled one at a time on the stack.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Request {
     /// Hub identity and protocol version.
@@ -412,6 +420,21 @@ pub enum Request {
     },
     /// The Trust Center's security state (0.2.1).
     GetSecurityStatus,
+    /// The experimental Wi-Fi notification state, without secrets
+    /// (0.3.x).
+    GetAlertStatus,
+    /// Changes the experimental Wi-Fi notification settings; secrets are
+    /// write only (0.3.x).
+    SetAlertConfig(AlertConfigUpdate),
+    /// Queues a test notification through the normal path (0.3.x).
+    QueueTestAlert,
+    /// Runs the radio-switch experiment once: 802.15.4 off, Wi-Fi on and
+    /// associated, Wi-Fi off, 802.15.4 back; nothing is sent. The result
+    /// is in [`AlertStatus`] (0.3.x).
+    RunRadioProbe,
+    /// What the last radio-switch experiment heard: access points in
+    /// range, the strongest ones, the configured SSID (0.3.x).
+    GetWifiScan,
 }
 
 impl Request {
@@ -421,6 +444,7 @@ impl Request {
             Request::GetHubInfo
             | Request::GetNetworkStatus
             | Request::GetSecurityStatus
+            | Request::GetAlertStatus
             | Request::ListDevices { .. }
             | Request::GetDevice { .. }
             | Request::GetDeviceState { .. }
@@ -444,7 +468,11 @@ impl Request {
             | Request::StartCapture { .. }
             | Request::StopCapture
             | Request::ReadCapture { .. }
-            | Request::SetKeyExchangeExemption { .. } => Access::Admin,
+            | Request::SetKeyExchangeExemption { .. }
+            | Request::SetAlertConfig(_)
+            | Request::QueueTestAlert
+            | Request::RunRadioProbe
+            | Request::GetWifiScan => Access::Admin,
         }
     }
 
@@ -482,6 +510,11 @@ impl Request {
             Request::ReadCapture { .. } => 0x1c,
             Request::SetKeyExchangeExemption { .. } => 0x1d,
             Request::GetSecurityStatus => 0x1e,
+            Request::GetAlertStatus => 0x1f,
+            Request::SetAlertConfig(_) => 0x20,
+            Request::QueueTestAlert => 0x21,
+            Request::RunRadioProbe => 0x22,
+            Request::GetWifiScan => 0x23,
         }
     }
 
@@ -491,6 +524,10 @@ impl Request {
             Request::GetHubInfo
             | Request::GetNetworkStatus
             | Request::GetSecurityStatus
+            | Request::GetAlertStatus
+            | Request::QueueTestAlert
+            | Request::RunRadioProbe
+            | Request::GetWifiScan
             | Request::CloseNetwork
             | Request::GetDiagnostics
             | Request::GetBootReport
@@ -523,6 +560,7 @@ impl Request {
                 w.u8(mode.code())
             }
             Request::ReadCapture { max } => w.u8(*max),
+            Request::SetAlertConfig(u) => alerts::write_update(w, u),
             Request::SetKeyExchangeExemption { ieee, seconds } => {
                 w.u64_le(*ieee)?;
                 w.u16_le(*seconds)
@@ -680,6 +718,11 @@ impl Request {
                 seconds: r.u16_le()?,
             },
             0x1e => Request::GetSecurityStatus,
+            0x1f => Request::GetAlertStatus,
+            0x20 => Request::SetAlertConfig(alerts::read_update(r)?),
+            0x21 => Request::QueueTestAlert,
+            0x22 => Request::RunRadioProbe,
+            0x23 => Request::GetWifiScan,
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -952,6 +995,11 @@ pub enum Response {
     CapturePage(CapturePage),
     /// To [`Request::GetSecurityStatus`].
     SecurityStatus(SecurityStatus),
+    /// To [`Request::GetAlertStatus`].
+    AlertStatus(AlertStatus),
+    /// To [`Request::GetWifiScan`] (`None`: no experiment has scanned
+    /// since boot).
+    WifiScan(Option<WifiScan>),
     /// The request failed.
     Error(ErrorCode),
 }
@@ -1460,6 +1508,8 @@ impl Response {
             Response::TracePage(_) => 0x0e,
             Response::CapturePage(_) => 0x0f,
             Response::SecurityStatus(_) => 0x10,
+            Response::AlertStatus(_) => 0x11,
+            Response::WifiScan(_) => 0x12,
             Response::Error(_) => 0x7f,
         }
     }
@@ -1512,6 +1562,8 @@ impl Response {
             Response::TracePage(p) => diagnostics::write_trace_page(w, p),
             Response::CapturePage(p) => diagnostics::write_capture_page(w, p),
             Response::SecurityStatus(st) => security::write_security(w, st),
+            Response::AlertStatus(st) => alerts::write_status(w, st),
+            Response::WifiScan(s) => alerts::write_scan(w, s.as_ref()),
             Response::Error(e) => w.u8(e.code()),
         }
     }
@@ -1568,6 +1620,8 @@ impl Response {
             0x0e => Response::TracePage(diagnostics::read_trace_page(r)?),
             0x0f => Response::CapturePage(diagnostics::read_capture_page(r)?),
             0x10 => Response::SecurityStatus(security::read_security(r)?),
+            0x11 => Response::AlertStatus(alerts::read_status(r)?),
+            0x12 => Response::WifiScan(alerts::read_scan(r)?),
             0x7f => Response::Error(ErrorCode::from_code(r.u8()?)),
             t => return Err(ProtocolError::UnknownTag(t)),
         })
