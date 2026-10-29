@@ -12,6 +12,7 @@ use panweave_types::{ClusterId, CommandId};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -167,7 +168,9 @@ impl Squawk {
 }
 
 /// Builds a server with `MaxDuration` at `max_duration` seconds.
-pub fn server<const A: usize>(max_duration: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>(
+    max_duration: u16,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(
         MAX_DURATION,
@@ -180,12 +183,12 @@ pub fn server<const A: usize>(max_duration: u16) -> Result<ClusterInstance<A>, Z
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Whether a warning is active (the timer runs).
-pub fn is_warning<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn is_warning<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     c.tick.is_some()
 }
 
@@ -205,8 +208,8 @@ pub enum Outcome {
 }
 
 /// Handles a received command (§8.4.2.2).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
     now: Instant,
@@ -243,7 +246,7 @@ pub fn handle<const A: usize>(
 }
 
 /// Services the timer: `true` when the warning just expired.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> bool {
+pub fn tick<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, now: Instant) -> bool {
     if c.tick.is_some_and(|t| now.has_reached(t)) {
         c.tick = None;
         true

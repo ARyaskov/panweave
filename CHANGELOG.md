@@ -7,6 +7,68 @@ Keep a Changelog; versions follow SemVer.
 
 ### Added
 
+* `panweave-lite`: the stack dimensioned for battery IAS Zone sensors on
+  32 KiB microcontrollers (EFR32MG22). `LiteDevice` is the runtime with
+  the `SleepySensor` profile plus the BDB machine, an IAS Zone contact /
+  water leak endpoint built in place, `ZoneReporter` (delivery tracking,
+  back-off retries, an undelivered alarm held before its clear), IAS
+  enrolment persistence and `power::plan` sleep planning. 16 320 B of
+  static RAM and a 6.7 KiB measured stack peak on Cortex-M33 (QEMU),
+  against 148 616 B for the full `Node`; `docs/lite.md`.
+* Compile-time profiles: `panweave_types::capacity` (`Capacity`, `Cap<N>`,
+  `VecOf`, `DequeOf`); `MacService<D: MacDims>`, `Nwk<C, R, D: NwkDims>`,
+  `Aps<C, D: ApsDims>`, `Zdo<D: ZdoDims>`, `Zcl<E, C, A, P: ZclProfile>`
+  and `Stack<C, R, S, P: StackProfile, E, CL, A>`, each defaulting to the
+  previous dimensions (`FullMac`, `Dims<…>`, `Full`, `FullStack`).
+* ZCL `Sensor` profile: cluster states of IAS Zone and Poll Control only,
+  four reporting slots per cluster, no scene table, no wide-attribute
+  pool; `cluster_state!` defines further state stores.
+* `AttributeTable::add_static_string` and `basic::server_static`: Basic
+  strings in program memory. `fill_server` variants of the Identify,
+  IAS Zone, Poll Control and battery Power Configuration builders for in
+  place construction; `power_configuration::battery_server_basic`.
+* `ias_zone::renotify`, `Zcl::notify_zone_status`, `ias_zone::Enrollment`
+  with `enrollment` / `restore_enrollment`.
+* `StackEvent::ZoneDelivery`: the APS outcome of IAS Zone notifications
+  and enroll requests (refused or untracked ones reported undelivered).
+* `Stack::new_in`, `Stack::unstarted` + `Stack::start_up`,
+  `LiteDevice::new_in`: construction in place.
+* `Nwk::abort_counter_reservation`, `Aps::abort_counter_reservation`.
+* `panweave-sim`: `Device` and `Simulator::add_device` for nodes of other
+  stack types on the medium.
+* `examples/lite-probe` (EFR32MG22 link build, QEMU mps2-an505 measured
+  run), `scripts/lite_footprint.py`, CI job `lite-footprint`, the Lite
+  step of `cargo gate`, `conformance/lite-sleepy-end-device.toml`.
+
+### Changed
+
+* ZCL attribute entries are 32 octets (were 80): reporting state moved to
+  per-table reporting slots. `AttrMut::configure_reporting` and
+  `set_report_timeout` return `Result` (`INSUFFICIENT_SPACE` when a
+  profile's slots are taken). Cluster states are read through
+  `ClusterInstance::state_ref` / `state_mut` / `set_state`; get-or-create
+  helpers return `Option` instead of panicking when a profile cannot hold
+  the state. Generic ZCL functions take a second parameter `P`; explicit
+  `::<A>` turbofish calls need `::<A, Full>`.
+* Table types are dimensioned by `Capacity` types (`NeighborTable<Cap<16>>`
+  for `NeighborTable<16>`, likewise the routing, address map, broadcast,
+  discovery, joining list, interface, link key, binding, group, duplicate
+  and incoming counter tables and `PowerControlTable`).
+* `Stack::enable_touchlink` returns whether the profile has touchlink.
+* `NorFlashStore` streams records through 64-octet chunks (about 1.6 KiB
+  less stack in a compaction) and refuses flashes with a granule above
+  64 octets; the runtime's persistence buffers follow the profile.
+
+### Fixed
+
+* A sleepy joiner that received the network key from its parent before
+  the Confirm Key of its link-key negotiation restored its old key while
+  the Trust Center kept the negotiated one; the authorizing key transport
+  now completes the negotiation.
+* A failed frame-counter reservation write blocked every NWK- or
+  APS-secured transmission until a reboot; it is now retried (nothing is
+  secured beyond the committed bound meanwhile).
+
 * Experimental Telegram notifications in periodic batches (60 s by default):
   door open/close and leak/recovery events share the next check, empty
   intervals leave Zigbee running, and failed deliveries retain their events.

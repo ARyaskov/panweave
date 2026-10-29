@@ -17,6 +17,7 @@ use panweave_types::{
 use panweave_zcl::Role;
 use panweave_zcl::clusters::commissioning::{self, StartupSet};
 
+use crate::profile::StackProfile;
 use crate::stack::{JoinMode, Phase, Stack};
 
 /// Parameters of a provisioned network formation; `None` means "choose
@@ -60,7 +61,16 @@ pub struct AdoptParams {
     pub trust_center: ExtendedAddress,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Extended PAN ID of the current network.
     pub const fn extended_pan_id(&self) -> ExtendedAddress {
         self.nwk.nib.extended_pan_id

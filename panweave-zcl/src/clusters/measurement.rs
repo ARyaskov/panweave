@@ -13,6 +13,7 @@ use panweave_types::ClusterId;
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Default reporting shared by the measured values: at most every 10 s
@@ -36,7 +37,7 @@ const fn def(id: ClusterId) -> ClusterDef {
 }
 
 /// Builds a client instance of `id` (no attributes or commands).
-fn client_of<const A: usize>(id: ClusterId) -> ClusterInstance<A> {
+fn client_of<const A: usize, P: ZclProfile>(id: ClusterId) -> ClusterInstance<A, P> {
     ClusterInstance::new(def(id).mirrored(), Role::Client)
 }
 
@@ -80,7 +81,10 @@ pub mod illuminance {
     }
 
     /// Builds a server measuring `min..=max` (0xffff = undefined).
-    pub fn server<const A: usize>(min: u16, max: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        min: u16,
+        max: u16,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(
             MEASURED_VALUE,
@@ -108,17 +112,20 @@ pub mod illuminance {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the measured value; returns whether it changed.
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: u16) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: u16,
+    ) -> bool {
         c.set_u16(MEASURED_VALUE.id, value)
     }
 
     /// The measured value, `None` when invalid.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u16> {
         c.u16(MEASURED_VALUE.id).filter(|v| *v != INVALID)
     }
 }
@@ -156,7 +163,9 @@ pub mod illuminance_level {
     }
 
     /// Builds a server with `target` as the initial target level.
-    pub fn server<const A: usize>(target: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        target: u16,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(
             LEVEL_STATUS,
@@ -174,17 +183,20 @@ pub mod illuminance_level {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the level status; returns whether it changed.
-    pub fn set_level_status<const A: usize>(c: &mut ClusterInstance<A>, status: u8) -> bool {
+    pub fn set_level_status<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        status: u8,
+    ) -> bool {
         c.set(LEVEL_STATUS.id, &Value::Enum8(status))
     }
 
     /// The configured target level (`None` when not valid).
-    pub fn target<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+    pub fn target<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u16> {
         c.u16(ILLUMINANCE_TARGET_LEVEL.id)
             .filter(|v| *v != TARGET_INVALID)
     }
@@ -215,7 +227,10 @@ pub mod temperature {
     pub const DEF: ClusterDef = def(ID);
 
     /// Builds a server measuring `min..=max` in 0.01 °C.
-    pub fn server<const A: usize>(min: i16, max: i16) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        min: i16,
+        max: i16,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(MEASURED_VALUE, &int16(UNKNOWN), DEFAULT_REPORTING)?;
         c.add_attribute(MIN_MEASURED_VALUE, &int16(min))?;
@@ -224,18 +239,21 @@ pub mod temperature {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the measured value in 0.01 °C (`None` = unknown); returns
     /// whether it changed.
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<i16>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<i16>,
+    ) -> bool {
         c.set_i16(MEASURED_VALUE.id, value.unwrap_or(UNKNOWN))
     }
 
     /// The measured value in 0.01 °C, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<i16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<i16> {
         c.i16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
     }
 }
@@ -279,7 +297,10 @@ pub mod pressure {
     pub const DEF: ClusterDef = def(ID);
 
     /// Builds a server measuring `min..=max` in 0.1 kPa.
-    pub fn server<const A: usize>(min: i16, max: i16) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        min: i16,
+        max: i16,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(MEASURED_VALUE, &int16(UNKNOWN), DEFAULT_REPORTING)?;
         c.add_attribute(MIN_MEASURED_VALUE, &int16(min))?;
@@ -288,17 +309,20 @@ pub mod pressure {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the measured value in 0.1 kPa (`None` = unknown).
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<i16>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<i16>,
+    ) -> bool {
         c.set_i16(MEASURED_VALUE.id, value.unwrap_or(UNKNOWN))
     }
 
     /// The measured value in 0.1 kPa, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<i16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<i16> {
         c.i16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
     }
 }
@@ -328,7 +352,10 @@ pub mod flow {
     pub const DEF: ClusterDef = def(ID);
 
     /// Builds a server measuring `min..=max` in 0.1 m³/h.
-    pub fn server<const A: usize>(min: u16, max: u16) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        min: u16,
+        max: u16,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(MEASURED_VALUE, &uint16(UNKNOWN), DEFAULT_REPORTING)?;
         c.add_attribute(MIN_MEASURED_VALUE, &uint16(min))?;
@@ -337,17 +364,20 @@ pub mod flow {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the measured value in 0.1 m³/h (`None` = unknown).
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<u16>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<u16>,
+    ) -> bool {
         c.set_u16(MEASURED_VALUE.id, value.unwrap_or(UNKNOWN))
     }
 
     /// The measured value in 0.1 m³/h, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u16> {
         c.u16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
     }
 }
@@ -383,11 +413,11 @@ pub mod water_content {
 
     /// Builds a server of `cluster` (one of the three identifiers)
     /// measuring `min..=max` in 0.01 %.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         cluster: ClusterId,
         min: u16,
         max: u16,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if !matches!(cluster, RELATIVE_HUMIDITY | LEAF_WETNESS | SOIL_MOISTURE)
             || max > MAX_PERCENT && max != UNKNOWN
         {
@@ -401,13 +431,16 @@ pub mod water_content {
     }
 
     /// Builds a client instance of `cluster`.
-    pub fn client<const A: usize>(cluster: ClusterId) -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>(cluster: ClusterId) -> ClusterInstance<A, P> {
         client_of(cluster)
     }
 
     /// Sets the measured value in 0.01 % (`None` = unknown); values above
     /// 100 % are refused.
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<u16>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<u16>,
+    ) -> bool {
         match value {
             Some(v) if v > MAX_PERCENT => false,
             v => c.set_u16(MEASURED_VALUE.id, v.unwrap_or(UNKNOWN)),
@@ -415,7 +448,7 @@ pub mod water_content {
     }
 
     /// The measured value in 0.01 %, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u16> {
         c.u16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
     }
 }
@@ -456,12 +489,12 @@ pub mod scalar {
     /// Builds a server of `cluster` (one of the three identifiers)
     /// measuring `min..=max` in the cluster's unit, reporting a change
     /// of `change`.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         cluster: ClusterId,
         min: u16,
         max: u16,
         change: u16,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if !matches!(cluster, ELECTRICAL_CONDUCTIVITY | PH | WIND_SPEED)
             || (max > max_of(cluster) && max != UNKNOWN)
             || (min != UNKNOWN && max != UNKNOWN && min >= max)
@@ -480,13 +513,16 @@ pub mod scalar {
     }
 
     /// Builds a client instance of `cluster`.
-    pub fn client<const A: usize>(cluster: ClusterId) -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>(cluster: ClusterId) -> ClusterInstance<A, P> {
         client_of(cluster)
     }
 
     /// Sets the measured value (`None` = unknown); values beyond the
     /// cluster's range are refused.
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<u16>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<u16>,
+    ) -> bool {
         match value {
             Some(v) if v > max_of(c.def.id) => false,
             v => c.set_u16(MEASURED_VALUE.id, v.unwrap_or(UNKNOWN)),
@@ -494,7 +530,7 @@ pub mod scalar {
     }
 
     /// The measured value, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<u16> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u16> {
         c.u16(MEASURED_VALUE.id).filter(|v| *v != UNKNOWN)
     }
 }
@@ -538,12 +574,12 @@ pub mod concentration {
 
     /// Builds a server of `cluster` measuring `min..=max` (fractions of
     /// 1, `NAN` for undefined) and reporting a change of `change`.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         cluster: ClusterId,
         min: f32,
         max: f32,
         change: f32,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if !is_concentration(cluster)
             || (!min.is_nan() && !(0.0..1.0).contains(&min))
             || (!max.is_nan() && !(0.0..=1.0).contains(&max))
@@ -567,13 +603,16 @@ pub mod concentration {
     }
 
     /// Builds a client instance of `cluster`.
-    pub fn client<const A: usize>(cluster: ClusterId) -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>(cluster: ClusterId) -> ClusterInstance<A, P> {
         client_of(cluster)
     }
 
     /// Sets the measured concentration (`None` = unknown); values
     /// outside 0…1 are refused.
-    pub fn set_measured<const A: usize>(c: &mut ClusterInstance<A>, value: Option<f32>) -> bool {
+    pub fn set_measured<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        value: Option<f32>,
+    ) -> bool {
         match value {
             Some(v) if !(0.0..=1.0).contains(&v) => false,
             v => c.set(MEASURED_VALUE.id, &Value::Single(v.unwrap_or(f32::NAN))),
@@ -581,7 +620,7 @@ pub mod concentration {
     }
 
     /// The measured concentration, `None` when unknown.
-    pub fn measured<const A: usize>(c: &ClusterInstance<A>) -> Option<f32> {
+    pub fn measured<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<f32> {
         match c.attributes.value(MEASURED_VALUE.id) {
             Some(Value::Single(v)) if !v.is_nan() => Some(v),
             _ => None,
@@ -673,7 +712,9 @@ pub mod occupancy {
     }
 
     /// Builds a server for the sensor technologies in `sensor_bits`.
-    pub fn server<const A: usize>(sensor_bits: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        sensor_bits: u8,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if sensor_bits == 0 || sensor_bits & !0x07 != 0 {
             return Err(ZclStatus::InvalidValue);
         }
@@ -698,12 +739,15 @@ pub mod occupancy {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         client_of(ID)
     }
 
     /// Sets the sensed occupancy; returns whether it changed.
-    pub fn set_occupied<const A: usize>(c: &mut ClusterInstance<A>, occupied: bool) -> bool {
+    pub fn set_occupied<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        occupied: bool,
+    ) -> bool {
         c.set(
             OCCUPANCY.id,
             &Value::Bits {
@@ -714,7 +758,7 @@ pub mod occupancy {
     }
 
     /// Whether the area is sensed as occupied.
-    pub fn occupied<const A: usize>(c: &ClusterInstance<A>) -> bool {
+    pub fn occupied<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
         c.u8(OCCUPANCY.id).is_some_and(|v| v & OCCUPIED != 0)
     }
 }
@@ -762,7 +806,7 @@ mod tests {
         assert!(water_content::set_measured(&mut h, Some(4567)));
         assert!(!water_content::set_measured(&mut h, Some(10001)));
         assert_eq!(water_content::measured(&h), Some(4567));
-        assert!(water_content::server::<8>(ClusterId(0x0406), 0, 100).is_err());
+        assert!(water_content::server::<8, crate::Full>(ClusterId(0x0406), 0, 100).is_err());
 
         let mut o: ClusterInstance<8> = occupancy::server(
             occupancy::sensor_bits::PIR | occupancy::sensor_bits::PHYSICAL_CONTACT,
@@ -775,7 +819,7 @@ mod tests {
         assert!(!occupancy::occupied(&o));
         assert!(occupancy::set_occupied(&mut o, true));
         assert!(occupancy::occupied(&o));
-        assert!(occupancy::server::<8>(0).is_err());
+        assert!(occupancy::server::<8, crate::Full>(0).is_err());
         assert_eq!(
             occupancy::sensor_type_for(occupancy::sensor_bits::PHYSICAL_CONTACT),
             occupancy::sensor_type::PHYSICAL_CONTACT
@@ -803,9 +847,9 @@ mod tests {
     fn scalar_and_concentration_servers() {
         use panweave_types::time::Instant;
         let mut ph: ClusterInstance<8> = scalar::server(scalar::PH, 0, scalar::MAX_PH, 10).unwrap();
-        assert!(scalar::server::<8>(scalar::PH, 0, 0x0579, 1).is_err());
-        assert!(scalar::server::<8>(ClusterId(0x0408), 0, 100, 1).is_err());
-        assert!(scalar::server::<8>(scalar::WIND_SPEED, 50, 50, 1).is_err());
+        assert!(scalar::server::<8, crate::Full>(scalar::PH, 0, 0x0579, 1).is_err());
+        assert!(scalar::server::<8, crate::Full>(ClusterId(0x0408), 0, 100, 1).is_err());
+        assert!(scalar::server::<8, crate::Full>(scalar::WIND_SPEED, 50, 50, 1).is_err());
         assert_eq!(scalar::measured(&ph), None);
         assert!(!scalar::set_measured(&mut ph, Some(0x0579)));
         assert!(scalar::set_measured(&mut ph, Some(700)));
@@ -816,8 +860,10 @@ mod tests {
         let now = Instant::from_millis(0);
         let mut co2: ClusterInstance<8> =
             concentration::server(concentration::CARBON_DIOXIDE, 0.0, 1.0, 0.01).unwrap();
-        assert!(concentration::server::<8>(ClusterId(0x042a), 0.0, 1.0, 0.0).is_err());
-        assert!(concentration::server::<8>(concentration::OXYGEN, 0.5, 0.2, 0.0).is_err());
+        assert!(concentration::server::<8, crate::Full>(ClusterId(0x042a), 0.0, 1.0, 0.0).is_err());
+        assert!(
+            concentration::server::<8, crate::Full>(concentration::OXYGEN, 0.5, 0.2, 0.0).is_err()
+        );
         assert!(concentration::is_concentration(concentration::TURBIDITY));
         assert_eq!(concentration::measured(&co2), None);
         assert!(!concentration::set_measured(&mut co2, Some(1.5)));
@@ -829,7 +875,8 @@ mod tests {
             .attributes
             .get_mut(concentration::MEASURED_VALUE.id, None)
             .unwrap();
-        a.configure_reporting(0, 0, crate::attribute::float_change(0.01), now);
+        a.configure_reporting(0, 0, crate::attribute::float_change(0.01), now)
+            .unwrap();
         let due = |c: &ClusterInstance<8>| {
             c.attributes
                 .get(concentration::MEASURED_VALUE.id, None)

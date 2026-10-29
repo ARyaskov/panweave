@@ -11,6 +11,7 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId, ProfileId};
 
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
+use crate::profile::ZclProfile;
 
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x1000);
@@ -93,12 +94,12 @@ pub const DEF: ClusterDef = ClusterDef {
 };
 
 /// Builds a server instance (no attributes).
-pub fn server<const A: usize>() -> ClusterInstance<A> {
+pub fn server<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF, Role::Server)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 

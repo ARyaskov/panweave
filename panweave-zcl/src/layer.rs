@@ -4,10 +4,11 @@
 //! to the application, and drives attribute reporting to bound
 //! destinations (§2.5.11).
 
-use heapless::{Deque, Vec};
+use heapless::Vec;
 use panweave_aps::layer::{DataIndication, Delivery, SecurityStatus};
 use panweave_aps::{Destination, TxOptions};
 use panweave_codec::{Decode, Encode, Writer};
+use panweave_types::capacity::{Capacity, DequeOf};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ClusterId, CommandId, Endpoint, ExtendedAddress, GroupAddress, ManufacturerCode, ProfileId,
@@ -27,6 +28,7 @@ use crate::clusters::{
 };
 use crate::frame::{Direction, Frame, FrameType, Header, ZclStatus};
 use crate::global::{DefaultResponse, command};
+use crate::profile::{Full, SceneStore, ZclProfile};
 
 /// Largest ZCL frame built by the layer (unfragmented APS payload).
 pub const MAX_ZCL: usize = 80;
@@ -37,27 +39,29 @@ pub const QUEUE_CAPACITY: usize = 8;
 /// A ZCL frame buffer.
 pub type ZclBuf = Vec<u8, MAX_ZCL>;
 
-/// An application endpoint with its cluster instances.
+/// An application endpoint with up to `C` cluster instances of up to
+/// `A` attributes each, its storage dimensioned by the profile `P`.
 #[derive(Debug)]
-pub struct EndpointInstance<const C: usize, const A: usize> {
+pub struct EndpointInstance<const C: usize, const A: usize, P: ZclProfile = Full> {
     /// Endpoint number.
     pub endpoint: Endpoint,
     /// Profile.
     pub profile: ProfileId,
     /// Clusters.
-    pub clusters: Vec<ClusterInstance<A>, C>,
-    /// Scene table of the endpoint's Scenes server (§3.7.2.3).
-    pub scenes: scenes::SceneTable,
+    pub clusters: Vec<ClusterInstance<A, P>, C>,
+    /// Scene table of the endpoint's Scenes server (§3.7.2.3), when the
+    /// profile has one.
+    pub scenes: P::Scenes,
 }
 
-impl<const C: usize, const A: usize> EndpointInstance<C, A> {
+impl<const C: usize, const A: usize, P: ZclProfile> EndpointInstance<C, A, P> {
     /// Creates an empty endpoint.
-    pub const fn new(endpoint: Endpoint, profile: ProfileId) -> Self {
+    pub fn new(endpoint: Endpoint, profile: ProfileId) -> Self {
         EndpointInstance {
             endpoint,
             profile,
             clusters: Vec::new(),
-            scenes: scenes::SceneTable::new(),
+            scenes: P::Scenes::default(),
         }
     }
 
@@ -67,7 +71,7 @@ impl<const C: usize, const A: usize> EndpointInstance<C, A> {
         &mut self,
         def: ClusterDef,
         role: Role,
-    ) -> Result<&mut ClusterInstance<A>, ZclError> {
+    ) -> Result<&mut ClusterInstance<A, P>, ZclError> {
         if self.cluster_mut(def.id, role).is_some() {
             return Err(ZclError::NotFound);
         }
@@ -77,10 +81,18 @@ impl<const C: usize, const A: usize> EndpointInstance<C, A> {
         self.clusters.last_mut().ok_or(ZclError::Busy)
     }
 
+    /// Removes the cluster added last (undoes [`EndpointInstance::add_cluster`]
+    /// when filling the instance failed).
+    pub fn remove_last_cluster(&mut self) {
+        // Dropped in place: `pop` would return the instance by value.
+        self.clusters
+            .truncate(self.clusters.len().saturating_sub(1));
+    }
+
     /// Adds a pre-built cluster instance; the instance is handed back when
     /// the endpoint already has that cluster / role or is full.
     #[allow(clippy::result_large_err)]
-    pub fn add_instance(&mut self, c: ClusterInstance<A>) -> Result<(), ClusterInstance<A>> {
+    pub fn add_instance(&mut self, c: ClusterInstance<A, P>) -> Result<(), ClusterInstance<A, P>> {
         if self.cluster(c.def.id, c.role).is_some() {
             return Err(c);
         }
@@ -88,14 +100,14 @@ impl<const C: usize, const A: usize> EndpointInstance<C, A> {
     }
 
     /// Finds a cluster instance.
-    pub fn cluster(&self, id: ClusterId, role: Role) -> Option<&ClusterInstance<A>> {
+    pub fn cluster(&self, id: ClusterId, role: Role) -> Option<&ClusterInstance<A, P>> {
         self.clusters
             .iter()
             .find(|c| c.def.id == id && c.role == role)
     }
 
     /// Finds a cluster instance mutably.
-    pub fn cluster_mut(&mut self, id: ClusterId, role: Role) -> Option<&mut ClusterInstance<A>> {
+    pub fn cluster_mut(&mut self, id: ClusterId, role: Role) -> Option<&mut ClusterInstance<A, P>> {
         self.clusters
             .iter_mut()
             .find(|c| c.def.id == id && c.role == role)
@@ -530,12 +542,14 @@ pub enum ZclError {
     NotFound,
 }
 
-/// The ZCL dispatcher.
-pub struct Zcl<const E: usize, const C: usize, const A: usize> {
-    endpoints: Vec<EndpointInstance<C, A>, E>,
+/// The ZCL dispatcher: up to `E` endpoints of up to `C` clusters of up
+/// to `A` attributes, its storage and queues dimensioned by the profile
+/// `P`.
+pub struct Zcl<const E: usize, const C: usize, const A: usize, P: ZclProfile = Full> {
+    endpoints: Vec<EndpointInstance<C, A, P>, E>,
     seq: TransactionSequence,
-    actions: Deque<ZclAction, QUEUE_CAPACITY>,
-    events: Deque<ZclEvent, QUEUE_CAPACITY>,
+    actions: DequeOf<ZclAction, P::Actions>,
+    events: DequeOf<ZclEvent, P::Events>,
     now: Instant,
     /// Actions or events dropped on overflow.
     pub dropped: u32,
@@ -556,20 +570,20 @@ pub struct Zcl<const E: usize, const C: usize, const A: usize> {
 /// on a profile (`(profile, cluster) -> required`).
 pub type LinkKeyPolicy = fn(ProfileId, ClusterId) -> bool;
 
-impl<const E: usize, const C: usize, const A: usize> Default for Zcl<E, C, A> {
+impl<const E: usize, const C: usize, const A: usize, P: ZclProfile> Default for Zcl<E, C, A, P> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
+impl<const E: usize, const C: usize, const A: usize, P: ZclProfile> Zcl<E, C, A, P> {
     /// Empty dispatcher.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Zcl {
             endpoints: Vec::new(),
             seq: TransactionSequence(0),
-            actions: Deque::new(),
-            events: Deque::new(),
+            actions: P::Actions::deque(),
+            events: P::Events::deque(),
             now: Instant::from_millis(0),
             dropped: 0,
             link_key_policy: None,
@@ -603,8 +617,8 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     #[allow(clippy::result_large_err)]
     pub fn add_endpoint(
         &mut self,
-        ep: EndpointInstance<C, A>,
-    ) -> Result<(), EndpointInstance<C, A>> {
+        ep: EndpointInstance<C, A, P>,
+    ) -> Result<(), EndpointInstance<C, A, P>> {
         if self.endpoints.iter().any(|e| e.endpoint == ep.endpoint) {
             return Err(ep);
         }
@@ -619,7 +633,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         &mut self,
         endpoint: Endpoint,
         profile: ProfileId,
-    ) -> Option<&mut EndpointInstance<C, A>> {
+    ) -> Option<&mut EndpointInstance<C, A, P>> {
         if self.endpoints.iter().any(|e| e.endpoint == endpoint) {
             return None;
         }
@@ -638,12 +652,12 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     }
 
     /// The endpoint instance.
-    pub fn endpoint(&self, endpoint: Endpoint) -> Option<&EndpointInstance<C, A>> {
+    pub fn endpoint(&self, endpoint: Endpoint) -> Option<&EndpointInstance<C, A, P>> {
         self.endpoints.iter().find(|e| e.endpoint == endpoint)
     }
 
     /// The endpoint instance, mutably.
-    pub fn endpoint_mut(&mut self, endpoint: Endpoint) -> Option<&mut EndpointInstance<C, A>> {
+    pub fn endpoint_mut(&mut self, endpoint: Endpoint) -> Option<&mut EndpointInstance<C, A, P>> {
         self.endpoints.iter_mut().find(|e| e.endpoint == endpoint)
     }
 
@@ -653,7 +667,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         endpoint: Endpoint,
         id: ClusterId,
         role: Role,
-    ) -> Option<&ClusterInstance<A>> {
+    ) -> Option<&ClusterInstance<A, P>> {
         self.endpoint(endpoint)?.cluster(id, role)
     }
 
@@ -663,12 +677,12 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         endpoint: Endpoint,
         id: ClusterId,
         role: Role,
-    ) -> Option<&mut ClusterInstance<A>> {
+    ) -> Option<&mut ClusterInstance<A, P>> {
         self.endpoint_mut(endpoint)?.cluster_mut(id, role)
     }
 
     /// Registered endpoints.
-    pub fn endpoints(&self) -> &[EndpointInstance<C, A>] {
+    pub fn endpoints(&self) -> &[EndpointInstance<C, A, P>] {
         &self.endpoints
     }
 
@@ -1888,6 +1902,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             .cluster_mut(endpoint, statistics::ID, Role::Server)
             .ok_or(ZclError::NotFound)?;
         let log = statistics::queue_mut(c)
+            .ok_or(ZclError::NotFound)?
             .push(stamp, payload)
             .map_err(|_| ZclError::Busy)?;
         let id = log.id;
@@ -2665,6 +2680,17 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         Ok(ias_zone::set_status(c, status, now))
     }
 
+    /// Schedules a Zone Status Change Notification of the current status
+    /// of the IAS Zone server on `endpoint` (an application retrying an
+    /// undelivered notification); `false` when no CIE is configured.
+    pub fn notify_zone_status(&mut self, endpoint: Endpoint) -> Result<bool, ZclError> {
+        let now = self.now;
+        let c = self
+            .cluster_mut(endpoint, ias_zone::ID, Role::Server)
+            .ok_or(ZclError::NotFound)?;
+        Ok(ias_zone::renotify(c, now))
+    }
+
     /// Trip-to-Pair trigger of the IAS Zone server on `endpoint`
     /// (§8.2.2.1.3): requests enrolment from the configured CIE.
     pub fn request_zone_enrollment(&mut self, endpoint: Endpoint) -> Result<bool, ZclError> {
@@ -2915,7 +2941,7 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
             }
             on_off::Outcome::RecallGlobalScene => {
                 let entry = self.endpoints.get_mut(ep_index).and_then(|e| {
-                    let t = &e.scenes;
+                    let t = e.scenes.table()?;
                     e.clusters
                         .iter_mut()
                         .find(|c| c.def.id == scenes::ID && c.role == Role::Server)
@@ -3187,7 +3213,9 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
     fn store_global_scene(&mut self, ep_index: usize) {
         let fields = self.scene_fields(ep_index);
         if let Some(ep) = self.endpoints.get_mut(ep_index) {
-            let t = &mut ep.scenes;
+            let Some(t) = ep.scenes.table_mut() else {
+                return;
+            };
             if let Some(c) = ep
                 .clusters
                 .iter_mut()
@@ -3279,7 +3307,10 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
         let Some(ep) = self.endpoints.get_mut(ep_index) else {
             return;
         };
-        let t = &mut ep.scenes;
+        let Some(t) = ep.scenes.table_mut() else {
+            let _ = self.default_response(origin, ZclStatus::InsufficientSpace);
+            return;
+        };
         let Some(c) = ep
             .clusters
             .iter_mut()
@@ -3294,7 +3325,9 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 let Some(ep) = self.endpoints.get_mut(ep_index) else {
                     return;
                 };
-                let t = &mut ep.scenes;
+                let Some(t) = ep.scenes.table_mut() else {
+                    return;
+                };
                 match ep
                     .clusters
                     .iter_mut()
@@ -3309,10 +3342,12 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 scene,
                 tenths,
             } => {
-                let fields = self
-                    .endpoints
-                    .get(ep_index)
-                    .and_then(|e| e.scenes.get(group, scene).map(|e| e.fields.clone()));
+                let fields = self.endpoints.get(ep_index).and_then(|e| {
+                    e.scenes
+                        .table()?
+                        .get(group, scene)
+                        .map(|e| e.fields.clone())
+                });
                 if let Some(f) = fields {
                     self.apply_scene(ep_index, &f, tenths);
                 }
@@ -3433,10 +3468,9 @@ impl<const E: usize, const C: usize, const A: usize> Zcl<E, C, A> {
                 break;
             };
             if let Some(c) = ep.cluster_mut(time::ID, Role::Server) {
-                let before = match &c.state {
-                    crate::cluster::ClusterState::Time(k) => k.published,
-                    _ => time::INVALID,
-                };
+                let before = c
+                    .state_ref::<time::Clock>()
+                    .map_or(time::INVALID, |k| k.published);
                 // A write over the air shows as a Time value the server
                 // did not publish itself; it is applied at once.
                 let written = c.u64(time::TIME.id).is_some_and(|v| v != u64::from(before));

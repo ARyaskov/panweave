@@ -5,6 +5,7 @@
 //! [`crate::layer`] and call into them.
 
 use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Instant, ShortAddress};
 
 use crate::frame::MAX_SOURCE_ROUTE_RELAYS;
@@ -108,17 +109,29 @@ impl RouteEntry {
 }
 
 /// Fixed-capacity routing table.
-#[derive(Clone, Debug, Default)]
-pub struct RoutingTable<const N: usize> {
-    entries: Vec<RouteEntry, N>,
+#[derive(Debug)]
+pub struct RoutingTable<K: Capacity> {
+    entries: VecOf<RouteEntry, K>,
 }
 
-impl<const N: usize> RoutingTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for RoutingTable<K> {
+    fn clone(&self) -> Self {
         RoutingTable {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for RoutingTable<K> {
+    fn default() -> Self {
+        RoutingTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> RoutingTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        RoutingTable { entries: K::vec() }
     }
 
     /// Number of entries.
@@ -133,7 +146,7 @@ impl<const N: usize> RoutingTable<N> {
 
     /// Capacity.
     pub const fn capacity(&self) -> usize {
-        N
+        K::N
     }
 
     /// Iterates entries.
@@ -292,17 +305,29 @@ pub struct DiscoveryEntry {
 }
 
 /// Fixed-capacity route discovery table.
-#[derive(Clone, Debug, Default)]
-pub struct RouteDiscoveryTable<const N: usize> {
-    entries: Vec<DiscoveryEntry, N>,
+#[derive(Debug)]
+pub struct RouteDiscoveryTable<K: Capacity> {
+    entries: VecOf<DiscoveryEntry, K>,
 }
 
-impl<const N: usize> RouteDiscoveryTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for RouteDiscoveryTable<K> {
+    fn clone(&self) -> Self {
         RouteDiscoveryTable {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for RouteDiscoveryTable<K> {
+    fn default() -> Self {
+        RouteDiscoveryTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> RouteDiscoveryTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        RouteDiscoveryTable { entries: K::vec() }
     }
 
     /// Finds the entry for `(source, request_id)`.
@@ -406,17 +431,29 @@ pub struct SourceRouteEntry {
 }
 
 /// Route record (source route) table maintained by concentrators.
-#[derive(Clone, Debug, Default)]
-pub struct SourceRouteTable<const N: usize> {
-    entries: Vec<SourceRouteEntry, N>,
+#[derive(Debug)]
+pub struct SourceRouteTable<K: Capacity> {
+    entries: VecOf<SourceRouteEntry, K>,
 }
 
-impl<const N: usize> SourceRouteTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for SourceRouteTable<K> {
+    fn clone(&self) -> Self {
         SourceRouteTable {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for SourceRouteTable<K> {
+    fn default() -> Self {
+        SourceRouteTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> SourceRouteTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        SourceRouteTable { entries: K::vec() }
     }
 
     /// Finds the route toward `destination`.
@@ -489,7 +526,7 @@ mod tests {
 
     #[test]
     fn routing_table_insert_and_eviction() {
-        let mut t = RoutingTable::<2>::new();
+        let mut t = RoutingTable::<panweave_types::capacity::Cap<2>>::new();
         let mut a = RouteEntry::new(ShortAddress(1), ShortAddress(10), RouteStatus::Active, 3);
         a.touch();
         t.insert(a).unwrap();
@@ -516,7 +553,7 @@ mod tests {
             RouteStatus::Inactive
         );
         // Entries in discovery are never evicted.
-        let mut u = RoutingTable::<1>::new();
+        let mut u = RoutingTable::<panweave_types::capacity::Cap<1>>::new();
         u.insert(RouteEntry::new(
             ShortAddress(1),
             ShortAddress(1),
@@ -551,7 +588,7 @@ mod tests {
 
     #[test]
     fn discovery_table_expiry_and_reuse() {
-        let mut t = RouteDiscoveryTable::<1>::new();
+        let mut t = RouteDiscoveryTable::<panweave_types::capacity::Cap<1>>::new();
         let now = Instant::from_millis(0);
         let e = DiscoveryEntry {
             request_id: 1,
@@ -578,7 +615,7 @@ mod tests {
 
     #[test]
     fn source_route_table() {
-        let mut t = SourceRouteTable::<1>::new();
+        let mut t = SourceRouteTable::<panweave_types::capacity::Cap<1>>::new();
         assert!(t.store_from_record(
             ShortAddress(5),
             [ShortAddress(1), ShortAddress(2)].into_iter()

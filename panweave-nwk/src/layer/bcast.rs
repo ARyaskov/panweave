@@ -6,19 +6,11 @@ use heapless::Vec;
 use panweave_security::cipher::BlockCipher;
 use panweave_types::{Instant, Rng, ShortAddress, ShortAddressKind};
 
-use super::{BroadcastBuf, NpduBuf, Nwk, NwkAction, NwkError, PendingTx, TxKind};
+use super::{BroadcastBuf, NpduBuf, Nwk, NwkAction, NwkDims, NwkError, PendingTx, TxKind};
 use crate::broadcast::{BroadcastRecord, PASSIVE_ACK_TRACKED};
 use crate::nib::constants;
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// Router neighbors expected to relay a broadcast (passive ack set).
     fn passive_ack_set(&self, exclude: ShortAddress) -> Vec<ShortAddress, PASSIVE_ACK_TRACKED> {
         let mut v = Vec::new();

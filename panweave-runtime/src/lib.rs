@@ -41,6 +41,7 @@ pub mod join_trace;
 mod keep_alive;
 pub mod ota;
 mod persist;
+pub mod profile;
 mod provision;
 mod pump;
 mod stack;
@@ -49,9 +50,11 @@ pub mod touchlink;
 
 pub use authorization::{Authorization, DeniedFrames, DenyReason};
 pub use persist::{RestoreDetail, Restored};
+pub use profile::{FullStack, SleepySensor, StackProfile};
 pub use provision::{AdoptParams, FormationParams};
 pub use stack::{
     CLUSTER_ATTRIBUTES, ENDPOINT_CLUSTERS, ENDPOINTS, EVENT_CAPACITY, EndpointError, JoinMode,
-    LINK_KEYS, Stack, StackAps, StackCluster, StackConfig, StackEndpoint, StackEvent, StackNwk,
-    StackZcl, StackZdo, ZclFrame, ZdpData,
+    LINK_KEYS, ProfileAps, ProfileCluster, ProfileEndpoint, ProfileNwk, ProfileZcl, ProfileZdo,
+    Stack, StackAps, StackCluster, StackConfig, StackEndpoint, StackEvent, StackNwk, StackZcl,
+    StackZdo, ZclFrame, ZdpData,
 };

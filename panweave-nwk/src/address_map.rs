@@ -1,13 +1,27 @@
 //! Network address map (`nwkAddressMap`, R23.2 Table 3-68) and stochastic
 //! address assignment (§3.6.1.8).
 
-use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{ExtendedAddress, Rng, ShortAddress};
 
 /// Fixed-capacity map between extended and network addresses.
-#[derive(Clone, Debug, Default)]
-pub struct AddressMap<const N: usize> {
-    entries: Vec<(ExtendedAddress, ShortAddress), N>,
+#[derive(Debug)]
+pub struct AddressMap<K: Capacity> {
+    entries: VecOf<(ExtendedAddress, ShortAddress), K>,
+}
+
+impl<K: Capacity> Clone for AddressMap<K> {
+    fn clone(&self) -> Self {
+        AddressMap {
+            entries: K::clone_vec(&self.entries),
+        }
+    }
+}
+
+impl<K: Capacity> Default for AddressMap<K> {
+    fn default() -> Self {
+        AddressMap { entries: K::vec() }
+    }
 }
 
 /// Outcome of recording an address pair.
@@ -34,12 +48,10 @@ pub enum AddressMapUpdate {
     Full,
 }
 
-impl<const N: usize> AddressMap<N> {
+impl<K: Capacity> AddressMap<K> {
     /// Empty map.
-    pub const fn new() -> Self {
-        AddressMap {
-            entries: Vec::new(),
-        }
+    pub fn new() -> Self {
+        AddressMap { entries: K::vec() }
     }
 
     /// Short address for `ext`.
@@ -134,7 +146,7 @@ mod tests {
 
     #[test]
     fn record_and_conflict() {
-        let mut m = AddressMap::<2>::new();
+        let mut m = AddressMap::<panweave_types::capacity::Cap<2>>::new();
         assert_eq!(
             m.record(ExtendedAddress(1), ShortAddress(10)),
             AddressMapUpdate::Added

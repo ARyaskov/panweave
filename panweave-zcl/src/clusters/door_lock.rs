@@ -24,8 +24,9 @@ use panweave_types::{AttributeId, ClusterId, CommandId};
 use subtle::ConstantTimeEq;
 
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -886,7 +887,11 @@ impl Outcome {
 
 /// Write guard: `OperatingMode` must be supported, the statuses and
 /// lengths of the security set stay in range.
-fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+fn guard<const A: usize, P: ZclProfile>(
+    t: &AttributeTable<A, P>,
+    id: AttributeId,
+    v: &Value<'_>,
+) -> ZclStatus {
     let val = v.as_u64().unwrap_or(u64::MAX);
     let ok = match id {
         i if i == OPERATING_MODE.id => {
@@ -916,11 +921,11 @@ fn bits16(v: u16) -> Value<'static> {
 /// Every event mask starts at zero (nothing is notified) and
 /// `SupportedOperatingModes` lists Normal, Vacation, Privacy and No RF
 /// Lock/Unlock.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     lock_type: u8,
     pin_users: u8,
     actuator: bool,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     if lock_type > lock_type::DOOR_FURNITURE || usize::from(pin_users) > MAX_PIN_USERS {
         return Err(ZclStatus::InvalidValue);
     }
@@ -1022,64 +1027,64 @@ pub fn server<const A: usize>(
     for _ in 0..pin_users {
         let _ = users.push(User::default());
     }
-    c.state = ClusterState::DoorLock(State {
+    c.set_state(State {
         users,
         ..State::default()
-    });
-    c.write_guard = Some(guard::<A>);
+    })?;
+    c.write_guard = Some(guard::<A, P>);
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn state<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut State> {
-    match &mut c.state {
-        ClusterState::DoorLock(s) => Some(s),
-        _ => None,
-    }
+fn state<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut State> {
+    c.state_mut::<State>()
 }
 
-fn state_ref<const A: usize>(c: &ClusterInstance<A>) -> Option<&State> {
-    match &c.state {
-        ClusterState::DoorLock(s) => Some(s),
-        _ => None,
-    }
+fn state_ref<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&State> {
+    c.state_ref::<State>()
 }
 
 /// The PIN user table of a server.
-pub fn users<const A: usize>(c: &ClusterInstance<A>) -> &[User] {
+pub fn users<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> &[User] {
     state_ref(c).map_or(&[], |s| s.users.as_slice())
 }
 
-fn mask<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> u16 {
+fn mask<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, id: AttributeId) -> u16 {
     c.u16(id).unwrap_or(0)
 }
 
 /// Whether alarm `code` is enabled by `AlarmMask` (Table 7-22).
-pub fn alarm_enabled<const A: usize>(c: &ClusterInstance<A>, code: u8) -> bool {
+pub fn alarm_enabled<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, code: u8) -> bool {
     code < 16 && mask(c, ALARM_MASK.id) & (1 << code) != 0
 }
 
 /// Sets `LockState` (the application's report of the bolt); returns
 /// whether it changed.
-pub fn set_lock_state<const A: usize>(c: &mut ClusterInstance<A>, state: u8) -> bool {
+pub fn set_lock_state<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    state: u8,
+) -> bool {
     c.set(LOCK_STATE.id, &Value::Enum8(state))
 }
 
 /// Current `LockState`.
-pub fn lock_state<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+pub fn lock_state<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
     c.u8(LOCK_STATE.id).unwrap_or(lock_state::UNDEFINED)
 }
 
 /// Sets `DoorState`; returns whether it changed.
-pub fn set_door_state<const A: usize>(c: &mut ClusterInstance<A>, state: u8) -> bool {
+pub fn set_door_state<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    state: u8,
+) -> bool {
     c.set(DOOR_STATE.id, &Value::Enum8(state))
 }
 
-fn refresh_tick<const A: usize>(c: &mut ClusterInstance<A>) {
+fn refresh_tick<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
     let Some(s) = state_ref(c) else {
         return;
     };
@@ -1100,8 +1105,8 @@ fn refresh_tick<const A: usize>(c: &mut ClusterInstance<A>) {
 
 /// Writes a PIN octet string, masked with 0xff unless
 /// `SendPINOverTheAir` is set (§7.3.2.13.3).
-fn write_pin<const A: usize>(
-    c: &ClusterInstance<A>,
+fn write_pin<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     w: &mut Writer<'_>,
     pin: &[u8],
 ) -> Result<(), CodecError> {
@@ -1124,8 +1129,8 @@ fn read_pin<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], CodecError> {
 
 /// Encodes an Operation Event Notification (§7.3.2.16.27) when
 /// `source` / `code` is enabled by the matching mask.
-pub fn operation_event<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn operation_event<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     source: u8,
     code: u8,
     user: u16,
@@ -1180,8 +1185,8 @@ pub fn operation_event<const A: usize>(
 
 /// Encodes a Programming Event Notification (§7.3.2.16.28) when
 /// `source` / `code` is enabled by the matching mask.
-pub fn programming_event<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn programming_event<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     source: u8,
     code: u8,
     user: &User,
@@ -1230,8 +1235,8 @@ enum Refusal {
 
 /// Validates the PIN of an RF operation (§7.3.2.13.4): returns the
 /// user identifier (or [`NO_USER`] when no code was needed).
-fn check_pin<const A: usize>(
-    c: &mut ClusterInstance<A>,
+fn check_pin<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     pin: &[u8],
     now: Instant,
     local_time: u32,
@@ -1277,7 +1282,7 @@ fn check_pin<const A: usize>(
     }
 }
 
-fn user_index<const A: usize>(c: &ClusterInstance<A>, id: u16) -> Option<usize> {
+fn user_index<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, id: u16) -> Option<usize> {
     let n = usize::from(c.u16(NUMBER_OF_PIN_USERS_SUPPORTED.id).unwrap_or(0));
     let i = usize::from(id);
     (i < n).then_some(i)
@@ -1285,8 +1290,8 @@ fn user_index<const A: usize>(c: &ClusterInstance<A>, id: u16) -> Option<usize> 
 
 /// Handles a received command (§7.3.2.15); `local_time` stamps the
 /// event notifications ([`NO_TIME`] without a clock).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
     now: Instant,
@@ -1943,8 +1948,8 @@ pub fn handle<const A: usize>(
 
 /// Appends a record to the event log when `EnableLogging` is set
 /// (§7.3.2.16.5); the oldest record makes room.
-pub fn log_event<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn log_event<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     event_type: u8,
     source: u8,
     code: u8,
@@ -1975,13 +1980,17 @@ pub fn log_event<const A: usize>(
 }
 
 /// The event log, oldest first.
-pub fn log_records<const A: usize>(c: &ClusterInstance<A>) -> &[LogRecord] {
+pub fn log_records<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> &[LogRecord] {
     state_ref(c).map_or(&[], |s| s.log.as_slice())
 }
 
 /// Logs the events an outcome carries (its notification's source and
 /// code, then its alarm).
-fn log_outcome<const A: usize>(c: &mut ClusterInstance<A>, out: &Outcome, local_time: u32) {
+fn log_outcome<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    out: &Outcome,
+    local_time: u32,
+) {
     if let Some(n) = &out.notify {
         let event_type = if n.command == CMD_PROGRAMMING_EVENT_NOTIFICATION {
             log_event::PROGRAMMING
@@ -2023,8 +2032,8 @@ fn active_holiday(s: &State, local_time: u32) -> Option<HolidaySchedule> {
 
 /// Applies or lifts the holiday operating mode (§7.3.2.15.19) against
 /// the clock; returns whether `OperatingMode` changed.
-fn service_holidays<const A: usize>(
-    c: &mut ClusterInstance<A>,
+fn service_holidays<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     now: Instant,
     local_time: u32,
 ) -> bool {
@@ -2056,8 +2065,8 @@ fn service_holidays<const A: usize>(
 /// scene-recalled operation, the end of the wrong-code lockout): an
 /// operation for the application, with the Manual-source Auto Lock
 /// event frame when the relock fired and its mask bit is set.
-pub fn tick<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     now: Instant,
     local_time: u32,
 ) -> Option<(Action, Option<Frame>)> {
@@ -2098,14 +2107,14 @@ pub fn tick<const A: usize>(
 }
 
 /// Scene extension field set (§7.3.2.17): LockState.
-pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 1] {
+pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 1] {
     [lock_state(c)]
 }
 
 /// Applies a recalled scene: Locked or Unlocked schedules the operation
 /// `tenths` tenths of a second later (Not fully locked is ignored).
-pub fn apply_scene_fields<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     fields: &[u8],
     tenths: u16,
     now: Instant,

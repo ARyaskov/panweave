@@ -12,6 +12,7 @@ use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkK
 use panweave_storage::Storage;
 use panweave_types::{CryptoRng, ExtendedAddress, Key128, KeyAttributes};
 
+use crate::profile::StackProfile;
 use crate::stack::Stack;
 
 /// One backed-up key-pair entry (Table 4-43).
@@ -40,7 +41,16 @@ pub struct TrustCenterBackup<const N: usize> {
     pub entries: Vec<BackupEntry, N>,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Produces the backup of this Trust Center (§4.7.4.1.2.1 –
     /// §4.7.4.1.2.4): unique link keys are backed up hashed; global
     /// (well-known) keys are skipped. `None` when this device is not the

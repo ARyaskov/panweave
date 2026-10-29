@@ -79,6 +79,20 @@ class Elf:
                     return st_value, st_size
         return None
 
+    def function_names(self):
+        """Names of every FUNC symbol."""
+        out = []
+        for h in self.headers:
+            if h[1] != SHT_SYMTAB:
+                continue
+            _, _, _, _, off, size, link = h
+            strtab = self.headers[link][4]
+            for i in range(size // 16):
+                st_name, _, st_size, st_info = struct.unpack_from(self.e + "IIIB", self.data, off + i * 16)
+                if st_info & 0xF == 2 and st_size:
+                    out.append(self.string(strtab, st_name))
+        return out
+
     def read(self, addr, size):
         """Bytes at a load address, from the section that holds it."""
         for h in self.headers:

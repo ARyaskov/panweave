@@ -26,7 +26,8 @@
 //! the radio and [`MacEvent`]s to deliver upward. Data frames are handed
 //! upward synchronously and zero-copy through [`RxDisposition`].
 
-use heapless::{Deque, Vec};
+use heapless::Vec;
+use panweave_types::capacity::{Cap, Capacity, DequeLen, DequeOf, VecOf};
 
 use panweave_codec::{Decode, Encode, Reader, Writer};
 use panweave_types::{
@@ -61,6 +62,46 @@ pub const QUEUE_CAPACITY: usize = 8;
 
 /// Links in the Power Control Information Table (Annex D.11.2.3).
 pub const POWER_ENTRIES: usize = 16;
+
+/// The capacities of a [`MacService`]'s queues and tables, chosen at
+/// compile time ([`FullMac`]: every role; [`EndDeviceMac`]: a device
+/// without children).
+pub trait MacDims: 'static {
+    /// Outgoing frames queued before backpressure.
+    type TxQueue: Capacity;
+    /// Indirect (pending) frames for sleepy children; a device without
+    /// children needs none.
+    type Indirect: Capacity;
+    /// Actions for the driver and events for the network layer (each).
+    type Queue: Capacity;
+    /// Links of the Power Control Information Table (at least one).
+    type Power: Capacity;
+}
+
+/// The capacities of a coordinator or router: [`TX_QUEUE_CAPACITY`],
+/// [`INDIRECT_CAPACITY`], [`QUEUE_CAPACITY`] and [`POWER_ENTRIES`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct FullMac;
+
+impl MacDims for FullMac {
+    type TxQueue = Cap<TX_QUEUE_CAPACITY>;
+    type Indirect = Cap<INDIRECT_CAPACITY>;
+    type Queue = Cap<QUEUE_CAPACITY>;
+    type Power = Cap<POWER_ENTRIES>;
+}
+
+/// The capacities of an end device: no indirect queue (it has no
+/// children), two queued transmissions (a data frame waits behind a
+/// data request), four actions and events, its parent's power link.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct EndDeviceMac;
+
+impl MacDims for EndDeviceMac {
+    type TxQueue = Cap<2>;
+    type Indirect = Cap<0>;
+    type Queue = Cap<4>;
+    type Power = Cap<2>;
+}
 
 /// Entries of `mibJoiningIeeeList` mirrored into the PIB (Table D-4).
 pub const JOINING_LIST_CAPACITY: usize = 16;
@@ -501,16 +542,16 @@ pub struct MacStats {
     pub queue_limit_reached: u32,
 }
 
-/// The MAC service state machine.
-pub struct MacService {
+/// The MAC service state machine, its queues dimensioned by `D`.
+pub struct MacService<D: MacDims = FullMac> {
     config: MacServiceConfig,
     /// PAN information base.
     pub pib: Pib,
     in_flight: Option<InFlight>,
-    tx_queue: Deque<QueuedTx, TX_QUEUE_CAPACITY>,
-    indirect: Vec<IndirectEntry, INDIRECT_CAPACITY>,
-    actions: Deque<MacAction, QUEUE_CAPACITY>,
-    events: Deque<MacEvent, QUEUE_CAPACITY>,
+    tx_queue: DequeOf<QueuedTx, D::TxQueue>,
+    indirect: VecOf<IndirectEntry, D::Indirect>,
+    actions: DequeOf<MacAction, D::Queue>,
+    events: DequeOf<MacEvent, D::Queue>,
     scan: Option<ScanState>,
     assoc: Option<AssocState>,
     energy: [u8; 27],
@@ -522,12 +563,12 @@ pub struct MacService {
     config_dirty: bool,
     now: Instant,
     /// Power Control Information Table (Annex D.11.2.3).
-    power: PowerControlTable<POWER_ENTRIES>,
+    power: PowerControlTable<D::Power>,
     /// Traffic counters.
     pub stats: MacStats,
 }
 
-impl MacService {
+impl<D: MacDims> MacService<D> {
     /// Creates a service with the given configuration and extended
     /// address. Sequence numbers should be seeded with
     /// [`MacService::seed_sequence_numbers`].
@@ -539,10 +580,10 @@ impl MacService {
             config,
             pib,
             in_flight: None,
-            tx_queue: Deque::new(),
-            indirect: Vec::new(),
-            actions: Deque::new(),
-            events: Deque::new(),
+            tx_queue: D::TxQueue::deque(),
+            indirect: D::Indirect::vec(),
+            actions: D::Queue::deque(),
+            events: D::Queue::deque(),
             scan: None,
             assoc: None,
             energy: [0; 27],
@@ -705,13 +746,13 @@ impl MacService {
     }
 
     /// The Power Control Information Table (Annex D.11.2.3).
-    pub fn power_table(&self) -> &PowerControlTable<POWER_ENTRIES> {
+    pub fn power_table(&self) -> &PowerControlTable<D::Power> {
         &self.power
     }
 
     /// The Power Control Information Table, for the network layer's
     /// MLME-SET-POWER-INFORMATION-TABLE.request.
-    pub fn power_table_mut(&mut self) -> &mut PowerControlTable<POWER_ENTRIES> {
+    pub fn power_table_mut(&mut self) -> &mut PowerControlTable<D::Power> {
         &mut self.power
     }
 
@@ -2408,7 +2449,7 @@ mod tests {
             frame_control: h.frame_control.with_ack_request(true),
             ..h
         };
-        let frame = MacService::build_frame(&h, &cmd).unwrap();
+        let frame = <MacService>::build_frame(&h, &cmd).unwrap();
         s.on_receive(&frame, RxMetadata::default());
     }
 

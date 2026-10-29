@@ -24,6 +24,7 @@ use panweave_zcl::global::{ReadAttributeStatus, Records, command};
 use panweave_zdo::zdp::{EndpointListRsp, MatchDescReq, NodeDescReq, U16List, ZdpStatus, cluster};
 
 use crate::context::AddrView;
+use crate::profile::StackProfile;
 use crate::stack::{Phase, Stack, StackEvent};
 
 /// Time allowed for a Read Attributes Response (covers the APS
@@ -70,7 +71,16 @@ impl KeepAlive {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Starts the keep-alive mechanism after joining a centralized
     /// network as a router (§3.18.4: end devices may, routers shall).
     pub(crate) fn start_keep_alive(&mut self) {

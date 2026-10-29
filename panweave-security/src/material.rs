@@ -2,6 +2,7 @@
 //! device key-pair set (§4.4.12, Table 4-36).
 
 use core::fmt;
+use panweave_types::capacity::{Capacity, VecOf};
 
 use heapless::Vec;
 use panweave_types::{ExtendedAddress, Key128, KeyAttributes, KeySequenceNumber};
@@ -318,17 +319,29 @@ impl Drop for LinkKeyEntry {
 }
 
 /// The APS device key-pair set (`apsDeviceKeyPairSet`).
-#[derive(Clone, Debug, Default)]
-pub struct LinkKeyTable<const N: usize> {
-    entries: Vec<LinkKeyEntry, N>,
+#[derive(Debug)]
+pub struct LinkKeyTable<K: Capacity> {
+    entries: VecOf<LinkKeyEntry, K>,
 }
 
-impl<const N: usize> LinkKeyTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for LinkKeyTable<K> {
+    fn clone(&self) -> Self {
         LinkKeyTable {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for LinkKeyTable<K> {
+    fn default() -> Self {
+        LinkKeyTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> LinkKeyTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        LinkKeyTable { entries: K::vec() }
     }
 
     /// Finds the entry for `partner`.
@@ -414,7 +427,7 @@ mod tests {
 
     #[test]
     fn link_key_table_bounded() {
-        let mut t = LinkKeyTable::<2>::new();
+        let mut t = LinkKeyTable::<panweave_types::capacity::Cap<2>>::new();
         let a = ExtendedAddress(1);
         t.insert(LinkKeyEntry::provisional(
             a,

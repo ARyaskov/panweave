@@ -7,7 +7,9 @@ use panweave_mac::service::{TxHandle, TxStatus};
 use panweave_security::cipher::BlockCipher;
 use panweave_types::{Duration, Instant, NwkStatus, Rng, ShortAddress};
 
-use super::{MAX_NPDU, NpduBuf, Nwk, NwkAction, NwkError, NwkEvent, PendingTx, TxId, TxKind};
+use super::{
+    MAX_NPDU, NpduBuf, Nwk, NwkAction, NwkDims, NwkError, NwkEvent, PendingTx, TxId, TxKind,
+};
 use crate::command::{NetworkStatus, NetworkStatusCode, NwkCommand};
 use crate::frame::{DiscoverRoute, FrameType, Header};
 use crate::nib::constants;
@@ -30,15 +32,7 @@ pub(crate) enum RouteDecision {
     NoRoute,
 }
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// Queues a unicast awaiting its MAC confirm, counting saturation of
     /// the pending table for diagnostics; [`NwkError::Busy`] when it is
     /// full.
@@ -63,7 +57,7 @@ impl<
     /// header of `header_len` octets.
     pub const fn max_payload(header_len: usize, secured: bool) -> usize {
         let overhead = if secured {
-            header_len + NwkSecurity::<C, NEIGHBORS>::aux_header_len() + 4
+            header_len + NwkSecurity::<C, D::Neighbors>::aux_header_len() + 4
         } else {
             header_len
         };
@@ -130,7 +124,7 @@ impl<
                 .map_err(|_| NwkError::FrameTooLong)?;
             return Ok(out);
         }
-        let aux_len = NwkSecurity::<C, NEIGHBORS>::aux_header_len();
+        let aux_len = NwkSecurity::<C, D::Neighbors>::aux_header_len();
         let payload_len = plaintext.len().saturating_sub(header_len);
         let mic_len = self.nib.security_level.mic_len();
         let total = header_len + aux_len + payload_len + mic_len;

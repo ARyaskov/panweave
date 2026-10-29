@@ -17,6 +17,7 @@ use panweave_types::{
     ShortAddress,
 };
 
+use crate::profile::StackProfile;
 use crate::stack::{Stack, StackEvent};
 
 /// Largest inter-PAN application frame (the MAC payload less the stub
@@ -62,7 +63,16 @@ pub struct InterPanIndication {
     pub channel: Channel,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// INTRP-DATA.request: sends `asdu` of `profile` / `cluster` to
     /// `target` on `dst_pan` (the broadcast PAN reaches everyone on the
     /// channel), from this device's PAN and IEEE address. With

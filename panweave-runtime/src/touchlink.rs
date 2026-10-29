@@ -28,6 +28,7 @@ use panweave_types::{
 use panweave_zcl::clusters::touchlink as tl;
 use panweave_zcl::frame::{Direction, Frame as ZclFrame, Header};
 
+use crate::profile::{StackProfile, TouchlinkSlot};
 use crate::provision::{AdoptParams, FormationParams};
 use crate::stack::{JoinMode, Phase, Stack, StackEvent};
 
@@ -128,12 +129,22 @@ pub enum TouchlinkEvent {
     Refused,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
-    /// Enables touchlink commissioning (both roles).
-    pub fn enable_touchlink(&mut self, config: TouchlinkConfig) {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
+    /// Enables touchlink commissioning (both roles); `false` when the
+    /// stack's profile has no touchlink ([`crate::profile::NoTouchlink`]).
+    pub fn enable_touchlink(&mut self, config: TouchlinkConfig) -> bool {
         let mut initiator = Initiator::new(config.key_index);
         initiator.ranges = config.ranges;
-        self.touchlink = Some(Touchlink {
+        self.touchlink.put(Touchlink {
             machines: Some(Machines {
                 initiator,
                 target: Target::new(config.policy),
@@ -142,7 +153,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             seq: 0,
             restore_channel: None,
             pending: None,
-        });
+        })
     }
 
     fn take_machines(&mut self) -> Option<Machines> {
@@ -413,7 +424,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> TouchlinkNode for Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> TouchlinkNode for Stack<C, R, S, P, E, CL, A>
+{
     fn now(&self) -> Instant {
         self.now
     }
@@ -603,7 +623,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> TouchlinkNode for Stack<C, R, S> 
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Clears persistent data after the leave of a pending factory
     /// reset completed.
     pub(crate) fn finish_factory_reset(&mut self) {

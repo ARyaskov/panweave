@@ -7,6 +7,7 @@
 //! and the safety rule in §3.6.4.4.3.1.
 
 use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{ExtendedAddress, LogicalDeviceType, ShortAddress};
 
 use crate::command::TimeoutIndex;
@@ -274,15 +275,37 @@ impl NeighborEntry {
 }
 
 /// Fixed-capacity neighbor table.
-#[derive(Clone, Debug, Default)]
-pub struct NeighborTable<const N: usize> {
-    entries: Vec<NeighborEntry, N>,
+#[derive(Debug)]
+pub struct NeighborTable<K: Capacity> {
+    entries: VecOf<NeighborEntry, K>,
     /// Entries added since start (Diagnostics `NeighborAdded`).
     pub added: u32,
     /// Entries removed since start (Diagnostics `NeighborRemoved`).
     pub removed: u32,
     /// Router entries that went stale (Diagnostics `NeighborStale`).
     pub stale: u32,
+}
+
+impl<K: Capacity> Clone for NeighborTable<K> {
+    fn clone(&self) -> Self {
+        NeighborTable {
+            entries: K::clone_vec(&self.entries),
+            added: self.added,
+            removed: self.removed,
+            stale: self.stale,
+        }
+    }
+}
+
+impl<K: Capacity> Default for NeighborTable<K> {
+    fn default() -> Self {
+        NeighborTable {
+            entries: K::vec(),
+            added: Default::default(),
+            removed: Default::default(),
+            stale: Default::default(),
+        }
+    }
 }
 
 /// Why an insertion failed.
@@ -293,11 +316,11 @@ pub enum NeighborTableError {
     Full,
 }
 
-impl<const N: usize> NeighborTable<N> {
+impl<K: Capacity> NeighborTable<K> {
     /// Empty table.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         NeighborTable {
-            entries: Vec::new(),
+            entries: K::vec(),
             added: 0,
             removed: 0,
             stale: 0,
@@ -306,7 +329,7 @@ impl<const N: usize> NeighborTable<N> {
 
     /// Capacity.
     pub const fn capacity(&self) -> usize {
-        N
+        K::N
     }
 
     /// Number of entries.
@@ -584,7 +607,7 @@ mod tests {
 
     #[test]
     fn insert_evicts_only_stale_routers() {
-        let mut t = NeighborTable::<2>::new();
+        let mut t = NeighborTable::<panweave_types::capacity::Cap<2>>::new();
         t.insert(
             entry(1, Relationship::Child, LogicalDeviceType::EndDevice),
             3,
@@ -622,7 +645,7 @@ mod tests {
 
     #[test]
     fn child_aging_and_security_timer() {
-        let mut t = NeighborTable::<4>::new();
+        let mut t = NeighborTable::<panweave_types::capacity::Cap<4>>::new();
         let mut child = entry(1, Relationship::Child, LogicalDeviceType::EndDevice);
         child.set_timeout(TimeoutIndex(0));
         t.insert(child, 3).unwrap();

@@ -11,8 +11,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -80,7 +81,11 @@ pub struct Clock {
     pub fixed_status: u8,
 }
 
-fn write_guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, _: &Value<'_>) -> ZclStatus {
+fn write_guard<const A: usize, P: ZclProfile>(
+    t: &AttributeTable<A, P>,
+    id: AttributeId,
+    _: &Value<'_>,
+) -> ZclStatus {
     let status = t.u64(TIME_STATUS.id).unwrap_or(0);
     let master = status & u64::from(status::MASTER) != 0;
     let master_zone = status & u64::from(status::MASTER_ZONE_DST) != 0;
@@ -119,10 +124,10 @@ const fn i32v(v: i32) -> Value<'static> {
 /// Builds a server. `fixed_status` are the product's `Master` /
 /// `MasterZoneDst` bits (with `Superseding` if wanted); `zone` adds the
 /// time zone and DST attributes.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     fixed_status: u8,
     zone: bool,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(TIME, &utc(INVALID))?;
     c.add_attribute(
@@ -142,31 +147,28 @@ pub fn server<const A: usize>(
     }
     c.add_attribute(LAST_SET_TIME, &utc(INVALID))?;
     c.add_attribute(VALID_UNTIL_TIME, &utc(INVALID))?;
-    c.write_guard = Some(write_guard::<A>);
-    c.state = ClusterState::Time(Clock {
+    c.write_guard = Some(write_guard::<A, P>);
+    c.set_state(Clock {
         base: None,
         base_at: Instant::from_millis(0),
         published: INVALID,
         fixed_status,
-    });
+    })?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn clock<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Clock> {
-    match &mut c.state {
-        ClusterState::Time(k) => Some(k),
-        _ => None,
-    }
+fn clock<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut Clock> {
+    c.state_mut::<Clock>()
 }
 
 /// Sets the clock from the application (the master clock, or a client
 /// that synchronized elsewhere) to `utc` at `now`.
-pub fn set<const A: usize>(c: &mut ClusterInstance<A>, utc: u32, now: Instant) {
+pub fn set<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, utc: u32, now: Instant) {
     if let Some(k) = clock(c) {
         k.base = Some(utc);
         k.base_at = now;
@@ -179,17 +181,15 @@ pub fn set<const A: usize>(c: &mut ClusterInstance<A>, utc: u32, now: Instant) {
 }
 
 /// The current UTC time of the server at `now`, `None` while unset.
-pub fn now<const A: usize>(c: &ClusterInstance<A>, now: Instant) -> Option<u32> {
-    let ClusterState::Time(k) = &c.state else {
-        return None;
-    };
+pub fn now<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, now: Instant) -> Option<u32> {
+    let k = c.state_ref::<Clock>()?;
     let base = k.base?;
     let elapsed = now.as_millis().saturating_sub(k.base_at.as_millis()) / 1000;
     Some(base.saturating_add(u32::try_from(elapsed).unwrap_or(u32::MAX)))
 }
 
 /// Whether the clock is trusted at `utc` (`ValidUntilTime` not passed).
-pub fn is_valid<const A: usize>(c: &ClusterInstance<A>, utc: u32) -> bool {
+pub fn is_valid<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, utc: u32) -> bool {
     match c.u64(VALID_UNTIL_TIME.id) {
         Some(v) if v != u64::from(INVALID) => u64::from(utc) <= v,
         _ => true,
@@ -198,7 +198,10 @@ pub fn is_valid<const A: usize>(c: &ClusterInstance<A>, utc: u32) -> bool {
 
 /// Local standard time and local time for `utc` from the zone / DST
 /// attributes (`None` without the zone attributes).
-pub fn local_times<const A: usize>(c: &ClusterInstance<A>, utc: u32) -> Option<(u32, u32)> {
+pub fn local_times<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+    utc: u32,
+) -> Option<(u32, u32)> {
     let zone = c.attributes.value(TIME_ZONE.id)?.as_i64()?;
     let standard = i64::from(utc).saturating_add(zone);
     let dst_start = c.u64(DST_START.id).unwrap_or(u64::from(INVALID));
@@ -221,7 +224,7 @@ pub fn local_times<const A: usize>(c: &ClusterInstance<A>, utc: u32) -> Option<(
     Some((clamp(standard), clamp(local)))
 }
 
-fn refresh_derived<const A: usize>(c: &mut ClusterInstance<A>, utc: u32) {
+fn refresh_derived<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, utc: u32) {
     if let Some((standard, local)) = local_times(c, utc) {
         c.set(STANDARD_TIME.id, &u32v(standard));
         c.set(LOCAL_TIME.id, &u32v(local));
@@ -232,11 +235,11 @@ fn refresh_derived<const A: usize>(c: &mut ClusterInstance<A>, utc: u32) {
 /// clock runs): applies a `Time` written over the air as the new base,
 /// keeps the fixed `TimeStatus` bits, and refreshes the derived
 /// attributes. Returns the current UTC time when the clock runs.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u32> {
-    let fixed = match &c.state {
-        ClusterState::Time(k) => k.fixed_status,
-        _ => return None,
-    };
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<u32> {
+    let fixed = c.state_ref::<Clock>()?.fixed_status;
     // The fixed bits survive a write of TimeStatus (§3.12.2.2.2);
     // Synchronized is meaningless on a master clock.
     let status = c.u8(TIME_STATUS.id).unwrap_or(0);

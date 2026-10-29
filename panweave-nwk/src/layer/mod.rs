@@ -30,7 +30,8 @@ mod route;
 mod rx;
 mod tx;
 
-use heapless::{Deque, Vec};
+use heapless::Vec;
+use panweave_types::capacity::{Cap, Capacity, DequeOf, VecOf};
 
 use panweave_mac::ie::EnhancedBeaconRequest;
 use panweave_mac::service::{ScanKind, TxHandle, TxStatus};
@@ -606,52 +607,130 @@ pub(crate) struct FormationState {
     short: Option<ShortAddress>,
 }
 
+/// The capacities of an [`Nwk`]'s tables and queues, chosen at compile
+/// time. [`Dims`] keeps the defaults of the internal queues and names
+/// the four tables a deployment tunes; [`SleepyEndDevice`] is the
+/// smallest set that runs an end device without children.
+pub trait NwkDims: 'static {
+    /// Neighbor table entries; also the senders whose incoming NWK frame
+    /// counters are tracked.
+    type Neighbors: Capacity;
+    /// Routing table and route record table entries.
+    type Routes: Capacity;
+    /// Address map entries.
+    type AddressMap: Capacity;
+    /// Route discoveries in progress.
+    type RouteDiscoveries: Capacity;
+    /// Broadcast transaction records (§3.6.6).
+    type Broadcasts: Capacity;
+    /// Networks remembered by a discovery (`nwkDiscoveryTableSize`); a
+    /// join tries at most [`DISCOVERY_TABLE_SIZE`] of them.
+    type Discovery: Capacity;
+    /// `mibJoiningIeeeList` entries.
+    type JoiningList: Capacity;
+    /// `nwkMacInterfaceTable` entries (at least one).
+    type Interfaces: Capacity;
+    /// Actions for the MAC (a join completes with six at once).
+    type Actions: Capacity;
+    /// Events for the upper layer.
+    type Events: Capacity;
+    /// Unicasts waiting for a route, a retry or a sleepy child.
+    type PendingTx: Capacity;
+    /// Broadcasts buffered for relay or retransmission.
+    type BroadcastBuffers: Capacity;
+    /// Route requests buffered for jittered retransmission.
+    type PendingRreq: Capacity;
+}
+
+/// Table capacities of a router or coordinator: `NEIGHBORS` neighbors,
+/// `ROUTES` routes (and route records and address map entries), `RDT`
+/// route discoveries and `BTT` broadcast transactions, with the default
+/// queues ([`QUEUE_CAPACITY`], [`PENDING_TX`], [`BROADCAST_BUFFERS`],
+/// [`PENDING_RREQ`]) and tables ([`DISCOVERY_TABLE_SIZE`],
+/// [`JOINING_LIST_SIZE`], [`MAC_INTERFACES`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Dims<const NEIGHBORS: usize, const ROUTES: usize, const RDT: usize, const BTT: usize>;
+
+impl<const NEIGHBORS: usize, const ROUTES: usize, const RDT: usize, const BTT: usize> NwkDims
+    for Dims<NEIGHBORS, ROUTES, RDT, BTT>
+{
+    type Neighbors = Cap<NEIGHBORS>;
+    type Routes = Cap<ROUTES>;
+    type AddressMap = Cap<ROUTES>;
+    type RouteDiscoveries = Cap<RDT>;
+    type Broadcasts = Cap<BTT>;
+    type Discovery = Cap<DISCOVERY_TABLE_SIZE>;
+    type JoiningList = Cap<JOINING_LIST_SIZE>;
+    type Interfaces = Cap<MAC_INTERFACES>;
+    type Actions = Cap<QUEUE_CAPACITY>;
+    type Events = Cap<QUEUE_CAPACITY>;
+    type PendingTx = Cap<PENDING_TX>;
+    type BroadcastBuffers = Cap<BROADCAST_BUFFERS>;
+    type PendingRreq = Cap<PENDING_RREQ>;
+}
+
+/// Table capacities of an end device, sleepy or not: no routing state
+/// (an end device sends everything to its parent and relays nothing,
+/// §3.6.3.3), its parent and one candidate as neighbors, a few
+/// broadcast records to drop the duplicates its parent forwards, the
+/// discovery table of a join, and small queues.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SleepyEndDevice;
+
+impl NwkDims for SleepyEndDevice {
+    type Neighbors = Cap<2>;
+    type Routes = Cap<0>;
+    type AddressMap = Cap<2>;
+    type RouteDiscoveries = Cap<0>;
+    type Broadcasts = Cap<4>;
+    type Discovery = Cap<4>;
+    type JoiningList = Cap<0>;
+    type Interfaces = Cap<1>;
+    type Actions = Cap<8>;
+    type Events = Cap<4>;
+    type PendingTx = Cap<2>;
+    type BroadcastBuffers = Cap<1>;
+    type PendingRreq = Cap<0>;
+}
+
 /// The NWK layer.
 ///
-/// Type parameters: block cipher `C`, random generator `R`, and table
-/// capacities for neighbors, routes, route discoveries and broadcast
-/// transactions.
-pub struct Nwk<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> {
+/// Type parameters: block cipher `C`, random generator `R`, and the
+/// table capacities `D` ([`NwkDims`]).
+pub struct Nwk<C: BlockCipher, R: Rng, D: NwkDims = Dims<16, 16, 4, 16>> {
     /// Scalar NIB attributes.
     pub nib: Nib,
     /// Configuration.
     pub config: NwkConfig,
     /// Neighbor table.
-    pub neighbors: NeighborTable<NEIGHBORS>,
+    pub neighbors: NeighborTable<D::Neighbors>,
     /// Routing table.
-    pub routes: RoutingTable<ROUTES>,
+    pub routes: RoutingTable<D::Routes>,
     /// Route record (source route) table.
-    pub source_routes: SourceRouteTable<ROUTES>,
+    pub source_routes: SourceRouteTable<D::Routes>,
     /// Address map.
-    pub address_map: AddressMap<ROUTES>,
+    pub address_map: AddressMap<D::AddressMap>,
     /// Security material.
-    pub security: NwkSecurity<C, NEIGHBORS>,
-    pub(crate) rdt: RouteDiscoveryTable<RDT>,
-    pub(crate) btt: BroadcastTransactionTable<BTT>,
-    pub(crate) discovery: DiscoveryTable<DISCOVERY_TABLE_SIZE>,
+    pub security: NwkSecurity<C, D::Neighbors>,
+    pub(crate) rdt: RouteDiscoveryTable<D::RouteDiscoveries>,
+    pub(crate) btt: BroadcastTransactionTable<D::Broadcasts>,
+    pub(crate) discovery: DiscoveryTable<D::Discovery>,
     /// Beacon counts of the current or last discovery scan
     /// (Mgmt_NWK_Beacon_Survey, §2.4.3.3.12.3 step 8).
     pub(crate) survey: SurveyCounts,
     /// `mibJoiningPolicy` / `mibJoiningIeeeList`.
-    pub joining_list: crate::joining_list::JoiningList<JOINING_LIST_SIZE>,
+    pub joining_list: crate::joining_list::JoiningList<D::JoiningList>,
     /// `nwkMacInterfaceTable` (Table 3-69, §3.6.12): one enabled 2.4 GHz
     /// radio (index 0) by default. Scans and formation use only channels
     /// an enabled interface supports; the entry's `channel_in_use` and
     /// counters follow the layer's operation.
-    pub interfaces: crate::interface::MacInterfaceTable<MAC_INTERFACES>,
+    pub interfaces: crate::interface::MacInterfaceTable<D::Interfaces>,
     pub(crate) rng: R,
-    pub(crate) actions: Deque<NwkAction, QUEUE_CAPACITY>,
-    pub(crate) events: Deque<NwkEvent, QUEUE_CAPACITY>,
-    pub(crate) pending: Vec<PendingTx, PENDING_TX>,
-    pub(crate) bcast_bufs: Vec<BroadcastBuf, BROADCAST_BUFFERS>,
-    pub(crate) pending_rreq: Vec<PendingRreq, PENDING_RREQ>,
+    pub(crate) actions: DequeOf<NwkAction, D::Actions>,
+    pub(crate) events: DequeOf<NwkEvent, D::Events>,
+    pub(crate) pending: VecOf<PendingTx, D::PendingTx>,
+    pub(crate) bcast_bufs: VecOf<BroadcastBuf, D::BroadcastBuffers>,
+    pub(crate) pending_rreq: VecOf<PendingRreq, D::PendingRreq>,
     pub(crate) scan: Option<ScanState>,
     pub(crate) formation: Option<FormationState>,
     pub(crate) join: Option<join::JoinState>,
@@ -740,15 +819,7 @@ pub struct NwkStats {
     pub pending_high_water: u32,
 }
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// Creates a layer with a fresh NIB.
     pub fn new(nib: Nib, config: NwkConfig, mut rng: R) -> Self {
         let mut nib = nib;
@@ -773,11 +844,11 @@ impl<
             interfaces: crate::interface::MacInterfaceTable::single(ChannelMask::ALL_2_4GHZ),
             rreq_id: rng.next_u8(),
             rng,
-            actions: Deque::new(),
-            events: Deque::new(),
-            pending: Vec::new(),
-            bcast_bufs: Vec::new(),
-            pending_rreq: Vec::new(),
+            actions: D::Actions::deque(),
+            events: D::Events::deque(),
+            pending: D::PendingTx::vec(),
+            bcast_bufs: D::BroadcastBuffers::vec(),
+            pending_rreq: D::PendingRreq::vec(),
             scan: None,
             formation: None,
             join: None,
@@ -826,7 +897,7 @@ impl<
     }
 
     /// The discovery table (after [`NwkEvent::DiscoveryConfirm`]).
-    pub const fn discovery(&self) -> &DiscoveryTable<DISCOVERY_TABLE_SIZE> {
+    pub const fn discovery(&self) -> &DiscoveryTable<D::Discovery> {
         &self.discovery
     }
 
@@ -887,6 +958,14 @@ impl<
     /// Records the outcome of persisting a counter reservation.
     pub fn commit_counter_reservation(&mut self, r: Reservation) {
         self.security.commit_counter_reservation(r);
+    }
+
+    /// Reports that the [`NwkAction::CounterReservation`] could not be
+    /// persisted. Frames waiting for it keep waiting (none is secured
+    /// beyond the committed bound) and request a new reservation when
+    /// they are retried, every `COUNTER_RETRY_DELAY`.
+    pub fn abort_counter_reservation(&mut self) {
+        self.security.abort_counter_reservation();
     }
 
     /// Checks whether a counter reservation is needed and emits the action.

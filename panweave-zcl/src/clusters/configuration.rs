@@ -11,8 +11,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 const fn u8v(v: u8) -> Value<'static> {
@@ -168,7 +169,11 @@ pub mod device_temperature {
 
     /// Write guard: temperatures within −200…200 (or the non-value),
     /// `LowTempThreshold` below `HighTempThreshold`, mask bits 0–1.
-    fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let ok = match id {
             i if i == LOW_TEMP_THRESHOLD.id => {
                 in_range(v)
@@ -198,7 +203,9 @@ pub mod device_temperature {
 
     /// Builds a server: the information set and, with `alarms`, the
     /// settings set (an Alarms server is then expected on the endpoint).
-    pub fn server<const A: usize>(alarms: bool) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        alarms: bool,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(CURRENT_TEMPERATURE, &i16v(UNKNOWN))?;
         c.add_attribute(MIN_TEMP_EXPERIENCED, &i16v(UNKNOWN))?;
@@ -210,18 +217,21 @@ pub mod device_temperature {
             c.add_attribute(HIGH_TEMP_THRESHOLD, &i16v(UNKNOWN))?;
             c.add_attribute(LOW_TEMP_DWELL_TRIP_POINT, &u24v(NO_DWELL))?;
             c.add_attribute(HIGH_TEMP_DWELL_TRIP_POINT, &u24v(NO_DWELL))?;
-            c.state = ClusterState::Dwell(Dwell::default());
+            c.set_state(Dwell::default())?;
         }
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
-    fn dwell_secs<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> Option<u32> {
+    fn dwell_secs<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+        id: AttributeId,
+    ) -> Option<u32> {
         c.u64(id)
             .and_then(|v| u32::try_from(v).ok())
             .filter(|s| *s != NO_DWELL)
@@ -230,7 +240,10 @@ pub mod device_temperature {
     /// The alarm a reading calls for before the dwell (§3.4.2.2.2.2–3):
     /// below the low threshold or above the high one, with the
     /// threshold and dwell set and the mask bit on.
-    fn condition<const A: usize>(c: &ClusterInstance<A>, temp: i16) -> Option<(u8, u32)> {
+    fn condition<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+        temp: i16,
+    ) -> Option<(u8, u32)> {
         let mask = c.u8(DEVICE_TEMP_ALARM_MASK.id).unwrap_or(0);
         let low = c.i16(LOW_TEMP_THRESHOLD.id).filter(|t| *t != UNKNOWN);
         let high = c.i16(HIGH_TEMP_THRESHOLD.id).filter(|t| *t != UNKNOWN);
@@ -255,8 +268,8 @@ pub mod device_temperature {
     /// extremes experienced, runs the threshold dwell timers and returns
     /// the alarm code due now (the layer raises one due later from
     /// [`tick`]).
-    pub fn set_temperature<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn set_temperature<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         temp: Option<i16>,
         now: Instant,
     ) -> Option<u8> {
@@ -273,30 +286,22 @@ pub mod device_temperature {
             }
         }
         let condition = temp.and_then(|t| condition(c, t));
-        let ClusterState::Dwell(d) = &mut c.state else {
-            return None;
-        };
+        let d = c.state_mut::<Dwell>()?;
         let due = match condition {
             Some((code, secs)) => d.update(Some(code), secs, now),
             None => d.update(None, 0, now),
         };
-        c.tick = match &c.state {
-            ClusterState::Dwell(d) => d.deadline(),
-            _ => None,
-        };
+        c.tick = c.state_ref::<Dwell>().and_then(Dwell::deadline);
         due
     }
 
     /// Raises a threshold alarm whose dwell elapsed (`None` otherwise).
-    pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u8> {
-        let ClusterState::Dwell(d) = &mut c.state else {
-            return None;
-        };
-        let due = d.tick(now);
-        c.tick = match &c.state {
-            ClusterState::Dwell(d) => d.deadline(),
-            _ => None,
-        };
+    pub fn tick<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        now: Instant,
+    ) -> Option<u8> {
+        let due = c.state_mut::<Dwell>()?.tick(now);
+        c.tick = c.state_ref::<Dwell>().and_then(Dwell::deadline);
         due
     }
 }
@@ -335,7 +340,11 @@ pub mod switch_configuration {
     /// Cluster definition.
     pub const DEF: ClusterDef = def(ID, 1);
 
-    fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        _t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         if id == SWITCH_ACTIONS.id && v.as_u64().is_none_or(|a| a > 2) {
             ZclStatus::InvalidValue
         } else {
@@ -345,25 +354,30 @@ pub mod switch_configuration {
 
     /// Builds a server for a switch of `switch_type` (the endpoint also
     /// carries an On/Off client, §3.9.2.1).
-    pub fn server<const A: usize>(switch_type: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        switch_type: u8,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if switch_type > switch_type::MULTIFUNCTION {
             return Err(ZclStatus::InvalidValue);
         }
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(SWITCH_TYPE, &Value::Enum8(switch_type))?;
         c.add_attribute(SWITCH_ACTIONS, &Value::Enum8(switch_actions::ON_OFF))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The On/Off command to send when the switch arrives at state 2
     /// (`to_state_2`) or returns to state 1 (Table 3-54).
-    pub fn command_for<const A: usize>(c: &ClusterInstance<A>, to_state_2: bool) -> CommandId {
+    pub fn command_for<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+        to_state_2: bool,
+    ) -> CommandId {
         use crate::clusters::on_off::{CMD_OFF, CMD_ON, CMD_TOGGLE};
         match (c.u8(SWITCH_ACTIONS.id).unwrap_or(0), to_state_2) {
             (switch_actions::ON_OFF, true) | (switch_actions::OFF_ON, false) => CMD_ON,
@@ -439,7 +453,10 @@ pub mod ballast {
     /// Cluster definition.
     pub const DEF: ClusterDef = def(ID, 4);
 
-    fn u8_of<const A: usize>(t: &AttributeTable<A>, id: AttributeId) -> Option<u64> {
+    fn u8_of<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+    ) -> Option<u64> {
         t.value(id).and_then(|v| v.as_u64())
     }
 
@@ -447,7 +464,11 @@ pub mod ballast {
     /// MaxLevel, `MaxLevel` within MinLevel…PhysicalMaxLevel, the
     /// adjustment ≥ 100 % or not in use, strings ≤ 16, hours ≤ 0xfffffe
     /// (trip point may be the non-value), the alarm mode bit 0.
-    fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let ok = match id {
             i if i == MIN_LEVEL.id => {
@@ -482,11 +503,11 @@ pub mod ballast {
     /// Builds a server for a ballast with the given physical level range
     /// and lamp count: the ballast information / settings sets and the
     /// lamp information / settings sets.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         physical_min: u8,
         physical_max: u8,
         lamps: u8,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if physical_min == 0 || physical_max == 0xff || physical_min > physical_max {
             return Err(ZclStatus::InvalidValue);
         }
@@ -509,17 +530,20 @@ pub mod ballast {
         c.add_attribute(LAMP_BURN_HOURS, &u24v(0))?;
         c.add_attribute(LAMP_ALARM_MODE, &bits8(0))?;
         c.add_attribute(LAMP_BURN_HOURS_TRIP_POINT, &u24v(UNKNOWN_HOURS))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Sets `BallastStatus`.
-    pub fn set_status<const A: usize>(c: &mut ClusterInstance<A>, status: u8) -> bool {
+    pub fn set_status<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        status: u8,
+    ) -> bool {
         c.set(BALLAST_STATUS.id, &bits8(status & 0x03))
     }
 
@@ -527,7 +551,10 @@ pub mod ballast {
     /// the range) and returns the alarm code when the trip point is
     /// reached with `LampAlarmMode` bit 0 set (§5.3.2.2.4.6), once per
     /// crossing.
-    pub fn add_burn_hours<const A: usize>(c: &mut ClusterInstance<A>, hours: u32) -> Option<u8> {
+    pub fn add_burn_hours<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        hours: u32,
+    ) -> Option<u8> {
         let before = c
             .u64(LAMP_BURN_HOURS.id)
             .and_then(|v| u32::try_from(v).ok())
@@ -549,7 +576,10 @@ pub mod ballast {
     /// The light output for a Level Control `CurrentLevel` (1…254) on
     /// the ballast's dimming curve between `MinLevel` and `MaxLevel`
     /// (§5.3.2.2.2.1–2), scaled by `BallastFactorAdjustment` when in use.
-    pub fn output_for_level<const A: usize>(c: &ClusterInstance<A>, level: u8) -> u8 {
+    pub fn output_for_level<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+        level: u8,
+    ) -> u8 {
         let min = u32::from(c.u8(MIN_LEVEL.id).unwrap_or(1));
         let max = u32::from(c.u8(MAX_LEVEL.id).unwrap_or(0xfe));
         let level = u32::from(level.clamp(1, 0xfe));
@@ -753,7 +783,11 @@ pub mod pump {
         Temperature,
     }
 
-    fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        _t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let ok = match id {
             i if i == OPERATION_MODE.id => val <= u64::from(operation_mode::LOCAL),
@@ -771,10 +805,10 @@ pub mod pump {
     /// Builds a server with the mandatory information, dynamic
     /// information and settings attributes; `alarm_mask` names the
     /// alarms the pump can raise.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         limits: Limits,
         alarm_mask: u16,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(MAX_PRESSURE, &i16v(limits.max_pressure))?;
         c.add_attribute(MAX_SPEED, &u16v(limits.max_speed))?;
@@ -798,12 +832,12 @@ pub mod pump {
                 bits: u64::from(alarm_mask & 0x3fff),
             },
         )?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
@@ -812,8 +846,8 @@ pub mod pump {
     /// Normal a connected remote sensor decides the control mode, else
     /// `ControlMode` does. Updates the effective attributes and the
     /// remote-sensor status bits; returns `(operation, control)`.
-    pub fn resolve_modes<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn resolve_modes<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         remote: Option<RemoteSensor>,
     ) -> (u8, u8) {
         let op = c.u8(OPERATION_MODE.id).unwrap_or(operation_mode::NORMAL);
@@ -847,7 +881,10 @@ pub mod pump {
     }
 
     /// Sets `PumpStatus`; returns whether it changed.
-    pub fn set_status<const A: usize>(c: &mut ClusterInstance<A>, status: u16) -> bool {
+    pub fn set_status<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        status: u16,
+    ) -> bool {
         c.set(
             PUMP_STATUS.id,
             &Value::Bits {
@@ -859,7 +896,11 @@ pub mod pump {
 
     /// Records the running state: `Capacity` (0.5 %), `Speed` and the
     /// Running status bit.
-    pub fn set_running<const A: usize>(c: &mut ClusterInstance<A>, capacity: i16, speed: u16) {
+    pub fn set_running<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        capacity: i16,
+        speed: u16,
+    ) {
         c.set_i16(CAPACITY.id, capacity);
         if c.attributes.get(SPEED.id, None).is_some() {
             c.set_u16(SPEED.id, speed);
@@ -875,7 +916,10 @@ pub mod pump {
 
     /// The alarm code to raise for a Table 6-9 condition when its
     /// `AlarmMask` bit is set; the matching fault status bit is set.
-    pub fn alarm<const A: usize>(c: &mut ClusterInstance<A>, code: u8) -> Option<u8> {
+    pub fn alarm<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        code: u8,
+    ) -> Option<u8> {
         if code > alarm_code::MAX {
             return None;
         }
@@ -936,7 +980,11 @@ pub mod dehumidification {
     /// Cluster definition.
     pub const DEF: ClusterDef = def(ID, 2);
 
-    fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        _t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let ok = match id {
             i if i == RH_DEHUMIDIFICATION_SETPOINT.id => (0x1e..=0x64).contains(&val),
@@ -958,7 +1006,7 @@ pub mod dehumidification {
     }
 
     /// Builds a server with the full attribute set at its defaults.
-    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(RELATIVE_HUMIDITY, &u8v(0))?;
         c.add_reported_attribute(DEHUMIDIFICATION_COOLING, &u8v(0), COOLING_REPORTING)?;
@@ -968,12 +1016,12 @@ pub mod dehumidification {
         c.add_attribute(DEHUMIDIFICATION_HYSTERESIS, &u8v(0x02))?;
         c.add_attribute(DEHUMIDIFICATION_MAX_COOL, &u8v(0x14))?;
         c.add_attribute(RELATIVE_HUMIDITY_DISPLAY, &Value::Enum8(0))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
@@ -982,7 +1030,10 @@ pub mod dehumidification {
     /// once the humidity has fallen by the hysteresis below it, the
     /// previous demand in between; nothing while locked out. Returns
     /// the demand.
-    pub fn set_humidity<const A: usize>(c: &mut ClusterInstance<A>, humidity: u8) -> u8 {
+    pub fn set_humidity<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        humidity: u8,
+    ) -> u8 {
         let h = humidity.min(100);
         c.set_u8(RELATIVE_HUMIDITY.id, h);
         let setpoint = c.u8(RH_DEHUMIDIFICATION_SETPOINT.id).unwrap_or(0x32);
@@ -1022,7 +1073,11 @@ pub mod thermostat_ui {
     /// Cluster definition.
     pub const DEF: ClusterDef = def(ID, 2);
 
-    fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        _t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let ok = match id {
             i if i == TEMPERATURE_DISPLAY_MODE.id => val <= 1,
@@ -1039,17 +1094,17 @@ pub mod thermostat_ui {
 
     /// Builds a server (Celsius, no lockout, schedule programming
     /// visible; the optional visibility attribute is included).
-    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(TEMPERATURE_DISPLAY_MODE, &Value::Enum8(0))?;
         c.add_attribute(KEYPAD_LOCKOUT, &Value::Enum8(0))?;
         c.add_attribute(SCHEDULE_PROGRAMMING_VISIBILITY, &Value::Enum8(0))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 }
@@ -1090,7 +1145,11 @@ pub mod shade {
 
     /// Write guard: only the motor-direction bit of `Status` is
     /// writable, `Mode` is 0 or 1, `ClosedLimit` is 1…0xfffe.
-    fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let ok = match id {
             i if i == STATUS.id => {
@@ -1110,10 +1169,10 @@ pub mod shade {
 
     /// Builds a server for a shade whose motor takes `closed_limit`
     /// steps of `step_size` to close.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         closed_limit: u16,
         step_size: u8,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if closed_limit == 0 || closed_limit == 0xffff {
             return Err(ZclStatus::InvalidValue);
         }
@@ -1123,17 +1182,21 @@ pub mod shade {
         c.add_attribute(STATUS, &bits8(status::OPERATIONAL))?;
         c.add_attribute(CLOSED_LIMIT, &u16v(closed_limit))?;
         c.add_attribute(MODE, &Value::Enum8(0))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Records the motion state: adjusting and its direction (`opening`).
-    pub fn set_motion<const A: usize>(c: &mut ClusterInstance<A>, adjusting: bool, opening: bool) {
+    pub fn set_motion<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        adjusting: bool,
+        opening: bool,
+    ) {
         let mut s = c.u8(STATUS.id).unwrap_or(0) & !(status::ADJUSTING | status::DIRECTION);
         if adjusting {
             s |= status::ADJUSTING;
@@ -1239,7 +1302,11 @@ pub mod barrier_control {
         Default(ZclStatus),
     }
 
-    fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        _t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_u64().unwrap_or(u64::MAX);
         let counters = [
             OPEN_EVENTS.id,
@@ -1259,11 +1326,11 @@ pub mod barrier_control {
     /// Builds a server: `partial` sets the PartialBarrier capability;
     /// `open_period` / `close_period` are the expected travel times in
     /// tenths of a second.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         partial: bool,
         open_period: u16,
         close_period: u16,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(
             MOVING_STATE,
@@ -1286,16 +1353,16 @@ pub mod barrier_control {
         c.add_attribute(OPEN_PERIOD, &u16v(open_period.min(EVENTS_MAX)))?;
         c.add_attribute(CLOSE_PERIOD, &u16v(close_period.min(EVENTS_MAX)))?;
         c.add_reported_attribute(BARRIER_POSITION, &u8v(POSITION_UNKNOWN), REPORTING)?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
-    fn bump<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {
+    fn bump<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, id: AttributeId) {
         let n = c.u16(id).unwrap_or(0);
         if n < EVENTS_MAX {
             c.set_u16(id, n + 1);
@@ -1306,8 +1373,8 @@ pub mod barrier_control {
     /// position commands (FAILURE); a barrier without the partial
     /// capability accepts 0 and 100 only (INVALID_VALUE). An accepted Go
     /// To Percent counts a command open / close event.
-    pub fn handle<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         cmd: CommandId,
         payload: &[u8],
     ) -> Outcome {
@@ -1341,7 +1408,11 @@ pub mod barrier_control {
     /// Records the barrier's motion and position (`None` = unknown):
     /// counts open / close events on the transitions of §7.5.2.1.4–5 and
     /// keeps the position unknown while a non-partial barrier moves.
-    pub fn set_state<const A: usize>(c: &mut ClusterInstance<A>, moving: u8, position: Option<u8>) {
+    pub fn set_state<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        moving: u8,
+        position: Option<u8>,
+    ) {
         let partial = c.u8(CAPABILITIES.id).unwrap_or(0) & CAPABILITY_PARTIAL_BARRIER != 0;
         let before = c.u8(BARRIER_POSITION.id).unwrap_or(POSITION_UNKNOWN);
         let shown = match position {
@@ -1364,8 +1435,8 @@ pub mod barrier_control {
 
     /// Sets `SafetyStatus`; returns the alarm codes (bit numbers) that
     /// newly became active for the Alarms cluster.
-    pub fn set_safety<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn set_safety<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         status: u16,
     ) -> heapless::Vec<u8, 4> {
         let previous = c.u16(SAFETY_STATUS.id).unwrap_or(0);
@@ -1386,7 +1457,7 @@ pub mod barrier_control {
     }
 
     /// Scene extension field set (§7.5.2.4): `BarrierPosition`.
-    pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 1] {
+    pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 1] {
         [c.u8(BARRIER_POSITION.id).unwrap_or(POSITION_UNKNOWN)]
     }
 }
@@ -1480,7 +1551,7 @@ mod tests {
         use crate::clusters::on_off::{CMD_OFF, CMD_ON, CMD_TOGGLE};
         use switch_configuration::*;
         let mut c: ClusterInstance<8> = server(switch_type::MOMENTARY).unwrap();
-        assert!(server::<8>(3).is_err());
+        assert!(server::<8, crate::Full>(3).is_err());
         let g = c.write_guard.unwrap();
         assert_eq!(
             g(&c.attributes, SWITCH_ACTIONS.id, &Value::Enum8(3)),
@@ -1499,7 +1570,7 @@ mod tests {
     fn ballast_levels_factor_and_burn_hours() {
         use ballast::*;
         let mut c: ClusterInstance<24> = server(10, 250, 2).unwrap();
-        assert!(server::<24>(0, 250, 1).is_err());
+        assert!(server::<24, crate::Full>(0, 250, 1).is_err());
         let g = c.write_guard.unwrap();
         // MinLevel within [PhysicalMinLevel, MaxLevel]; MaxLevel within
         // [MinLevel, PhysicalMaxLevel].
@@ -1679,7 +1750,7 @@ mod tests {
         }
         use shade::*;
         let mut c: ClusterInstance<8> = server(2000, 4).unwrap();
-        assert!(server::<8>(0, 4).is_err());
+        assert!(server::<8, crate::Full>(0, 4).is_err());
         let g = c.write_guard.unwrap();
         // Only the motor-direction bit of Status may be written.
         assert_eq!(

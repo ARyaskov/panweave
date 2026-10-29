@@ -102,7 +102,10 @@ fn exchange(
         Direction::ToServer,
     );
     let bytes = frame(&header, payload);
-    let out = zcl.on_data(&ind(cluster, &bytes, false), &mut GroupTable::<4>::new());
+    let out = zcl.on_data(
+        &ind(cluster, &bytes, false),
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
+    );
     assert!(out.is_none(), "global commands are handled internally");
     match zcl.next_action()? {
         ZclAction::Send {
@@ -247,7 +250,7 @@ fn default_responses_and_cluster_specific_commands() {
     assert!(
         zcl.on_data(
             &ind(ClusterId(0x0500), &bytes, false),
-            &mut GroupTable::<4>::new()
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
         )
         .is_none()
     );
@@ -270,7 +273,7 @@ fn default_responses_and_cluster_specific_commands() {
     assert!(
         zcl.on_data(
             &ind(ClusterId(0x0500), &bytes, true),
-            &mut GroupTable::<4>::new()
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
         )
         .is_none()
     );
@@ -284,7 +287,10 @@ fn default_responses_and_cluster_specific_commands() {
         Direction::ToServer,
     );
     let bytes = frame(&header, &[]);
-    let out = zcl.on_data(&ind(on_off::ID, &bytes, false), &mut GroupTable::<4>::new());
+    let out = zcl.on_data(
+        &ind(on_off::ID, &bytes, false),
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
+    );
     assert!(out.is_none(), "On/Off is executed by the layer");
     let c = zcl.cluster(SERVER_EP, on_off::ID, Role::Server).unwrap();
     assert!(on_off::is_on(c));
@@ -306,8 +312,11 @@ fn default_responses_and_cluster_specific_commands() {
     let header = header.disable_default_response(true);
     let bytes = frame(&header, &[]);
     assert!(
-        zcl.on_data(&ind(on_off::ID, &bytes, false), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(on_off::ID, &bytes, false),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     assert!(zcl.next_action().is_none());
     assert!(zcl.next_event().is_none(), "no change, no event");
@@ -322,7 +331,7 @@ fn default_responses_and_cluster_specific_commands() {
     let bytes = frame(&header, &[1, 2]);
     let Some(ZclIndication::Command { origin, payload }) = zcl.on_data(
         &ind(ClusterId(0x0402), &bytes, false),
-        &mut GroupTable::<4>::new(),
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
     ) else {
         panic!("expected command");
     };
@@ -342,8 +351,11 @@ fn default_responses_and_cluster_specific_commands() {
     );
     let bytes = frame(&header, &[]);
     assert!(
-        zcl.on_data(&ind(on_off::ID, &bytes, false), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(on_off::ID, &bytes, false),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     let ZclAction::Send { frame: f, .. } = zcl.next_action().unwrap();
     let (_, n) = Header::decode_prefix(&f).unwrap();
@@ -487,7 +499,10 @@ fn reporting_configuration_and_reports() {
         ..ind(on_off::ID, &f, false)
     };
     rep.delivery = Delivery::Endpoint(Endpoint(5));
-    let out = client.on_data(&rep, &mut GroupTable::<4>::new());
+    let out = client.on_data(
+        &rep,
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
+    );
     assert!(matches!(out, Some(ZclIndication::Report { .. })));
     assert!(
         client.next_action().is_none(),
@@ -511,7 +526,7 @@ fn group_delivery_targets_member_endpoints_only() {
     let bytes = frame(&header, &[]);
     let mut i = ind(on_off::ID, &bytes, true);
     i.delivery = Delivery::Group(panweave_types::GroupAddress(1));
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     groups
         .add(panweave_types::GroupAddress(1), Endpoint(2))
         .unwrap();
@@ -549,8 +564,11 @@ fn identify_server_countdown_and_query() {
     // Not identifying: a broadcast Identify Query is silently ignored.
     let q = frame(&cs(1, identify::CMD_IDENTIFY_QUERY), &[]);
     assert!(
-        zcl.on_data(&ind(identify::ID, &q, true), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(identify::ID, &q, true),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     assert!(zcl.next_action().is_none());
     assert!(zcl.next_event().is_none());
@@ -558,8 +576,11 @@ fn identify_server_countdown_and_query() {
     // Identify(3 s): attribute set, Default Response, event.
     let id = frame(&cs(2, identify::CMD_IDENTIFY), &3u16.to_le_bytes());
     assert!(
-        zcl.on_data(&ind(identify::ID, &id, false), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(identify::ID, &id, false),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     assert_eq!(
         zcl.next_event(),
@@ -586,8 +607,11 @@ fn identify_server_countdown_and_query() {
     // Identify Query while identifying → unicast Identify Query Response
     // with the remaining time.
     assert!(
-        zcl.on_data(&ind(identify::ID, &q, true), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(identify::ID, &q, true),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     let Some(ZclAction::Send {
         destination,
@@ -638,16 +662,22 @@ fn identify_server_countdown_and_query() {
     // Only the OnOff default report (5 min after construction) remains.
     assert_eq!(zcl.next_deadline(), Some(Instant::from_millis(300_000)));
     assert!(
-        zcl.on_data(&ind(identify::ID, &q, true), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(identify::ID, &q, true),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     assert!(zcl.next_action().is_none());
 
     // Trigger Effect is surfaced to the application.
     let te = frame(&cs(3, identify::CMD_TRIGGER_EFFECT), &[0x01, 0x00]);
     assert!(
-        zcl.on_data(&ind(identify::ID, &te, false), &mut GroupTable::<4>::new())
-            .is_none()
+        zcl.on_data(
+            &ind(identify::ID, &te, false),
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
     );
     assert_eq!(
         zcl.next_event(),
@@ -663,7 +693,10 @@ fn identify_server_countdown_and_query() {
 /// or the response header when a real response came back.
 fn reply(zcl: &mut Node, cluster: ClusterId, header: &Header, payload: &[u8]) -> (Header, Vec<u8>) {
     let bytes = frame(header, payload);
-    let _ = zcl.on_data(&ind(cluster, &bytes, false), &mut GroupTable::<4>::new());
+    let _ = zcl.on_data(
+        &ind(cluster, &bytes, false),
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
+    );
     let ZclAction::Send { frame, .. } = zcl.next_action().expect("a reply");
     let (h, n) = Header::decode_prefix(&frame).unwrap();
     (h, frame[n..].to_vec())

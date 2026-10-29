@@ -13,6 +13,7 @@ use crate::global::{
     DiscoverCommands, ReadAttributeStatus, ReadReportingConfig, ReadReportingConfigStatus, Records,
     ReportDirection, ReportingConfig, WriteAttributeStatus, WriteStructuredStatus, command,
 };
+use crate::profile::{Full, Holds, StateStore, ZclProfile};
 use crate::structured::{self, Selector};
 use crate::types::{DataType, Value};
 
@@ -71,81 +72,82 @@ pub enum GlobalOutcome {
 /// generic type / access checks (cluster-specific ranges and
 /// relationships, e.g. Poll Control §3.16.4.1). Returns the status for
 /// the Write Attributes Response record.
-pub type WriteGuard<const A: usize> = fn(&AttributeTable<A>, AttributeId, &Value<'_>) -> ZclStatus;
+pub type WriteGuard<const A: usize, P = Full> =
+    fn(&AttributeTable<A, P>, AttributeId, &Value<'_>) -> ZclStatus;
 
 /// Cluster-specific follow-up to a successful network write of the
 /// attribute (derived attributes such as status flags are refreshed).
-pub type AfterWrite<const A: usize> = fn(&mut ClusterInstance<A>, AttributeId);
+pub type AfterWrite<const A: usize, P = Full> = fn(&mut ClusterInstance<A, P>, AttributeId);
 
-/// Cluster-specific runtime state of the clusters executed by the
-/// endpoint dispatcher.
-#[derive(Clone, Debug, Default)]
-// The Color Control engine is the largest state; every instance carries
-// the enum, which is bounded and heap-free by design.
-#[allow(clippy::large_enum_variant)]
-pub enum ClusterState {
-    /// No state.
-    #[default]
-    None,
-    /// Level Control transition (§3.10).
-    Level(crate::clusters::level::Transition),
-    /// Poll Control server / client state (§3.16).
-    PollControl(crate::clusters::poll_control::State),
-    /// Time server clock (§3.12).
-    Time(crate::clusters::time::Clock),
-    /// Alarms server table (§3.11).
-    Alarms(crate::clusters::alarms::Table),
-    /// IAS Zone server state (§8.2).
-    IasZone(crate::clusters::ias_zone::State),
-    /// Color Control transition engine (§5.2).
-    Color(crate::clusters::color_control::Engine),
-    /// Door Lock server state: PIN users and timers (§7.3).
-    DoorLock(crate::clusters::door_lock::State),
-    /// IAS ACE server state: the zone table and panel status (§8.3).
-    IasAce(crate::clusters::ias_ace::Panel),
-    /// Commissioning server state: the saved startup sets (§13.2).
-    Commissioning(crate::clusters::commissioning::State),
-    /// Thermostat server state: the weekly setpoint schedule (§6.3).
-    Thermostat(crate::clusters::hvac::thermostat::Schedule),
-    /// Power Configuration mains server: the voltage dwell timer (§3.3).
-    Mains(crate::clusters::power_configuration::MainsDwell),
-    /// A threshold dwell timer (Device Temperature Configuration §3.4).
-    Dwell(crate::clusters::configuration::Dwell),
-    /// Appliance Control server state: the signal state (§15.2).
-    ApplianceControl(crate::clusters::appliance::control::State),
-    /// Appliance Events and Alerts server state: the current alerts
-    /// (§15.4).
-    ApplianceAlerts(crate::clusters::appliance::events_alerts::Alerts),
-    /// Appliance Statistics server state: the log queue (§15.5).
-    ApplianceLogs(crate::clusters::appliance::statistics::LogQueue),
-    /// Power Profile server state: the profiles (§3.17).
-    PowerProfile(crate::clusters::power_profile::Profiles),
-    /// RSSI Location server state: repeated responses, ping blasts
-    /// and collected RSSI responses (§3.13).
-    RssiLocation(crate::clusters::rssi_location::State),
-    /// Zigbee Direct Configuration server state: the security model of
-    /// the network (ZD 1.1 §11.3.5.1).
-    DirectConfiguration(crate::clusters::direct_configuration::State),
+crate::cluster_state! {
+    /// Cluster-specific runtime state of the clusters executed by the
+    /// endpoint dispatcher: the [`Full`] profile's state store.
+    // The Door Lock user table is the largest state; every instance
+    // carries the enum, which is bounded and heap-free by design.
+    #[allow(clippy::large_enum_variant)]
+    pub enum ClusterState {
+        /// Level Control transition (§3.10).
+        Level(crate::clusters::level::Transition),
+        /// Poll Control server / client state (§3.16).
+        PollControl(crate::clusters::poll_control::State),
+        /// Time server clock (§3.12).
+        Time(crate::clusters::time::Clock),
+        /// Alarms server table (§3.11).
+        Alarms(crate::clusters::alarms::Table),
+        /// IAS Zone server state (§8.2).
+        IasZone(crate::clusters::ias_zone::State),
+        /// Color Control transition engine (§5.2).
+        Color(crate::clusters::color_control::Engine),
+        /// Door Lock server state: PIN users and timers (§7.3).
+        DoorLock(crate::clusters::door_lock::State),
+        /// IAS ACE server state: the zone table and panel status (§8.3).
+        IasAce(crate::clusters::ias_ace::Panel),
+        /// Commissioning server state: the saved startup sets (§13.2).
+        Commissioning(crate::clusters::commissioning::State),
+        /// Thermostat server state: the weekly setpoint schedule (§6.3).
+        Thermostat(crate::clusters::hvac::thermostat::Schedule),
+        /// Power Configuration mains server: the voltage dwell timer (§3.3).
+        Mains(crate::clusters::power_configuration::MainsDwell),
+        /// A threshold dwell timer (Device Temperature Configuration §3.4).
+        Dwell(crate::clusters::configuration::Dwell),
+        /// Appliance Control server state: the signal state (§15.2).
+        ApplianceControl(crate::clusters::appliance::control::State),
+        /// Appliance Events and Alerts server state: the current alerts
+        /// (§15.4).
+        ApplianceAlerts(crate::clusters::appliance::events_alerts::Alerts),
+        /// Appliance Statistics server state: the log queue (§15.5).
+        ApplianceLogs(crate::clusters::appliance::statistics::LogQueue),
+        /// Power Profile server state: the profiles (§3.17).
+        PowerProfile(crate::clusters::power_profile::Profiles),
+        /// RSSI Location server state: repeated responses, ping blasts
+        /// and collected RSSI responses (§3.13).
+        RssiLocation(crate::clusters::rssi_location::State),
+        /// Zigbee Direct Configuration server state: the security model of
+        /// the network (ZD 1.1 §11.3.5.1).
+        DirectConfiguration(crate::clusters::direct_configuration::State),
+    }
+    unsupported {}
 }
 
-/// A cluster instance.
+/// A cluster instance of up to `A` attributes, its storage dimensioned
+/// by the profile `P` ([`ZclProfile`]).
 #[derive(Clone, Debug)]
-pub struct ClusterInstance<const A: usize> {
+pub struct ClusterInstance<const A: usize, P: ZclProfile = Full> {
     /// Definition.
     pub def: ClusterDef,
     /// Role.
     pub role: Role,
     /// Attributes.
-    pub attributes: AttributeTable<A>,
+    pub attributes: AttributeTable<A, P>,
     /// Cluster-specific periodic timer (e.g. the Identify countdown),
     /// serviced by the endpoint dispatcher.
     pub tick: Option<Instant>,
     /// Cluster-specific state.
-    pub state: ClusterState,
+    pub state: P::State,
     /// Cluster-specific validation of network writes.
-    pub write_guard: Option<WriteGuard<A>>,
+    pub write_guard: Option<WriteGuard<A, P>>,
     /// Cluster-specific follow-up to network writes.
-    pub after_write: Option<AfterWrite<A>>,
+    pub after_write: Option<AfterWrite<A, P>>,
     /// Manufacturer code of a manufacturer-specific cluster (§2.3.3):
     /// frames must carry it in their header, and only such frames reach
     /// the instance.
@@ -156,7 +158,7 @@ pub struct ClusterInstance<const A: usize> {
     report_pending: bool,
 }
 
-impl<const A: usize> ClusterInstance<A> {
+impl<const A: usize, P: ZclProfile> ClusterInstance<A, P> {
     /// Creates the instance with the mandatory `ClusterRevision`
     /// attribute (§2.3.4.5.1).
     pub fn new(def: ClusterDef, role: Role) -> Self {
@@ -173,7 +175,7 @@ impl<const A: usize> ClusterInstance<A> {
             role,
             attributes,
             tick: None,
-            state: ClusterState::None,
+            state: P::State::default(),
             write_guard: None,
             after_write: None,
             manufacturer: None,
@@ -216,118 +218,46 @@ impl<const A: usize> ClusterInstance<A> {
     pub fn reset_to_defaults(&mut self, now: Instant) {
         self.attributes.reset_to_defaults(now);
         self.tick = None;
-        self.state = match core::mem::take(&mut self.state) {
-            ClusterState::Level(_) => {
-                ClusterState::Level(crate::clusters::level::Transition::default())
-            }
-            ClusterState::PollControl(_) => {
-                ClusterState::PollControl(crate::clusters::poll_control::State::default())
-            }
-            ClusterState::Time(k) => ClusterState::Time(crate::clusters::time::Clock {
-                base: None,
-                published: crate::clusters::time::INVALID,
-                ..k
-            }),
-            ClusterState::Alarms(_) => {
-                ClusterState::Alarms(crate::clusters::alarms::Table::default())
-            }
-            ClusterState::IasZone(z) => ClusterState::IasZone(crate::clusters::ias_zone::State {
-                cie: None,
-                cie_address: 0,
-                enroll_request_due: false,
-                notify_due: None,
-                test_until: None,
-                ..z
-            }),
-            ClusterState::Color(_) => {
-                ClusterState::Color(crate::clusters::color_control::Engine::default())
-            }
-            ClusterState::DoorLock(d) => {
-                // The PIN users are wiped, the slot count is kept.
-                let mut users = heapless::Vec::new();
-                for _ in 0..d.users.len() {
-                    let _ = users.push(crate::clusters::door_lock::User::default());
-                }
-                ClusterState::DoorLock(crate::clusters::door_lock::State {
-                    users,
-                    ..crate::clusters::door_lock::State::default()
-                })
-            }
-            ClusterState::IasAce(p) => {
-                // The zone table and code are wiped; the panel is disarmed.
-                ClusterState::IasAce(crate::clusters::ias_ace::Panel {
-                    audible: p.audible,
-                    ready: true,
-                    ..crate::clusters::ias_ace::Panel::default()
-                })
-            }
-            ClusterState::Commissioning(_) => {
-                ClusterState::Commissioning(crate::clusters::commissioning::State::default())
-            }
-            ClusterState::Thermostat(s) => {
-                // The transitions are wiped, the capacities kept.
-                ClusterState::Thermostat(crate::clusters::hvac::thermostat::Schedule {
-                    weekly: s.weekly,
-                    daily: s.daily,
-                    dirty: true,
-                    ..crate::clusters::hvac::thermostat::Schedule::default()
-                })
-            }
-            ClusterState::Mains(_) => {
-                ClusterState::Mains(crate::clusters::power_configuration::MainsDwell::default())
-            }
-            ClusterState::Dwell(_) => {
-                ClusterState::Dwell(crate::clusters::configuration::Dwell::default())
-            }
-            ClusterState::ApplianceControl(_) => {
-                ClusterState::ApplianceControl(crate::clusters::appliance::control::State::default())
-            }
-            ClusterState::ApplianceAlerts(_) => ClusterState::ApplianceAlerts(
-                crate::clusters::appliance::events_alerts::Alerts::default(),
-            ),
-            ClusterState::ApplianceLogs(_) => ClusterState::ApplianceLogs(
-                crate::clusters::appliance::statistics::LogQueue::default(),
-            ),
-            ClusterState::DirectConfiguration(s) => ClusterState::DirectConfiguration(s),
-            ClusterState::RssiLocation(s) => {
-                // The identity is kept; pending work is dropped.
-                ClusterState::RssiLocation(crate::clusters::rssi_location::State {
-                    pending_responses: 0,
-                    requester: None,
-                    pending_pings: 0,
-                    collected: heapless::Vec::new(),
-                    report_at: None,
-                    next_response: None,
-                    next_ping: None,
-                    next_report: None,
-                    calculated_at: None,
-                    ..s
-                })
-            }
-            ClusterState::PowerProfile(p) => {
-                // The profile slots are kept; forecasts, schedules and
-                // constraints are wiped.
-                let mut wiped = crate::clusters::power_profile::Profiles::default();
-                for e in &p.entries {
-                    let _ = wiped.entries.push(crate::clusters::power_profile::Entry {
-                        phases: heapless::Vec::new(),
-                        record: crate::clusters::power_profile::ProfileRecord {
-                            energy_phase: crate::clusters::power_profile::NO_PHASE,
-                            state: crate::clusters::power_profile::state::IDLE,
-                            ..e.record
-                        },
-                        schedule: heapless::Vec::new(),
-                        constraints: crate::clusters::power_profile::Constraints {
-                            id: e.record.id,
-                            start_after: 0,
-                            stop_before: crate::clusters::power_profile::NO_STOP,
-                        },
-                    });
-                }
-                ClusterState::PowerProfile(wiped)
-            }
-            ClusterState::None => ClusterState::None,
-        };
+        self.state.reset();
+    }
+
+    /// The cluster-specific state of kind `T`, when the instance holds
+    /// it.
+    pub fn state_ref<T>(&self) -> Option<&T>
+    where
+        P::State: Holds<T>,
+    {
+        Holds::<T>::get(&self.state)
+    }
+
+    /// The cluster-specific state of kind `T`, mutably.
+    pub fn state_mut<T>(&mut self) -> Option<&mut T>
+    where
+        P::State: Holds<T>,
+    {
+        Holds::<T>::get_mut(&mut self.state)
+    }
+
+    /// The cluster-specific state of kind `T`, installed with its
+    /// default when the instance holds none; `None` when the profile
+    /// cannot hold that kind.
+    pub fn state_or_default<T: Default>(&mut self) -> Option<&mut T>
+    where
+        P::State: Holds<T>,
+    {
+        if Holds::<T>::get(&self.state).is_none() {
+            let _ = Holds::<T>::put(&mut self.state, T::default());
+        }
+        Holds::<T>::get_mut(&mut self.state)
+    }
+
+    /// Gives the instance its cluster-specific state; fails with
+    /// `INSUFFICIENT_SPACE` when the profile cannot hold that kind.
+    pub fn set_state<T>(&mut self, state: T) -> Result<(), ZclStatus>
+    where
+        P::State: Holds<T>,
+    {
+        Holds::<T>::put(&mut self.state, state).map_err(|_| ZclStatus::InsufficientSpace)
     }
 
     /// Unsigned value of a standard attribute (`None` when absent).
@@ -891,8 +821,10 @@ impl<const A: usize> ClusterInstance<A> {
                 }
                 if max == 0 && min == 0xffff {
                     // Revert to the default configuration: reporting off.
-                    a.configure_reporting(0, 0xffff, 0, now);
-                    return ZclStatus::Success;
+                    return match a.configure_reporting(0, 0xffff, 0, now) {
+                        Ok(()) => ZclStatus::Success,
+                        Err(status) => status,
+                    };
                 }
                 let change = match change {
                     Some(Value::Single(f)) => f64::from(f).to_bits(),
@@ -900,15 +832,19 @@ impl<const A: usize> ClusterInstance<A> {
                     Some(Value::Semi(bits)) => f64::from(crate::types::semi_to_f32(bits)).to_bits(),
                     other => other.as_ref().and_then(Value::as_u64).unwrap_or(0),
                 };
-                a.configure_reporting(min, max, change, now);
-                ZclStatus::Success
+                match a.configure_reporting(min, max, change, now) {
+                    Ok(()) => ZclStatus::Success,
+                    Err(status) => status,
+                }
             }
             ReportingConfig::Received { id, timeout } => {
                 let Some(mut a) = self.attributes.get_mut(id, manuf) else {
                     return ZclStatus::UnreportableAttribute;
                 };
-                a.set_report_timeout(timeout);
-                ZclStatus::Success
+                match a.set_report_timeout(timeout) {
+                    Ok(()) => ZclStatus::Success,
+                    Err(status) => status,
+                }
             }
         }
     }
@@ -1150,7 +1086,8 @@ mod reporting_status_tests {
             c.attributes
                 .get_mut(id, None)
                 .unwrap()
-                .configure_reporting(0, 10, 0, now);
+                .configure_reporting(0, 10, 0, now)
+                .unwrap();
         }
         let later = now + panweave_types::time::Duration::from_secs(11);
         // Room for two 5-octet records plus the status record.

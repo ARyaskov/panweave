@@ -99,7 +99,7 @@ fn command(
         Direction::ToServer,
     );
     let bytes = frame(&header, payload);
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     while zcl.next_action().is_some() {}
     let handed = matches!(
         zcl.on_data(&ind(cluster, &bytes), &mut groups),

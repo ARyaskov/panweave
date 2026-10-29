@@ -6,6 +6,7 @@ use panweave_types::ClusterId;
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -95,7 +96,9 @@ pub struct Identity<'a> {
 
 /// Builds a server with the mandatory attributes; the optional ones are
 /// added by the application.
-pub fn server<const A: usize>(identity: &Identity<'_>) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>(
+    identity: &Identity<'_>,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(
         COMPANY_NAME,
@@ -143,7 +146,7 @@ pub fn server<const A: usize>(identity: &Identity<'_>) -> Result<ClusterInstance
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 

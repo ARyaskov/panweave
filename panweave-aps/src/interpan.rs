@@ -21,6 +21,7 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_security::aux_header::{KeyIdentifier, SecurityLevel};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::frame::SecurityError;
+use panweave_types::capacity::Capacity;
 use panweave_types::{ClusterId, ExtendedAddress, GroupAddress, ProfileId};
 
 use crate::security::{ApsSecurity, ApsUnsecured, SecureError};
@@ -237,8 +238,8 @@ impl InterPanHeader {
 /// auxiliary header, copies `payload` and protects it with the link key
 /// shared with `partner` (extended nonce, so the receiver can look the
 /// key up from the frame alone). Returns the total frame length.
-pub fn secure<C: BlockCipher, const N: usize>(
-    security: &mut ApsSecurity<C, N>,
+pub fn secure<C: BlockCipher, K: Capacity>(
+    security: &mut ApsSecurity<C, K>,
     buf: &mut [u8],
     header: &InterPanHeader,
     payload: &[u8],
@@ -251,7 +252,7 @@ pub fn secure<C: BlockCipher, const N: usize>(
         ..*header
     };
     let aps_len = header.aps_header_len();
-    let aux_len = ApsSecurity::<C, N>::aux_header_len(true);
+    let aux_len = ApsSecurity::<C, K>::aux_header_len(true);
     let payload_start = STUB_NWK_LEN + aps_len + aux_len;
     let total = payload_start + payload.len() + level.mic_len();
     if buf.len() < total {
@@ -283,8 +284,8 @@ pub fn secure<C: BlockCipher, const N: usize>(
 /// address, used when the auxiliary header carries no extended nonce.
 /// Returns the decoded header, the security result and the range of the
 /// application frame within `buf`.
-pub fn unsecure<C: BlockCipher, const N: usize>(
-    security: &mut ApsSecurity<C, N>,
+pub fn unsecure<C: BlockCipher, K: Capacity>(
+    security: &mut ApsSecurity<C, K>,
     buf: &mut [u8],
     level: SecurityLevel,
     sender: Option<ExtendedAddress>,
@@ -369,7 +370,7 @@ mod tests {
         const B: ExtendedAddress = ExtendedAddress(0x00bb);
         let key = Key128::from_bytes([7; 16]);
         let armed = |partner| {
-            let mut s = ApsSecurity::<SoftwareAes, 4>::new();
+            let mut s = ApsSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
             let mut e = LinkKeyEntry::provisional(partner, key.clone(), LinkKeyKind::Unique);
             e.attributes = KeyAttributes::VerifiedKey;
             s.install(e).unwrap();

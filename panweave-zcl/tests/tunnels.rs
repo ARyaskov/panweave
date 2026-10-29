@@ -93,7 +93,7 @@ fn match_request(zcl: &mut Node, address: &[u8], group: bool) -> Option<(Header,
     }
     .encode_to_slice(&mut buf)
     .unwrap();
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     groups.add(GroupAddress(0x0007), EP).unwrap();
     while zcl.next_action().is_some() {}
     let out = zcl.on_data(&ind(&buf[..len], group), &mut groups);
@@ -139,8 +139,11 @@ fn a_matching_protocol_address_is_answered_with_the_ieee_address() {
 #[test]
 fn the_iso7816_server_answers_card_insertion_with_default_responses() {
     let mut zcl = node();
-    let mut groups = GroupTable::<4>::new();
-    let send = |zcl: &mut Node, cmd, groups: &mut GroupTable<4>| -> ZclStatus {
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
+    let send = |zcl: &mut Node,
+                cmd,
+                groups: &mut GroupTable<panweave_types::capacity::Cap<4>>|
+     -> ZclStatus {
         let header = Header::cluster_specific(
             panweave_types::TransactionSequence(0x30),
             cmd,

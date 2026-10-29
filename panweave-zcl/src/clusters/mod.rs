@@ -40,6 +40,7 @@ pub mod window_covering;
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Basic cluster (ZCL8 §3.2), revision 3.
@@ -115,11 +116,11 @@ pub mod basic {
     /// Builds a server instance with the mandatory attributes
     /// (`ZCLVersion`, `PowerSource`) and the given manufacturer / model
     /// strings.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         power_source: u8,
         manufacturer: &[u8],
         model: &[u8],
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(
             ZCL_VERSION,
@@ -143,6 +144,40 @@ pub mod basic {
                 bytes: Some(model),
             },
         )?;
+        Ok(c)
+    }
+
+    /// [`server`] with `'static` manufacturer / model strings kept in
+    /// program memory (no pool octets), filled into an instance created
+    /// with [`DEF`] (built in place by
+    /// [`crate::layer::EndpointInstance::add_cluster`]).
+    pub fn fill_server_static<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        power_source: u8,
+        manufacturer: &'static [u8],
+        model: &'static [u8],
+    ) -> Result<(), ZclStatus> {
+        c.add_attribute(
+            ZCL_VERSION,
+            &Value::Uint {
+                width: 1,
+                value: u64::from(ZCL_VERSION_VALUE),
+            },
+        )?;
+        c.add_attribute(POWER_SOURCE, &Value::Enum8(power_source))?;
+        c.attributes
+            .add_static_string(MANUFACTURER_NAME, manufacturer)?;
+        c.attributes.add_static_string(MODEL_IDENTIFIER, model)
+    }
+
+    /// [`fill_server_static`] into a new instance.
+    pub fn server_static<const A: usize, P: ZclProfile>(
+        power_source: u8,
+        manufacturer: &'static [u8],
+        model: &'static [u8],
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
+        let mut c = ClusterInstance::new(DEF, Role::Server);
+        fill_server_static(&mut c, power_source, manufacturer, model)?;
         Ok(c)
     }
 }
@@ -175,20 +210,28 @@ pub mod identify {
     };
 
     /// Builds a server instance.
-    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
-        c.add_attribute(IDENTIFY_TIME, &Value::Uint { width: 2, value: 0 })?;
+        fill_server(&mut c)?;
         Ok(c)
+    }
+
+    /// [`server`] filled into an instance created with [`DEF`] (built in
+    /// place by [`crate::layer::EndpointInstance::add_cluster`]).
+    pub fn fill_server<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+    ) -> Result<(), ZclStatus> {
+        c.add_attribute(IDENTIFY_TIME, &Value::Uint { width: 2, value: 0 })
     }
 
     /// Builds a client instance (no attributes; receives Identify Query
     /// Responses, §3.5.3).
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Remaining identification time of a server instance.
-    pub fn identify_time<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+    pub fn identify_time<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u16 {
         match c.attributes.value(IDENTIFY_TIME.id) {
             Some(Value::Uint { value, .. }) => u16::try_from(value).unwrap_or(u16::MAX),
             _ => 0,
@@ -197,8 +240,8 @@ pub mod identify {
 
     /// Sets `IdentifyTime` and (re)arms the one-second countdown
     /// (§3.5.2.2.1). Returns whether the value changed.
-    pub fn set_identify_time<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn set_identify_time<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         seconds: u16,
         now: Instant,
     ) -> bool {
@@ -218,7 +261,10 @@ pub mod identify {
 
     /// Advances the countdown: decrements `IdentifyTime` once per elapsed
     /// second. Returns the new value when it changed.
-    pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u16> {
+    pub fn tick<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        now: Instant,
+    ) -> Option<u16> {
         let due = c.tick?;
         if !now.has_reached(due) {
             return None;
@@ -251,8 +297,8 @@ pub mod identify {
 
     /// Processes a cluster-specific command received by the server
     /// (§3.5.2.3).
-    pub fn handle<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         command: CommandId,
         payload: &[u8],
         now: Instant,

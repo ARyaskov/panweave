@@ -6,6 +6,7 @@
 //! * [`attribute`], [`cluster`]: attribute storage, global command
 //!   server processing and reporting state (§2.3.4, §2.5.7, §2.5.11).
 //! * [`layer`]: endpoint dispatch, Default Responses and reporting.
+//! * [`profile`]: compile-time storage profiles ([`Full`], [`Sensor`]).
 //! * [`clusters`]: Basic, Identify and On/Off definitions (chapter 3).
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
@@ -30,6 +31,7 @@ pub mod clusters;
 pub mod frame;
 pub mod global;
 pub mod layer;
+pub mod profile;
 pub mod requirements;
 pub mod structured;
 pub mod types;
@@ -38,4 +40,5 @@ pub use attribute::{Access, AttributeDef, AttributeTable};
 pub use cluster::{ClusterDef, ClusterInstance, Role};
 pub use frame::{Direction, Frame, FrameType, Header, ZclStatus};
 pub use layer::{EndpointInstance, Origin, Zcl, ZclAction, ZclError, ZclIndication};
+pub use profile::{Full, Sensor, ZclProfile};
 pub use types::{DataType, Value};

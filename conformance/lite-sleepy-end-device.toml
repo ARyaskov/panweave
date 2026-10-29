@@ -1,0 +1,152 @@
+# Panweave Lite: applicability of the stack to its Sleepy End Device
+# profile (`SleepySensor`) and the IAS Zone sensor built on it.
+# Entries paraphrase requirements; they do not reproduce specification text.
+# The status says what this profile does, in addition to the R23.2, BDB,
+# ZCL and DTL inventories, which apply to Lite unchanged (it runs the same
+# protocol code). Simulator tests are not certification.
+# status: implemented | partially-implemented | not-implemented | not-applicable
+#         | requires-hardware-validation | requires-clarification
+# level:  mandatory | optional | conditional | deprecated | informative
+
+document = "Lite SED"
+title = "Panweave Lite Sleepy End Device profile (role applicability)"
+
+[[requirement]]
+id = "PW-LITE-001"
+section = "R23.2 §3.6.1.4.1, BDB 3.1 §9.8"
+summary = "Factory-new end device discovers an open network and joins by MAC association through network steering"
+level = "mandatory"
+status = "implemented"
+module = "panweave-lite::device"
+tests = ["water_leak_sensor_joins_is_interviewed_enrolled_and_reports", "contact_sensor_reports_open_and_closed"]
+notes = "Joins the full Panweave hub and coordinator in the simulator; the same code commissions on an emulated Cortex-M33 (examples/lite-probe, QEMU)."
+
+[[requirement]]
+id = "PW-LITE-002"
+section = "R23.2 §4.6.3.5, §4.7.3.3, §2.4.3.4.2"
+summary = "Dynamic link key negotiation as the initiator (SPEKE over Curve25519 with AES-MMO), install-code authenticated, key verification and authentication token retrieval"
+level = "conditional"
+status = "implemented"
+module = "panweave-runtime::dlk"
+tests = ["joins_with_install_code_key_negotiation_and_reports", "sleepy_joiner_completes_install_code_negotiation", "a_wrong_install_code_key_is_not_admitted"]
+notes = "With the `dlk` feature. A sleepy joiner can receive the network key before the Confirm Key through its parent's indirect queue: the key transport under the negotiated key completes the negotiation (fixed in this profile's work; the defect affected every sleepy joiner). The SHA-256 SPEKE variant and CBKE are not implemented (R23 inventory PW-R23-ZDP-016)."
+
+[[requirement]]
+id = "PW-LITE-003"
+section = "R23.2 §3.6.1.4.3, §2.5.5.5.6"
+summary = "Parent loss detection and secured rejoin, also through another parent"
+level = "mandatory"
+status = "implemented"
+module = "panweave-runtime::stack"
+tests = ["rejoins_through_a_router_after_parent_loss_and_delivers_an_alarm_raised_meanwhile", "repeated_parent_loss_and_rejoin_cycles_keep_the_tables_bounded"]
+
+[[requirement]]
+id = "PW-LITE-004"
+section = "R23.2 §4.6.3.4"
+summary = "Network key update and switch received and followed by a sleepy end device"
+level = "mandatory"
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["follows_a_network_key_update"]
+
+[[requirement]]
+id = "PW-LITE-005"
+section = "R23.2 §4.3.1.2"
+summary = "Incoming NWK frames with a stale frame counter or a bad MIC are rejected"
+level = "mandatory"
+status = "implemented"
+module = "panweave-nwk::security"
+tests = ["replayed_and_tampered_frames_are_rejected"]
+
+[[requirement]]
+id = "PW-LITE-006"
+section = "R23.2 §4.3.4"
+summary = "No outgoing frame is secured beyond the persisted frame counter reservation; a failed reservation write is retried and values are never reused across a restart"
+level = "mandatory"
+status = "implemented"
+module = "panweave-runtime::pump"
+tests = ["no_frame_is_secured_beyond_an_uncommitted_counter_reservation", "restarts_without_reusing_frame_counters"]
+notes = "Before this work a failed reservation write left the reservation in flight forever and blocked every secured transmission until a reboot (NWK and APS)."
+
+[[requirement]]
+id = "PW-LITE-007"
+section = "R23.2 §3.6.3.3"
+summary = "An end device keeps no routing, route discovery, route record or joining-list state and relays nothing"
+level = "mandatory"
+status = "not-applicable"
+module = "panweave-nwk::layer::SleepyEndDevice"
+notes = "The profile instantiates these tables with no entries: an end device sends everything to its parent. The full stack keeps them."
+
+[[requirement]]
+id = "PW-LITE-008"
+section = "R23.2 §4.6.3.2, §4.7.3"
+summary = "Trust Center functions (key distribution, authorization, swap-out, application link key requests)"
+level = "mandatory"
+status = "not-applicable"
+module = "panweave-runtime::profile::SleepySensor"
+notes = "The sensor is never the Trust Center; the profile gives these tables no entries."
+
+[[requirement]]
+id = "PW-LITE-009"
+section = "ZCL8 §8.2.2.2, §8.2.2.4"
+summary = "IAS Zone Status Change Notifications to the enrolling CIE; Alarm1, Tamper and Battery bits from the sensor inputs; Restore notify set"
+level = "mandatory"
+status = "implemented"
+module = "panweave-lite::sensor"
+tests = ["water_leak_sensor_joins_is_interviewed_enrolled_and_reports", "contact_sensor_reports_open_and_closed", "a_change_is_published_and_confirmed"]
+
+[[requirement]]
+id = "PW-LITE-010"
+section = "ZCL8 §8.2.2.4 (application policy)"
+summary = "An undelivered alarm is retried with back-off and is never reported cleared before the alarm itself was acknowledged"
+level = "informative"
+status = "implemented"
+module = "panweave-lite::sensor::ZoneReporter"
+tests = ["an_alarm_raised_while_the_hub_is_unreachable_is_delivered_before_its_clear", "a_clear_is_held_until_the_alarm_was_delivered", "an_undelivered_alarm_is_retried_with_back_off", "lost_frames_are_retried_until_acknowledged", "rapid_input_changes_end_in_the_last_state_without_drops"]
+notes = "Delivery is the APS acknowledgement of the notification, reported by the runtime as StackEvent::ZoneDelivery."
+
+[[requirement]]
+id = "PW-LITE-011"
+section = "ZCL8 §8.2.2.1.3"
+summary = "The IAS enrolment (CIE address, zone id) survives a power loss and is not lost on a failed flash write"
+level = "informative"
+status = "implemented"
+module = "panweave-lite::device"
+tests = ["enrolment_and_network_survive_a_power_cycle", "an_enrolment_write_failure_is_reported_and_retried"]
+
+[[requirement]]
+id = "PW-LITE-012"
+section = "ZCL8 §2.5.1, §2.5.7, §2.5.11"
+summary = "Read Attributes (including the program-memory Basic strings) and Configure Reporting with reports to bound destinations"
+level = "mandatory"
+status = "implemented"
+module = "panweave-zcl::attribute"
+tests = ["attributes_are_read_and_battery_reporting_configured_through_the_parent"]
+notes = "Four reporting slots per cluster in the Sensor ZCL profile: a fifth configuration is refused with INSUFFICIENT_SPACE."
+
+[[requirement]]
+id = "PW-LITE-013"
+section = "ZCL8 §3.7"
+summary = "Scenes server and scene table"
+level = "optional"
+status = "not-applicable"
+module = "panweave-zcl::profile::Sensor"
+notes = "The Sensor ZCL profile has no scene table (NoScenes); the IAS Zone device type does not list Scenes (DTL §45)."
+
+[[requirement]]
+id = "PW-LITE-014"
+section = "BDB 3.1 §6.5, §6.6"
+summary = "Sleepy end device polls its parent, fast while commissioning or awaiting a response"
+level = "mandatory"
+status = "implemented"
+module = "panweave-lite::device"
+tests = ["attributes_are_read_and_battery_reporting_configured_through_the_parent", "plans_follow_the_activity"]
+
+[[requirement]]
+id = "PW-LITE-015"
+section = "EFR32MG22 target"
+summary = "Complete firmware within 32 KiB of RAM on the EFR32MG22: radio driver, interrupt stack and the hardware sleep modes"
+level = "informative"
+status = "requires-hardware-validation"
+module = "examples/lite-probe"
+notes = "The stack, the sensor and the store fit (link-time check and QEMU-measured stack, docs/lite.md); the RAIL radio driver, the MSC flash driver and EM2/EM4 sleep are not implemented and nothing was run on an EFR32."

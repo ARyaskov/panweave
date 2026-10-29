@@ -18,7 +18,6 @@
     allow(dead_code, clippy::unused_self, clippy::needless_return)
 )]
 
-use heapless::Vec;
 use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{KeyRoute, RelayInfo};
 use panweave_security::cipher::BlockCipher;
@@ -41,6 +40,9 @@ use panweave_zdo::security::SelectedKeyNegotiationMethod;
 #[cfg(feature = "dlk")]
 use panweave_zdo::security::{PublicPoint, StartKeyNegotiationReq};
 
+use panweave_types::capacity::{Capacity, VecOf};
+
+use crate::profile::StackProfile;
 #[cfg(feature = "dlk")]
 use crate::stack::Phase;
 use crate::stack::{Stack, StackEvent};
@@ -89,13 +91,22 @@ pub(crate) struct PendingJoin {
 }
 
 /// DLK state of a stack.
-#[derive(Default)]
-pub(crate) struct DlkState {
+pub(crate) struct DlkState<P: StackProfile> {
     pub session: Option<Session>,
-    pub joins: Vec<PendingJoin, MAX_PENDING_JOINS>,
+    pub joins: VecOf<PendingJoin, P::NegotiatingJoiners>,
     /// A Security_Start_Key_Update_req accepted by the ZDO: the runtime
     /// starts the negotiation after the response was queued.
     pub start_requested: Option<(SelectedKeyNegotiationMethod, Option<RelayInfo>)>,
+}
+
+impl<P: StackProfile> Default for DlkState<P> {
+    fn default() -> Self {
+        DlkState {
+            session: None,
+            joins: P::NegotiatingJoiners::vec(),
+            start_requested: None,
+        }
+    }
 }
 
 /// The pre-shared secret for `secret` (Table 2-81) from `entry`.
@@ -122,7 +133,16 @@ pub(crate) const fn update_method(secret: u8) -> PostJoinKeyUpdate {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Starts a negotiation with `partner` using the selected method
     /// (APSME-KEY-NEGOTIATE.request, §4.4.9.1): backs the entry up, draws
     /// an ephemeral scalar and sends Security_Start_Key_Negotiation_req.

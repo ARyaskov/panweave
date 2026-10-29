@@ -10,7 +10,7 @@
 //! The network layer drives the table through Link Power Delta
 //! commands (§3.4.13); the MAC only stores and applies the result.
 
-use heapless::Vec;
+use panweave_types::capacity::{Cap, Capacity, VecOf};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{ExtendedAddress, ShortAddress};
 
@@ -98,25 +98,34 @@ pub enum PowerTableError {
     Full,
 }
 
-/// The table (D.11.2.3), at least one entry.
-#[derive(Clone, Debug)]
-pub struct PowerControlTable<const N: usize> {
-    entries: Vec<PowerEntry, N>,
+/// The table (D.11.2.3) of `K` entries, at least one.
+#[derive(Debug)]
+pub struct PowerControlTable<K: Capacity = Cap<16>> {
+    entries: VecOf<PowerEntry, K>,
     /// The limits negotiations are clamped to.
     pub limits: PowerLimits,
 }
 
-impl<const N: usize> Default for PowerControlTable<N> {
+impl<K: Capacity> Clone for PowerControlTable<K> {
+    fn clone(&self) -> Self {
+        PowerControlTable {
+            entries: K::clone_vec(&self.entries),
+            limits: self.limits,
+        }
+    }
+}
+
+impl<K: Capacity> Default for PowerControlTable<K> {
     fn default() -> Self {
         Self::new(PowerLimits::default())
     }
 }
 
-impl<const N: usize> PowerControlTable<N> {
+impl<K: Capacity> PowerControlTable<K> {
     /// Empty table with the given limits.
-    pub const fn new(limits: PowerLimits) -> Self {
+    pub fn new(limits: PowerLimits) -> Self {
         PowerControlTable {
-            entries: Vec::new(),
+            entries: K::vec(),
             limits,
         }
     }
@@ -292,7 +301,7 @@ mod tests {
 
     #[test]
     fn adjusts_from_maximum_and_clamps() {
-        let mut t: PowerControlTable<4> = PowerControlTable::default();
+        let mut t: PowerControlTable<Cap<4>> = PowerControlTable::default();
         assert_eq!(t.tx_power_for(&MacAddress::Short(A)), None);
         let p = t.adjust(A, A_IEEE, -5, -40, Instant::ZERO).unwrap();
         assert_eq!(p, 3);
@@ -317,7 +326,7 @@ mod tests {
 
     #[test]
     fn unnegotiated_entries_expire_and_are_evicted_first() {
-        let mut t: PowerControlTable<2> = PowerControlTable::default();
+        let mut t: PowerControlTable<Cap<2>> = PowerControlTable::default();
         t.set(PowerEntry {
             short: A,
             extended: A_IEEE,

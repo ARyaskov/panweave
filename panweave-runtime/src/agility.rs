@@ -22,6 +22,7 @@ use panweave_zdo::zdp::{
     MgmtNwkUnsolicitedEnhancedUpdateNotify, MgmtNwkUpdateReq, ZdpStatus, cluster,
 };
 
+use crate::profile::StackProfile;
 use crate::stack::{Phase, Stack, StackEvent};
 
 /// How often the failure rate is examined.
@@ -78,7 +79,16 @@ pub(crate) struct PendingChannelChange {
     pub update_id: u8,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Earliest timer of the frequency agility state.
     pub(crate) fn agility_deadline(&self) -> Option<Instant> {
         [

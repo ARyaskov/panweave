@@ -17,14 +17,17 @@ use panweave_types::{
 };
 use panweave_zdo::zdp::{NodeDescReq, NodeDescRsp, ZdpStatus, cluster};
 
+use panweave_types::capacity::{Capacity, VecOf};
+
 use crate::context::AddrView;
+use crate::profile::StackProfile;
 use crate::stack::{Stack, StackEvent};
 
 /// Cache entries (`apsFragmentationCacheTableSize`; a Trust Center is
 /// expected to hold one per link key pair).
 pub const CACHE_SIZE: usize = 16;
 /// Messages held while a peer's parameters are being discovered.
-const PENDING: usize = 2;
+pub(crate) const PENDING: usize = 2;
 /// Time allowed for the Node_Desc_rsp.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -54,13 +57,22 @@ pub(crate) struct PendingFragmented {
 }
 
 /// `apsFragmentationCacheTable` and the messages awaiting it.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FragmentationCache {
-    entries: Vec<FragmentationEntry, CACHE_SIZE>,
-    pending: Vec<PendingFragmented, PENDING>,
+#[derive(Debug)]
+pub(crate) struct FragmentationCache<P: StackProfile> {
+    entries: VecOf<FragmentationEntry, P::FragmentationCache>,
+    pending: VecOf<PendingFragmented, P::FragmentationHeld>,
 }
 
-impl FragmentationCache {
+impl<P: StackProfile> Default for FragmentationCache<P> {
+    fn default() -> Self {
+        FragmentationCache {
+            entries: P::FragmentationCache::vec(),
+            pending: P::FragmentationHeld::vec(),
+        }
+    }
+}
+
+impl<P: StackProfile> FragmentationCache<P> {
     /// The cached entry for `addr`.
     pub fn get(&self, addr: ShortAddress) -> Option<FragmentationEntry> {
         self.entries.iter().find(|e| e.addr == addr).copied()
@@ -91,7 +103,16 @@ impl FragmentationCache {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// The fragmentation parameters cached for `addr`, if discovered.
     pub fn fragmentation_entry(&self, addr: ShortAddress) -> Option<FragmentationEntry> {
         self.fragmentation.get(addr)
@@ -247,8 +268,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// parameters are known (or the discovery failed).
     fn flush_pending_fragmented(&mut self, dst: ShortAddress) {
         let entry = self.fragmentation.get(dst);
-        let mut held: Vec<PendingFragmented, PENDING> = Vec::new();
-        let mut rest: Vec<PendingFragmented, PENDING> = Vec::new();
+        let mut held: VecOf<PendingFragmented, P::FragmentationHeld> = P::FragmentationHeld::vec();
+        let mut rest: VecOf<PendingFragmented, P::FragmentationHeld> = P::FragmentationHeld::vec();
         for p in self.fragmentation.pending.drain(..) {
             if p.dst == dst {
                 let _ = held.push(p);
@@ -257,7 +278,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         self.fragmentation.pending = rest;
-        for p in held {
+        for p in held.drain(..) {
             let ok =
                 entry.is_some_and(|e| e.supported && usize::from(e.max_incoming) >= p.asdu.len());
             if ok {
@@ -289,14 +310,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// Discoveries that timed out: the peer is taken as not supporting
     /// fragmentation for now.
     pub(crate) fn poll_fragmentation(&mut self, now: Instant) {
-        let expired: Vec<ShortAddress, PENDING> = self
-            .fragmentation
-            .pending
-            .iter()
-            .filter(|p| now.has_reached(p.deadline))
-            .map(|p| p.dst)
-            .collect();
-        for dst in expired {
+        let mut expired: VecOf<ShortAddress, P::FragmentationHeld> = P::FragmentationHeld::vec();
+        for p in self.fragmentation.pending.iter() {
+            if now.has_reached(p.deadline) {
+                let _ = expired.push(p.dst);
+            }
+        }
+        for &dst in expired.iter() {
             self.fragmentation.insert(FragmentationEntry {
                 addr: dst,
                 supported: false,

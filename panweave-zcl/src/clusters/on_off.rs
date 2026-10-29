@@ -10,6 +10,7 @@ use panweave_types::{ClusterId, CommandId};
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -88,7 +89,7 @@ pub const DEF: ClusterDef = ClusterDef {
 /// Builds a server instance: `OnOff` = false with its default reporting
 /// configuration, `GlobalSceneControl`, `OnTime`, `OffWaitTime` and
 /// `StartUpOnOff` (previous value).
-pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_reported_attribute(ON_OFF, &Value::Bool(Some(false)), DEFAULT_REPORTING)?;
     c.add_attribute(GLOBAL_SCENE_CONTROL, &Value::Bool(Some(true)))?;
@@ -99,19 +100,23 @@ pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Current `OnOff` value.
-pub fn is_on<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn is_on<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     c.bool(ON_OFF.id)
 }
 
 /// Sets `OnOff` directly (Level Control 'with On/Off' commands, scene
 /// recall, §3.8.2.1 / §3.8.2.2.2): maintains `OnTime`, `OffWaitTime` and
 /// `GlobalSceneControl`. Returns whether the value changed.
-pub fn set_on<const A: usize>(c: &mut ClusterInstance<A>, on: bool, now: Instant) -> bool {
+pub fn set_on<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    on: bool,
+    now: Instant,
+) -> bool {
     let changed = c.set_bool(ON_OFF.id, on);
     if on {
         if c.u16(ON_TIME.id) == Some(0) {
@@ -126,7 +131,7 @@ pub fn set_on<const A: usize>(c: &mut ClusterInstance<A>, on: bool, now: Instant
 }
 
 /// Arms the 100 ms countdown while OnTime or OffWaitTime run (§3.8.2.4).
-fn arm<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) {
+fn arm<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, now: Instant) {
     let on_time = c.u16(ON_TIME.id).unwrap_or(0);
     let off_wait = c.u16(OFF_WAIT_TIME.id).unwrap_or(0);
     let on = is_on(c);
@@ -168,8 +173,8 @@ pub enum Outcome {
 /// Applies an Off / On / Toggle command to the server's `OnOff`
 /// attribute (§3.8.2.3.1–§3.8.2.3.3). Returns the new state or `None`
 /// for an unsupported command.
-pub fn apply<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn apply<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     command: CommandId,
     now: Instant,
 ) -> Option<bool> {
@@ -182,8 +187,8 @@ pub fn apply<const A: usize>(
 /// Processes a cluster-specific command received by the server
 /// (§3.8.2.3). The dispatcher applies the outcome to the other clusters
 /// of the endpoint.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     command: CommandId,
     payload: &[u8],
     now: Instant,
@@ -260,7 +265,10 @@ pub fn handle<const A: usize>(
 
 /// Second half of Off With Effect (§3.8.2.3.4.3): clears
 /// `GlobalSceneControl` and enters the off state.
-pub fn turn_off_with_effect<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) {
+pub fn turn_off_with_effect<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) {
     c.set_bool(GLOBAL_SCENE_CONTROL.id, false);
     set_on(c, false, now);
 }
@@ -268,7 +276,10 @@ pub fn turn_off_with_effect<const A: usize>(c: &mut ClusterInstance<A>, now: Ins
 /// Advances the OnTime / OffWaitTime countdown (§3.8.2.3.6.4). Returns
 /// `Some(false)` when the timed-on period expired and the device turned
 /// off.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<bool> {
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<bool> {
     let due = c.tick?;
     if !now.has_reached(due) {
         return None;
@@ -320,7 +331,10 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
 
 /// Applies `StartUpOnOff` at power-up (Table 3-46) given the previous
 /// `OnOff` value; returns the resulting state.
-pub fn start_up<const A: usize>(c: &mut ClusterInstance<A>, previous: bool) -> bool {
+pub fn start_up<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    previous: bool,
+) -> bool {
     let v = match c.u8(START_UP_ON_OFF.id) {
         Some(start_up::OFF) => false,
         Some(start_up::ON) => true,
@@ -332,14 +346,14 @@ pub fn start_up<const A: usize>(c: &mut ClusterInstance<A>, previous: bool) -> b
 }
 
 /// Scene extension field set of the On/Off server (§3.8.2.6): `OnOff`.
-pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 1] {
+pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 1] {
     [u8::from(is_on(c))]
 }
 
 /// Applies a scene extension field set (§3.8.2.6) to the server; trailing
 /// fields absent from `fields` leave the attribute unchanged.
-pub fn apply_scene_fields<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     fields: &[u8],
     now: Instant,
 ) -> Option<bool> {

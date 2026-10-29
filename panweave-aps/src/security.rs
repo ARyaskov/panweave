@@ -15,6 +15,7 @@ use panweave_security::frame::{self, SecurityError};
 use panweave_security::frame_counter::{CounterError, Reservation};
 use panweave_security::key_hierarchy;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind, LinkKeyTable};
+use panweave_types::capacity::Capacity;
 use panweave_types::{ExtendedAddress, FrameCounter, Key128, KeyAttributes};
 use subtle::ConstantTimeEq;
 
@@ -54,21 +55,21 @@ pub enum SecureError {
 }
 
 /// APS security state.
-pub struct ApsSecurity<C: BlockCipher, const N: usize> {
-    keys: LinkKeyTable<N>,
+pub struct ApsSecurity<C: BlockCipher, K: Capacity> {
+    keys: LinkKeyTable<K>,
     ciphers: [Option<(ExtendedAddress, KeyIdentifier, C)>; 2],
     next_slot: usize,
 }
 
-impl<C: BlockCipher, const N: usize> Default for ApsSecurity<C, N> {
+impl<C: BlockCipher, K: Capacity> Default for ApsSecurity<C, K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
+impl<C: BlockCipher, K: Capacity> ApsSecurity<C, K> {
     /// Empty state.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         ApsSecurity {
             keys: LinkKeyTable::new(),
             ciphers: [None, None],
@@ -77,13 +78,13 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
     }
 
     /// The key-pair set (read-only).
-    pub const fn keys(&self) -> &LinkKeyTable<N> {
+    pub const fn keys(&self) -> &LinkKeyTable<K> {
         &self.keys
     }
 
     /// Mutable access to the key-pair set. Cached ciphers are dropped
     /// because a key may change.
-    pub fn keys_mut(&mut self) -> &mut LinkKeyTable<N> {
+    pub fn keys_mut(&mut self) -> &mut LinkKeyTable<K> {
         self.ciphers = [None, None];
         &mut self.keys
     }
@@ -236,6 +237,13 @@ impl<C: BlockCipher, const N: usize> ApsSecurity<C, N> {
     pub fn commit_counter_reservation(&mut self, partner: ExtendedAddress, r: Reservation) {
         if let Some(e) = self.keys.get_mut(partner) {
             e.outgoing.commit_reservation(r);
+        }
+    }
+
+    /// Abandons `partner`'s reservation that could not be persisted.
+    pub fn abort_counter_reservation(&mut self, partner: ExtendedAddress) {
+        if let Some(e) = self.keys.get_mut(partner) {
+            e.outgoing.abort_reservation();
         }
     }
 
@@ -451,8 +459,10 @@ mod tests {
     const A: ExtendedAddress = ExtendedAddress(0xAAAA);
     const B: ExtendedAddress = ExtendedAddress(0xBBBB);
 
-    fn armed(partner: ExtendedAddress) -> ApsSecurity<SoftwareAes, 4> {
-        let mut s = ApsSecurity::<SoftwareAes, 4>::new();
+    fn armed(
+        partner: ExtendedAddress,
+    ) -> ApsSecurity<SoftwareAes, panweave_types::capacity::Cap<4>> {
+        let mut s = ApsSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
         let mut e =
             LinkKeyEntry::provisional(partner, Key128::from_bytes([9; 16]), LinkKeyKind::Unique);
         e.attributes = KeyAttributes::VerifiedKey;
@@ -463,7 +473,7 @@ mod tests {
     }
 
     fn secure(
-        tx: &mut ApsSecurity<SoftwareAes, 4>,
+        tx: &mut ApsSecurity<SoftwareAes, panweave_types::capacity::Cap<4>>,
         local: ExtendedAddress,
         partner: ExtendedAddress,
         key_id: KeyIdentifier,
@@ -472,7 +482,7 @@ mod tests {
         let header = [0x21, 0x07];
         let mut buf = [0u8; 64];
         buf[..2].copy_from_slice(&header);
-        let aux = ApsSecurity::<SoftwareAes, 4>::aux_header_len(ext);
+        let aux = ApsSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::aux_header_len(ext);
         buf[2 + aux..2 + aux + 3].copy_from_slice(&[1, 2, 3]);
         let n = tx
             .secure_outgoing(
@@ -547,7 +557,7 @@ mod tests {
 
     #[test]
     fn unverified_key_cannot_encrypt_and_counter_needs_reservation() {
-        let mut s = ApsSecurity::<SoftwareAes, 4>::new();
+        let mut s = ApsSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
         s.install(LinkKeyEntry::provisional(
             B,
             Key128::ZERO,

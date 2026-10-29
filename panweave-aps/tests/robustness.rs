@@ -56,7 +56,7 @@ proptest! {
         frames in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..108), 0..6),
         tc in any::<bool>(),
     ) {
-        let mut aps = Aps::<SoftwareAes, 4, 4, 4, 4>::new(
+        let mut aps = Aps::<SoftwareAes, panweave_aps::layer::Dims<4, 4, 4, 4>>::new(
             ExtendedAddress(0xA),
             ApsConfig { is_trust_center: tc, ..ApsConfig::default() },
         );

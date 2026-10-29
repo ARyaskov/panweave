@@ -1997,6 +1997,7 @@ dependencies = [
 name = "panweave-types"
 version = "0.1.0"
 dependencies = [
+ "heapless 0.9.3",
  "rand_core 0.10.1",
  "subtle",
  "zeroize",

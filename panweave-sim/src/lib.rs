@@ -18,7 +18,7 @@ use std::any::Any;
 use std::io::Write;
 
 use panweave_bdb::{Bdb, Config as BdbConfig, Outcome};
-use panweave_mac::radio::{RxMetadata, TxResult};
+use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacServiceConfig};
 use panweave_pcap::PcapWriter;
 use panweave_runtime::{Stack, StackConfig, StackEvent};
@@ -119,6 +119,37 @@ impl App for BdbApp {
     }
 }
 
+/// A device that is not a [`SimStack`] (another stack profile, a
+/// product firmware model) driven over the same medium: the simulator
+/// moves its radio actions and frames and polls it like a node.
+pub trait Device: Any {
+    /// Next radio action.
+    fn next_radio_action(&mut self) -> Option<MacAction>;
+    /// A received frame.
+    fn on_radio_frame(&mut self, bytes: &[u8], meta: RxMetadata);
+    /// Completion of the last transmission.
+    fn on_tx_complete(&mut self, result: Result<TxResult, RadioError>);
+    /// An energy-detect result.
+    fn on_energy_result(&mut self, level: u8);
+    /// Advances time.
+    fn poll(&mut self, now: Instant);
+    /// Earliest time it wants to be polled.
+    fn next_deadline(&self) -> Option<Instant>;
+    /// Drains its own events into its own log; `true` when there were
+    /// any.
+    fn drain_events(&mut self) -> bool;
+}
+
+/// A [`Device`] on the medium.
+pub struct ExternalNode {
+    /// The device.
+    pub device: Box<dyn Device>,
+    /// Radio index on the medium.
+    pub radio: usize,
+    /// Human-readable name.
+    pub name: String,
+}
+
 /// A simulated node.
 pub struct SimNode {
     /// The stack.
@@ -155,6 +186,7 @@ pub struct Simulator {
     /// The clock.
     pub clock: VirtualClock,
     nodes: Vec<SimNode>,
+    externals: Vec<ExternalNode>,
     pcap: Option<PcapWriter<Box<dyn Write>>>,
     /// Keep an in-memory trace of transmitted frames.
     pub trace_enabled: bool,
@@ -182,6 +214,7 @@ impl Simulator {
             medium: VirtualMedium::new(),
             clock: VirtualClock::new(),
             nodes: Vec::new(),
+            externals: Vec::new(),
             pcap: None,
             trace_enabled: false,
             trace: Vec::new(),
@@ -212,6 +245,15 @@ impl Simulator {
                     };
                     self.nodes[j].stack.on_radio_frame(&air.bytes, meta);
                     delivered.push(j);
+                } else if let Some(d) = self.externals.iter_mut().find(|d| d.radio == t) {
+                    let meta = RxMetadata {
+                        lqi: 180,
+                        rssi_dbm: -55,
+                        timestamp_us: Some(now.as_millis() * 1000),
+                        acked_by_hardware: false,
+                        channel: Some(air.channel),
+                    };
+                    d.device.on_radio_frame(&air.bytes, meta);
                 }
             }
         }
@@ -260,6 +302,41 @@ impl Simulator {
             name: name.to_string(),
         });
         self.nodes.len() - 1
+    }
+
+    /// Adds a [`Device`]; returns its index among the devices (not the
+    /// nodes).
+    pub fn add_device(&mut self, name: &str, mut device: Box<dyn Device>) -> usize {
+        let radio = self.medium.add_radio();
+        device.poll(self.clock.now());
+        self.externals.push(ExternalNode {
+            device,
+            radio,
+            name: name.to_string(),
+        });
+        self.externals.len() - 1
+    }
+
+    /// Device `i` as its concrete type.
+    pub fn device<T: Device>(&self, i: usize) -> Option<&T> {
+        let any: &dyn Any = &*self.externals[i].device;
+        any.downcast_ref::<T>()
+    }
+
+    /// Device `i` as its concrete type, mutably.
+    pub fn device_mut<T: Device>(&mut self, i: usize) -> Option<&mut T> {
+        let any: &mut dyn Any = &mut *self.externals[i].device;
+        any.downcast_mut::<T>()
+    }
+
+    /// The radio index of device `i`.
+    pub fn device_radio(&self, i: usize) -> usize {
+        self.externals[i].radio
+    }
+
+    /// The radio index of node `i`.
+    pub fn node_radio(&self, i: usize) -> usize {
+        self.nodes[i].radio
     }
 
     /// The node.
@@ -378,6 +455,13 @@ impl Simulator {
     pub fn settle(&mut self) {
         loop {
             let mut progressed = false;
+            for i in 0..self.externals.len() {
+                while let Some(a) = self.externals[i].device.next_radio_action() {
+                    progressed = true;
+                    self.perform_external(i, a);
+                }
+                progressed |= self.externals[i].device.drain_events();
+            }
             for i in 0..self.nodes.len() {
                 while let Some(a) = self.nodes[i].stack.next_radio_action() {
                     progressed = true;
@@ -423,6 +507,15 @@ impl Simulator {
                             };
                             self.nodes[j].stack.on_radio_frame(&air.bytes, meta);
                             delivered.push(j);
+                        } else if let Some(d) = self.externals.iter_mut().find(|d| d.radio == t) {
+                            let meta = RxMetadata {
+                                lqi: self.medium.radio(t).map_or(200, |r| r.lqi),
+                                rssi_dbm: -40,
+                                timestamp_us: Some(now.as_millis() * 1000),
+                                acked_by_hardware: false,
+                                channel: Some(air.channel),
+                            };
+                            d.device.on_radio_frame(&air.bytes, meta);
                         }
                     }
                 }
@@ -464,6 +557,55 @@ impl Simulator {
         }
     }
 
+    fn perform_external(&mut self, i: usize, action: MacAction) {
+        let radio = self.externals[i].radio;
+        let now = self.clock.now();
+        match action {
+            MacAction::Transmit { frame, .. } => {
+                self.frames += 1;
+                if let Some(p) = self.pcap.as_mut() {
+                    let _ = p.write_frame(now.as_millis() * 1000, &frame);
+                }
+                let (air, targets) = self.medium.transmit(radio, &frame);
+                if let Some(air) = air {
+                    for t in targets {
+                        let meta = RxMetadata {
+                            lqi: self.medium.radio(t).map_or(200, |r| r.lqi),
+                            rssi_dbm: -40,
+                            timestamp_us: Some(now.as_millis() * 1000),
+                            acked_by_hardware: false,
+                            channel: Some(air.channel),
+                        };
+                        if let Some(j) = self.nodes.iter().position(|n| n.radio == t) {
+                            self.nodes[j].stack.on_radio_frame(&air.bytes, meta);
+                        } else if let Some(d) = self.externals.iter_mut().find(|d| d.radio == t) {
+                            d.device.on_radio_frame(&air.bytes, meta);
+                        }
+                    }
+                }
+                self.externals[i].device.on_tx_complete(Ok(TxResult {
+                    acked: false,
+                    frame_pending: false,
+                    timestamp_us: Some(now.as_millis() * 1000),
+                }));
+            }
+            MacAction::SetChannel { channel, .. } => self.medium.set_channel(radio, channel),
+            MacAction::EnergyDetect { .. } => {
+                let channel = self
+                    .medium
+                    .radio(radio)
+                    .map_or(Channel::DEFAULT_2_4GHZ, |r| r.channel);
+                let level = self
+                    .channel_energy
+                    .get(usize::from(channel.raw()))
+                    .copied()
+                    .unwrap_or(0);
+                self.externals[i].device.on_energy_result(level);
+            }
+            MacAction::Configure(_) | MacAction::SetPending { .. } => {}
+        }
+    }
+
     /// Advances virtual time to the earliest deadline (at most `max`) and
     /// polls every node.
     pub fn step(&mut self, max: Duration) {
@@ -473,6 +615,7 @@ impl Simulator {
             .nodes
             .iter()
             .flat_map(|n| [n.stack.next_deadline(), n.app.next_deadline()])
+            .chain(self.externals.iter().map(|d| d.device.next_deadline()))
             .flatten()
             .min_by_key(|t| t.as_millis())
             .map_or(now.saturating_add(max), |t| {
@@ -492,6 +635,9 @@ impl Simulator {
         for n in &mut self.nodes {
             n.stack.poll(target);
             n.app.on_poll(&mut n.stack, target);
+        }
+        for d in &mut self.externals {
+            d.device.poll(target);
         }
         self.settle();
     }

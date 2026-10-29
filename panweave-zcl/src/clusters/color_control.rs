@@ -10,8 +10,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -149,8 +150,8 @@ pub const fn color_point_attrs(point: ColorPoint) -> [AttributeDef; 3] {
 pub const MAX_CHROMATICITY: u16 = 0xfeff;
 
 /// Adds the drift compensation attributes (§5.2.2.2.1.6–7).
-pub fn enable_drift_compensation<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_drift_compensation<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     method: u8,
     text: &[u8],
 ) -> Result<(), ZclStatus> {
@@ -170,8 +171,8 @@ pub fn enable_drift_compensation<const A: usize>(
 /// Adds the Defined Primaries information set (Tables 5.10 / 5.11):
 /// `NumberOfPrimaries` and the X / Y / Intensity of each of the at most
 /// six `primaries`.
-pub fn enable_primaries<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_primaries<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     primaries: &[Primary],
 ) -> Result<(), ZclStatus> {
     if primaries.len() > 6
@@ -205,8 +206,8 @@ pub fn enable_primaries<const A: usize>(
 
 /// Adds the Defined Colour Points set (Table 5.12): the white point and
 /// the red, green and blue colour points, all writable.
-pub fn enable_color_points<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_color_points<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     white: (u16, u16),
     red: Primary,
     green: Primary,
@@ -444,10 +445,10 @@ pub struct Engine {
 
 /// Builds a server with the given `capabilities` (Table 5.8) and, when
 /// colour temperature is supported, the physical mired range.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     capabilities: u16,
     mireds_range: (u16, u16),
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let hs = capabilities & capability::HUE_SATURATION != 0;
     let enhanced = capabilities & capability::ENHANCED_HUE != 0;
@@ -507,12 +508,12 @@ pub fn server<const A: usize>(
         c.add_attribute(START_UP_COLOR_TEMPERATURE_MIREDS, &u16v(START_UP_PREVIOUS))?;
         c.set_u16(COLOR_TEMPERATURE_MIREDS.id, 0x00fa.clamp(min, max));
     }
-    c.state = ClusterState::Color(Engine::default());
+    c.set_state(Engine::default())?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
@@ -530,29 +531,26 @@ const fn u16v(v: u16) -> Value<'static> {
     }
 }
 
-fn engine<const A: usize>(c: &mut ClusterInstance<A>) -> &mut Engine {
-    if !matches!(c.state, ClusterState::Color(_)) {
-        c.state = ClusterState::Color(Engine::default());
-    }
-    match &mut c.state {
-        ClusterState::Color(e) => e,
-        _ => unreachable!(),
-    }
+fn engine<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut Engine> {
+    c.state_or_default::<Engine>()
 }
 
 /// Capabilities of a server.
-pub fn capabilities<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+pub fn capabilities<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u16 {
     c.u16(COLOR_CAPABILITIES.id).unwrap_or(0)
 }
 
 /// Current enhanced hue (derived from `CurrentHue` without the enhanced
 /// attribute).
-pub fn enhanced_hue<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+pub fn enhanced_hue<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u16 {
     c.u16(ENHANCED_CURRENT_HUE.id)
         .unwrap_or_else(|| u16::from(c.u8(CURRENT_HUE.id).unwrap_or(0)) << 8)
 }
 
-fn set_enhanced_hue<const A: usize>(c: &mut ClusterInstance<A>, hue: u16) -> bool {
+fn set_enhanced_hue<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    hue: u16,
+) -> bool {
     let mut changed = false;
     if c.attributes.get(ENHANCED_CURRENT_HUE.id, None).is_some() {
         changed |= c.set_u16(ENHANCED_CURRENT_HUE.id, hue);
@@ -561,7 +559,7 @@ fn set_enhanced_hue<const A: usize>(c: &mut ClusterInstance<A>, hue: u16) -> boo
     changed | c.set_u8(CURRENT_HUE.id, h8)
 }
 
-fn set_mode<const A: usize>(c: &mut ClusterInstance<A>, mode: u8) {
+fn set_mode<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, mode: u8) {
     let basic = if mode == color_mode::ENHANCED_HUE_SATURATION {
         color_mode::HUE_SATURATION
     } else {
@@ -573,8 +571,8 @@ fn set_mode<const A: usize>(c: &mut ClusterInstance<A>, mode: u8) {
 
 /// Applies the OptionsMask / OptionsOverride pair (§5.2.2.3.3) and the
 /// ExecuteIfOff rule: whether the command executes.
-fn executes<const A: usize>(
-    c: &ClusterInstance<A>,
+fn executes<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     on_off: Option<bool>,
     mask: u8,
     over: u8,
@@ -703,8 +701,8 @@ fn read_options(r: &mut Reader<'_>) -> (u8, u8) {
 /// Processes a cluster-specific server command (§5.2.2.3); `on_off` is
 /// the endpoint's `OnOff` value when an On/Off server is present.
 #[allow(clippy::too_many_lines)]
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     command: CommandId,
     payload: &[u8],
     on_off: Option<bool>,
@@ -762,7 +760,9 @@ pub fn handle<const A: usize>(
                     color_mode::HUE_SATURATION
                 },
             );
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.hue = timed(
                 hue_now,
@@ -807,7 +807,9 @@ pub fn handle<const A: usize>(
                     color_mode::HUE_SATURATION
                 },
             );
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             if m == mode::STOP {
                 stop_all(e);
             } else {
@@ -847,7 +849,9 @@ pub fn handle<const A: usize>(
                 },
             );
             let delta = if m == mode::UP { size } else { -size };
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.hue = timed(
                 hue_now,
@@ -870,7 +874,9 @@ pub fn handle<const A: usize>(
                 return Outcome::Suppressed;
             }
             set_mode(c, color_mode::HUE_SATURATION);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.saturation = timed(sat_now, target, time, now, None, sat_range.0, sat_range.1);
         }
@@ -891,7 +897,9 @@ pub fn handle<const A: usize>(
                 return Outcome::Suppressed;
             }
             set_mode(c, color_mode::HUE_SATURATION);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             if m != mode::STOP {
                 let signed = if m == mode::UP { rate } else { -rate };
@@ -919,7 +927,9 @@ pub fn handle<const A: usize>(
                 sat_now - size
             }
             .clamp(sat_range.0, sat_range.1);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.saturation = timed(sat_now, target, time, now, None, sat_range.0, sat_range.1);
         }
@@ -952,7 +962,9 @@ pub fn handle<const A: usize>(
                 },
             );
             let delta = hue_delta(hue_now, hue, HUE_SPAN, direction::SHORTEST).unwrap_or(0);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.hue = timed(
                 hue_now,
@@ -977,7 +989,9 @@ pub fn handle<const A: usize>(
                 return Outcome::Suppressed;
             }
             set_mode(c, color_mode::XY);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.x = timed(x_now, x, time, now, None, xy_range.0, xy_range.1);
             e.y = timed(y_now, y, time, now, None, xy_range.0, xy_range.1);
@@ -993,7 +1007,9 @@ pub fn handle<const A: usize>(
                 return Outcome::Suppressed;
             }
             set_mode(c, color_mode::XY);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             if rx != 0 {
                 e.x = moving(x_now, rx, now, None, xy_range.0, xy_range.1);
@@ -1014,7 +1030,9 @@ pub fn handle<const A: usize>(
                 return Outcome::Suppressed;
             }
             set_mode(c, color_mode::XY);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.x = timed(
                 x_now,
@@ -1049,7 +1067,9 @@ pub fn handle<const A: usize>(
             // Unachievable targets are clipped at the physical range
             // (§5.2.2.3.1).
             let target = target.clamp(phys_min, phys_max);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.temperature = timed(temp_now, target, time, now, None, phys_min, phys_max);
         }
@@ -1082,7 +1102,9 @@ pub fn handle<const A: usize>(
             } else {
                 max.min(phys_max)
             };
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             if m != mode::STOP {
                 let signed = if m == mode::UP { rate } else { -rate };
@@ -1123,7 +1145,9 @@ pub fn handle<const A: usize>(
                 temp_now - size
             }
             .clamp(lo, hi);
-            let e = engine(c);
+            let Some(e) = engine(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             stop_all(e);
             e.temperature = timed(temp_now, target, time, now, None, lo, hi);
         }
@@ -1159,7 +1183,9 @@ pub fn handle<const A: usize>(
                         c.set_u8(COLOR_LOOP_ACTIVE.id, 0);
                         let stored = c.u16(COLOR_LOOP_STORED_ENHANCED_HUE.id).unwrap_or(0);
                         set_enhanced_hue(c, stored);
-                        engine(c).color_loop.active = false;
+                        if let Some(s) = engine(c) {
+                            s.color_loop.active = false;
+                        }
                     }
                     0x01 | 0x02 => {
                         let current = enhanced_hue(c);
@@ -1187,7 +1213,9 @@ pub fn handle<const A: usize>(
                     -rate
                 };
                 let from = i64::from(enhanced_hue(c));
-                let e = engine(c);
+                let Some(e) = engine(c) else {
+                    return Outcome::Default(ZclStatus::Failure);
+                };
                 e.hue.active = false;
                 e.color_loop = moving(from, signed, now, Some(HUE_SPAN), 0, HUE_SPAN);
             }
@@ -1197,7 +1225,9 @@ pub fn handle<const A: usize>(
             if !executes(c, on_off, mask, over) {
                 return Outcome::Suppressed;
             }
-            stop_all(engine(c));
+            if let Some(s) = engine(c) {
+                stop_all(s);
+            }
             c.set_u16(REMAINING_TIME.id, 0);
         }
         _ => return Outcome::Default(ZclStatus::UnsupportedClusterCommand),
@@ -1217,12 +1247,15 @@ pub struct Tick {
 }
 
 /// Runs the engine once when its tick is due.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<Tick> {
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<Tick> {
     let due = c.tick?;
     if !now.has_reached(due) {
         return None;
     }
-    let e = *engine(c);
+    let &mut e = engine(c)?;
     let mut changed = false;
     let mut remaining_ms: u64 = 0;
     let mut running = false;
@@ -1242,29 +1275,29 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
     } else if e.hue.active {
         let (v, fin) = settle(&e.hue);
         changed |= set_enhanced_hue(c, u16::try_from(v.rem_euclid(HUE_SPAN)).unwrap_or(0));
-        if fin {
-            engine(c).hue.active = false;
+        if fin && let Some(s) = engine(c) {
+            s.hue.active = false;
         }
     }
     if e.saturation.active {
         let (v, fin) = settle(&e.saturation);
         changed |= c.set_u8(CURRENT_SATURATION.id, u8::try_from(v).unwrap_or(MAX_HUE));
-        if fin {
-            engine(c).saturation.active = false;
+        if fin && let Some(s) = engine(c) {
+            s.saturation.active = false;
         }
     }
     if e.x.active {
         let (v, fin) = settle(&e.x);
         changed |= c.set_u16(CURRENT_X.id, u16::try_from(v).unwrap_or(MAX_XY));
-        if fin {
-            engine(c).x.active = false;
+        if fin && let Some(s) = engine(c) {
+            s.x.active = false;
         }
     }
     if e.y.active {
         let (v, fin) = settle(&e.y);
         changed |= c.set_u16(CURRENT_Y.id, u16::try_from(v).unwrap_or(MAX_XY));
-        if fin {
-            engine(c).y.active = false;
+        if fin && let Some(s) = engine(c) {
+            s.y.active = false;
         }
     }
     if e.temperature.active {
@@ -1273,11 +1306,11 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
             COLOR_TEMPERATURE_MIREDS.id,
             u16::try_from(v).unwrap_or(MAX_XY),
         );
-        if fin {
-            engine(c).temperature.active = false;
+        if fin && let Some(s) = engine(c) {
+            s.temperature.active = false;
         }
     }
-    let e = *engine(c);
+    let &mut e = engine(c)?;
     let any =
         e.hue.active || e.saturation.active || e.x.active || e.y.active || e.temperature.active;
     c.set_u16(
@@ -1298,7 +1331,7 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
 /// Scene extension field set (§5.2.2.5): CurrentX, CurrentY,
 /// EnhancedCurrentHue, CurrentSaturation, ColorLoopActive,
 /// ColorLoopDirection, ColorLoopTime, ColorTemperatureMireds.
-pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 13] {
+pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 13] {
     let mut f = [0u8; 13];
     f[..2].copy_from_slice(&c.u16(CURRENT_X.id).unwrap_or(0).to_le_bytes());
     f[2..4].copy_from_slice(&c.u16(CURRENT_Y.id).unwrap_or(0).to_le_bytes());
@@ -1318,8 +1351,8 @@ pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 13] {
 /// Applies a scene extension field set over `tenths` tenths of a
 /// second, in the colour mode the device is in (the fields of
 /// unsupported attributes are ignored, §5.2.2.5).
-pub fn apply_scene_fields<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     fields: &[u8],
     tenths: u16,
     now: Instant,
@@ -1335,7 +1368,9 @@ pub fn apply_scene_fields<const A: usize>(
     let temp = r.u16_le().ok();
     let caps = capabilities(c);
     let mode = c.u8(ENHANCED_COLOR_MODE.id).unwrap_or(0);
-    let e_stop = engine(c);
+    let Some(e_stop) = engine(c) else {
+        return;
+    };
     stop_all(e_stop);
     e_stop.color_loop.active = false;
     let hue_now = i64::from(enhanced_hue(c));
@@ -1347,7 +1382,9 @@ pub fn apply_scene_fields<const A: usize>(
                     i64::from(c.u16(CURRENT_X.id).unwrap_or(0)),
                     i64::from(c.u16(CURRENT_Y.id).unwrap_or(0)),
                 );
-                let e = engine(c);
+                let Some(e) = engine(c) else {
+                    return;
+                };
                 e.x = timed(
                     xn,
                     i64::from(x.min(MAX_XY)),
@@ -1375,7 +1412,9 @@ pub fn apply_scene_fields<const A: usize>(
                     i64::from(c.u16(COLOR_TEMP_PHYSICAL_MAX_MIREDS.id).unwrap_or(MAX_XY)),
                 );
                 let tn = i64::from(c.u16(COLOR_TEMPERATURE_MIREDS.id).unwrap_or(0));
-                let e = engine(c);
+                let Some(e) = engine(c) else {
+                    return;
+                };
                 e.temperature = timed(
                     tn,
                     i64::from(t).clamp(min, max),
@@ -1391,7 +1430,9 @@ pub fn apply_scene_fields<const A: usize>(
             if let (Some(h), Some(s)) = (hue, sat) {
                 let delta =
                     hue_delta(hue_now, i64::from(h), HUE_SPAN, direction::SHORTEST).unwrap_or(0);
-                let e = engine(c);
+                let Some(e) = engine(c) else {
+                    return;
+                };
                 e.hue = timed(
                     hue_now,
                     hue_now + delta,
@@ -1425,7 +1466,7 @@ pub fn apply_scene_fields<const A: usize>(
 }
 
 /// Applies `StartUpColorTemperatureMireds` at power-up (Table 5.9).
-pub fn start_up<const A: usize>(c: &mut ClusterInstance<A>) {
+pub fn start_up<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
     match c.u16(START_UP_COLOR_TEMPERATURE_MIREDS.id) {
         Some(START_UP_PREVIOUS) | None => {}
         Some(v) => {
@@ -1452,7 +1493,11 @@ mod tests {
         | capability::XY
         | capability::COLOR_TEMPERATURE;
 
-    fn run<const A: usize>(c: &mut ClusterInstance<A>, from: Instant, to: Instant) -> Option<Tick> {
+    fn run<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        from: Instant,
+        to: Instant,
+    ) -> Option<Tick> {
         let mut t = from;
         let mut last = None;
         while t.as_millis() <= to.as_millis() {
@@ -1664,7 +1709,7 @@ mod tests {
             handle(&mut t, CMD_MOVE_TO_HUE, &[1, 0, 0, 0], Some(true), t0),
             Outcome::Default(ZclStatus::UnsupportedClusterCommand)
         );
-        assert!(server::<16>(capability::ENHANCED_HUE, (1, 2)).is_err());
+        assert!(server::<16, crate::Full>(capability::ENHANCED_HUE, (1, 2)).is_err());
     }
 
     #[test]

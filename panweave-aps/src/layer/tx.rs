@@ -13,8 +13,8 @@ use panweave_types::{
 use zeroize::Zeroize;
 
 use super::{
-    Aps, ApsAction, ApsError, ApsEvent, AsduBuf, DataRequest, Delivery, Destination, DeviceState,
-    FrameBuf, Loopback, NwkHandle, NwkView, RequestId, TxOptions,
+    Aps, ApsAction, ApsDims, ApsError, ApsEvent, AsduBuf, DataRequest, Delivery, Destination,
+    DeviceState, FrameBuf, Loopback, NwkHandle, NwkView, RequestId, TxOptions,
 };
 use crate::aib::constants;
 use crate::command::ApsCommandId;
@@ -146,14 +146,7 @@ pub(crate) struct TxParams {
     pub wrap: Option<Wrap>,
 }
 
-impl<
-    C: BlockCipher,
-    const KEYS: usize,
-    const BINDINGS: usize,
-    const GROUPS: usize,
-    const DUPS: usize,
-> Aps<C, KEYS, BINDINGS, GROUPS, DUPS>
-{
+impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
     /// APSDE-DATA.request (§2.2.4.1.1). Returns the request identifier
     /// echoed in [`ApsEvent::DataConfirm`]. Bound and group frames that
     /// have local members are also delivered through
@@ -535,7 +528,7 @@ impl<
         let partner = partner.filter(|_| header.control.security);
         let header_len = header.encoded_len();
         let aux_len = partner.map_or(0, |_| {
-            crate::security::ApsSecurity::<C, KEYS>::aux_header_len(extended_nonce)
+            crate::security::ApsSecurity::<C, D::Keys>::aux_header_len(extended_nonce)
         });
         let mic_len = partner.map_or(0, |_| self.config.security_level.mic_len());
         let total = header_len + aux_len + payload.len() + mic_len;

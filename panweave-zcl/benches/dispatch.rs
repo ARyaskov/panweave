@@ -64,7 +64,7 @@ fn ind<'a>(cluster: ClusterId, asdu: &'a [u8]) -> DataIndication<'a> {
 fn dispatch(c: &mut Criterion) {
     let mut group = c.benchmark_group("zcl-dispatch");
     let mut zcl = lamp();
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     // Read Attributes: ZCLVersion, ManufacturerName, ModelIdentifier.
     let read = frame(
         &Header::global(

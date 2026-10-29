@@ -8,6 +8,7 @@ use panweave_types::ClusterId;
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -37,10 +38,10 @@ pub const DEF: ClusterDef = ClusterDef {
 
 /// Builds a server instance with the given base (minutes, non-zero) and
 /// jitter (seconds).
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     base_minutes: u8,
     jitter_seconds: u16,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(
         TC_KEEP_ALIVE_BASE,
@@ -60,6 +61,6 @@ pub fn server<const A: usize>(
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }

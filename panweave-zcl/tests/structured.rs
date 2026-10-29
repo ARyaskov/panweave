@@ -99,7 +99,13 @@ fn exchange(zcl: &mut Node, cmd: CommandId, payload: &[u8]) -> (Header, Vec<u8>)
         counter: 0,
         nwk_broadcast: false,
     };
-    assert!(zcl.on_data(&ind, &mut GroupTable::<4>::new()).is_none());
+    assert!(
+        zcl.on_data(
+            &ind,
+            &mut GroupTable::<panweave_types::capacity::Cap<4>>::new()
+        )
+        .is_none()
+    );
     match zcl.next_action().unwrap() {
         ZclAction::Send { frame, .. } => {
             let (h, n) = Header::decode_prefix(&frame).unwrap();

@@ -9,8 +9,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId};
 
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -198,7 +199,9 @@ fn u8v(v: u8) -> Value<'static> {
 /// Builds a battery-powered device's server: the battery information
 /// set with reporting, the alarm mask, the four voltage and percentage
 /// thresholds (all 0 = disabled) and `BatteryAlarmState`.
-pub fn battery_server<const A: usize>(rated_voltage: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn battery_server<const A: usize, P: ZclProfile>(
+    rated_voltage: u8,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     add_battery_source(&mut c, 1, rated_voltage)?;
     c.add_reported_attribute(
@@ -209,11 +212,50 @@ pub fn battery_server<const A: usize>(rated_voltage: u8) -> Result<ClusterInstan
     Ok(c)
 }
 
+/// A battery sensor's server: `BatteryVoltage`, `BatteryPercentageRemaining`
+/// (reported), `BatteryRatedVoltage`, `BatteryAlarmMask`,
+/// `BatteryVoltageMinThreshold` and `BatteryAlarmState` (reported): 7
+/// attributes with `ClusterRevision`, where [`battery_server`] has 14
+/// (every Power Configuration attribute is optional, ZCL8 §3.3.2.2).
+/// `min_threshold` (100 mV, 0 = disabled) raises the low-battery alarm
+/// state.
+pub fn battery_server_basic<const A: usize, P: ZclProfile>(
+    rated_voltage: u8,
+    min_threshold: u8,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
+    let mut c = ClusterInstance::new(DEF, Role::Server);
+    fill_battery_server_basic(&mut c, rated_voltage, min_threshold)?;
+    Ok(c)
+}
+
+/// [`battery_server_basic`] filled into an instance created with [`DEF`]
+/// (built in place by [`crate::layer::EndpointInstance::add_cluster`]).
+pub fn fill_battery_server_basic<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    rated_voltage: u8,
+    min_threshold: u8,
+) -> Result<(), ZclStatus> {
+    c.add_attribute(BATTERY_VOLTAGE, &u8v(UNKNOWN))?;
+    c.add_reported_attribute(
+        BATTERY_PERCENTAGE_REMAINING,
+        &u8v(UNKNOWN),
+        PERCENTAGE_REPORTING,
+    )?;
+    c.add_attribute(BATTERY_RATED_VOLTAGE, &u8v(rated_voltage))?;
+    c.add_attribute(BATTERY_ALARM_MASK, &Value::Bits { width: 1, bits: 0 })?;
+    c.add_attribute(BATTERY_VOLTAGE_MIN_THRESHOLD, &u8v(min_threshold))?;
+    c.add_reported_attribute(
+        BATTERY_ALARM_STATE,
+        &Value::Bits { width: 4, bits: 0 },
+        ALARM_STATE_REPORTING,
+    )
+}
+
 /// Adds the information and settings set of battery `source` (1–3,
 /// Table 3-27) to a server: voltage, reported percentage, rated
 /// voltage, alarm mask and the eight thresholds (0 = disabled).
-pub fn add_battery_source<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn add_battery_source<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     source: u8,
     rated_voltage: u8,
 ) -> Result<(), ZclStatus> {
@@ -242,7 +284,7 @@ pub fn add_battery_source<const A: usize>(
 
 /// Builds a mains-powered device's server: mains information and the
 /// mains settings (thresholds disabled).
-pub fn mains_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn mains_server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(MAINS_VOLTAGE, &Value::Uint { width: 2, value: 0 })?;
     c.add_attribute(MAINS_FREQUENCY, &u8v(UNKNOWN))?;
@@ -265,12 +307,12 @@ pub fn mains_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
         MAINS_VOLTAGE_DWELL_TRIP_POINT,
         &Value::Uint { width: 2, value: 0 },
     )?;
-    c.state = ClusterState::Mains(MainsDwell::default());
+    c.set_state(MainsDwell::default())?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
@@ -282,8 +324,8 @@ pub type BatteryAlarms = heapless::Vec<(u8, u32), 4>;
 /// `BatteryAlarmState` from the thresholds and returns the alarm codes
 /// enabled by `BatteryAlarmMask` that newly became active
 /// (§3.3.2.2.4.7–§3.3.2.2.4.9). A threshold of 0 is disabled.
-pub fn set_battery<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_battery<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     voltage: Option<u8>,
     percentage: Option<u8>,
 ) -> BatteryAlarms {
@@ -293,8 +335,8 @@ pub fn set_battery<const A: usize>(
 /// [`set_battery`] for battery `source` (1–3): its own thresholds and
 /// mask, its own ten `BatteryAlarmState` bits and alarm codes
 /// `0x{source}{level}`; the other sources' bits are left alone.
-pub fn set_battery_source<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_battery_source<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     source: u8,
     voltage: Option<u8>,
     percentage: Option<u8>,
@@ -348,8 +390,8 @@ pub fn set_battery_source<const A: usize>(
 /// Records whether mains power is available (a device that also has a
 /// battery); returns the alarm code to raise when it was just lost and
 /// the mask enables it.
-pub fn set_mains_available<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_mains_available<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     available: bool,
 ) -> Option<u8> {
     let previous = c
@@ -389,16 +431,16 @@ pub struct MainsDwell {
     pub raised: bool,
 }
 
-fn dwell<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut MainsDwell> {
-    match &mut c.state {
-        ClusterState::Mains(d) => Some(d),
-        _ => None,
-    }
+fn dwell<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut MainsDwell> {
+    c.state_mut::<MainsDwell>()
 }
 
 /// The alarm a mains reading calls for under the enabled thresholds
 /// and mask, before the dwell.
-fn mains_condition<const A: usize>(c: &ClusterInstance<A>, voltage: u16) -> Option<u8> {
+fn mains_condition<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+    voltage: u16,
+) -> Option<u8> {
     let mask = c.u8(MAINS_ALARM_MASK.id).unwrap_or(0);
     let min = c
         .u16(MAINS_VOLTAGE_MIN_THRESHOLD.id)
@@ -425,8 +467,8 @@ fn mains_condition<const A: usize>(c: &ClusterInstance<A>, voltage: u16) -> Opti
 /// condition that starts now arms the dwell timer instead; the layer
 /// raises the alarm from [`mains_tick`] when it expires without a
 /// further reading. Each excursion is reported once.
-pub fn set_mains_voltage<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_mains_voltage<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     voltage: u16,
     now: Instant,
 ) -> Option<u8> {
@@ -458,7 +500,10 @@ pub fn set_mains_voltage<const A: usize>(
 
 /// Raises the pending mains alarm once its dwell has elapsed (`None`
 /// otherwise); arms the cluster tick for the dwell's end.
-pub fn mains_tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<u8> {
+pub fn mains_tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<u8> {
     let d = dwell(c)?;
     let (code, due) = d.pending?;
     if d.raised {

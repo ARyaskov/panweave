@@ -1876,7 +1876,8 @@ fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
         tc: tc_ieee,
         zdd: (zdd_ieee, zdd_short),
     };
-    let mut zvd: Aps<SoftwareAes, 4, 4, 4, 4> = Aps::new(zvd_ieee, ApsConfig::default());
+    let mut zvd: Aps<SoftwareAes, panweave_aps::layer::Dims<4, 4, 4, 4>> =
+        Aps::new(zvd_ieee, ApsConfig::default());
     zvd.aib.trust_center_address = tc_ieee;
     for partner in [tc_ieee, zdd_ieee] {
         zvd.install_link_key(LinkKeyEntry::provisional(
@@ -1915,7 +1916,9 @@ fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
     // APS layer; the ZVD's own output goes back through the tunnel.
     let mut fed = 0usize;
     let mut zvd_seq = 10u8;
-    let mut pump = |w: &mut World, zvd: &mut Aps<SoftwareAes, 4, 4, 4, 4>| -> Vec<ApsEvent> {
+    let mut pump = |w: &mut World,
+                    zvd: &mut Aps<SoftwareAes, panweave_aps::layer::Dims<4, 4, 4, 4>>|
+     -> Vec<ApsEvent> {
         let mut events = Vec::new();
         loop {
             while let Some(a) = zvd.next_action() {

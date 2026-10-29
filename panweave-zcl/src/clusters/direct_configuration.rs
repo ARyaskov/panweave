@@ -10,8 +10,9 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -94,11 +95,11 @@ pub struct State {
 
 /// Builds a server: the interface `enabled`, the anonymous join
 /// timeout `timeout` seconds, on a `centralized` network.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     enabled: bool,
     timeout: u32,
     centralized: bool,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(
         INTERFACE_STATE,
@@ -114,28 +115,31 @@ pub fn server<const A: usize>(
             value: u64::from(timeout & ANONYMOUS_JOIN_ALWAYS),
         },
     )?;
-    c.state = ClusterState::DirectConfiguration(State { centralized });
+    c.set_state(State { centralized })?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Whether the server's interface is enabled.
-pub fn interface_enabled<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn interface_enabled<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     c.u8(INTERFACE_STATE.id).unwrap_or(0) & INTERFACE_ENABLED != 0
 }
 
 /// The server's `AnonymousJoinTimeout`.
-pub fn anonymous_join_timeout<const A: usize>(c: &ClusterInstance<A>) -> u32 {
+pub fn anonymous_join_timeout<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u32 {
     u32::try_from(c.u64(ANONYMOUS_JOIN_TIMEOUT.id).unwrap_or(0)).unwrap_or(ANONYMOUS_JOIN_ALWAYS)
 }
 
 /// Sets the interface state (also from the application, e.g. after a
 /// local stimulus); returns whether it changed.
-pub fn set_interface<const A: usize>(c: &mut ClusterInstance<A>, enabled: bool) -> bool {
+pub fn set_interface<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    enabled: bool,
+) -> bool {
     if interface_enabled(c) == enabled {
         return false;
     }
@@ -150,8 +154,8 @@ pub fn set_interface<const A: usize>(c: &mut ClusterInstance<A>, enabled: bool) 
 }
 
 /// Sets the anonymous join timeout; returns whether it changed.
-pub fn set_anonymous_join_timeout<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_anonymous_join_timeout<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     timeout: u32,
 ) -> bool {
     if anonymous_join_timeout(c) == timeout {
@@ -195,8 +199,8 @@ pub enum Outcome {
 /// `aps_secured` (§11.3.5.1: on a centralized network only APS-secured
 /// commands are authorized; the caller passes `from_trust_center` for
 /// the source check).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
     unicast: bool,
@@ -207,10 +211,7 @@ pub fn handle<const A: usize>(
         // §11.3.5.4.2: groupcast and broadcast are ignored.
         return Outcome::Default(ZclStatus::Success);
     }
-    let centralized = match c.state {
-        ClusterState::DirectConfiguration(s) => s.centralized,
-        _ => true,
-    };
+    let centralized = c.state_ref::<State>().is_none_or(|s| s.centralized);
     if centralized && !(aps_secured && from_trust_center) {
         return Outcome::Default(ZclStatus::NotAuthorized);
     }

@@ -2,6 +2,7 @@
 //! (§3.6.1.5.2).
 
 use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Channel, ChannelPage, ExtendedAddress, PanId, ShortAddress};
 
 use crate::tlv::RouterInformation;
@@ -78,17 +79,29 @@ impl Candidate {
 }
 
 /// Fixed-capacity discovery table.
-#[derive(Clone, Debug, Default)]
-pub struct DiscoveryTable<const N: usize> {
-    entries: Vec<Candidate, N>,
+#[derive(Debug)]
+pub struct DiscoveryTable<K: Capacity> {
+    entries: VecOf<Candidate, K>,
 }
 
-impl<const N: usize> DiscoveryTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for DiscoveryTable<K> {
+    fn clone(&self) -> Self {
         DiscoveryTable {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for DiscoveryTable<K> {
+    fn default() -> Self {
+        DiscoveryTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> DiscoveryTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        DiscoveryTable { entries: K::vec() }
     }
 
     /// Adds or updates a candidate (keyed by PAN ID, channel and short
@@ -143,10 +156,10 @@ impl<const N: usize> DiscoveryTable<N> {
         current_update_id: u8,
         current_parent: Option<ShortAddress>,
         max_attempts: u8,
-        out: &mut Vec<usize, N>,
+        out: &mut VecOf<usize, K>,
     ) {
         out.clear();
-        let mut idx: Vec<usize, N> = Vec::new();
+        let mut idx: VecOf<usize, K> = K::vec();
         for (i, c) in self.entries.iter().enumerate() {
             if let Some(e) = extended_pan_id
                 && c.extended_pan_id != e
@@ -187,7 +200,7 @@ impl<const N: usize> DiscoveryTable<N> {
                 }
             }
         }
-        for i in idx {
+        for &i in idx.iter() {
             let _ = out.push(i);
         }
     }
@@ -268,7 +281,7 @@ mod tests {
 
     #[test]
     fn ranking_prefers_hub_then_update_id_then_lqa() {
-        let mut t = DiscoveryTable::<6>::new();
+        let mut t = DiscoveryTable::<panweave_types::capacity::Cap<6>>::new();
         t.add(cand(1, 250, false, 0), 0, None);
         t.add(cand(2, 100, true, 0), 0, None);
         t.add(cand(3, 200, false, 1), 0, None);
@@ -303,7 +316,7 @@ mod tests {
 
     #[test]
     fn full_table_keeps_best() {
-        let mut t = DiscoveryTable::<2>::new();
+        let mut t = DiscoveryTable::<panweave_types::capacity::Cap<2>>::new();
         t.add(cand(1, 50, false, 0), 0, None);
         t.add(cand(2, 60, false, 0), 0, None);
         t.add(cand(3, 255, false, 0), 0, None);
@@ -320,7 +333,7 @@ mod tests {
 
     #[test]
     fn filters_capacity_permit_and_attempts() {
-        let mut t = DiscoveryTable::<4>::new();
+        let mut t = DiscoveryTable::<panweave_types::capacity::Cap<4>>::new();
         let mut a = cand(1, 200, false, 0);
         a.permit_joining = false;
         let mut b = cand(2, 200, false, 0);

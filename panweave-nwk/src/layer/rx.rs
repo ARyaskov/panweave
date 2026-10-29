@@ -5,7 +5,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::frame::SecurityError;
 use panweave_types::{ExtendedAddress, Rng, ShortAddress, ShortAddressKind};
 
-use super::{NpduBuf, Nwk, NwkEvent};
+use super::{NpduBuf, Nwk, NwkDims, NwkEvent};
 use crate::address_map::AddressMapUpdate;
 use crate::command::{NetworkStatusCode, NwkCommand, NwkCommandId};
 use crate::frame::{FrameType, Header, PROTOCOL_VERSION};
@@ -44,15 +44,7 @@ pub enum RxOutcome<'a> {
     },
 }
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// An NPDU received over a Trusted Link `link` from `peer`
     /// (NLME-TRUSTEDLINK-PREPROCESSING.confirm, R23.2 §3.2.2.44): the
     /// frame carries no NWK security; `assume_security` treats it as

@@ -1,0 +1,6 @@
+{
+  "comment": "Limits for scripts/lite_footprint.py --check on the dlk link build (EFR32MG22, 32 KiB RAM). Measured on 2026-10-29: static RAM 16320, flash 135324, static + peak stack 23320 (QEMU mps2-an505). Raise a limit only with the reason in the commit.",
+  "max_static_ram": 16640,
+  "max_flash": 140000,
+  "max_ram_with_stack": 24576
+}

@@ -11,14 +11,15 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::frame::{self, SecurityError};
 use panweave_security::frame_counter::{FreshnessError, IncomingCounters, Reservation};
 use panweave_security::material::NetworkKeys;
+use panweave_types::capacity::Capacity;
 use panweave_types::{ExtendedAddress, FrameCounter, Key128, KeySequenceNumber};
 
 /// NWK security state: keys, counters and cached cipher instances.
-pub struct NwkSecurity<C: BlockCipher, const N: usize> {
+pub struct NwkSecurity<C: BlockCipher, K: Capacity> {
     /// Network keys and the outgoing frame counter.
     pub keys: NetworkKeys,
     /// Incoming frame counters per sender.
-    pub incoming: IncomingCounters<N>,
+    pub incoming: IncomingCounters<K>,
     ciphers: [Option<(KeySequenceNumber, C)>; 2],
 }
 
@@ -37,15 +38,15 @@ pub struct Unsecured {
     pub payload_end: usize,
 }
 
-impl<C: BlockCipher, const N: usize> Default for NwkSecurity<C, N> {
+impl<C: BlockCipher, K: Capacity> Default for NwkSecurity<C, K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<C: BlockCipher, const N: usize> NwkSecurity<C, N> {
+impl<C: BlockCipher, K: Capacity> NwkSecurity<C, K> {
     /// Empty state (no keys).
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         NwkSecurity {
             keys: NetworkKeys::new(),
             incoming: IncomingCounters::new(),
@@ -124,6 +125,12 @@ impl<C: BlockCipher, const N: usize> NwkSecurity<C, N> {
         self.keys.outgoing.commit_reservation(r);
     }
 
+    /// Abandons a reservation that could not be persisted; the next
+    /// frame to secure requests a new one.
+    pub fn abort_counter_reservation(&mut self) {
+        self.keys.outgoing.abort_reservation();
+    }
+
     /// Restores the persisted outgoing counter bound.
     pub fn restore_outgoing_counter(&mut self, reserved_until: u32) {
         self.keys.outgoing =
@@ -200,8 +207,8 @@ mod tests {
     use super::*;
     use panweave_security::cipher::SoftwareAes;
 
-    fn armed() -> NwkSecurity<SoftwareAes, 4> {
-        let mut s = NwkSecurity::<SoftwareAes, 4>::new();
+    fn armed() -> NwkSecurity<SoftwareAes, panweave_types::capacity::Cap<4>> {
+        let mut s = NwkSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
         s.install_active_key(KeySequenceNumber(0), Key128::from_bytes([1; 16]));
         let r = s.start_counter_reservation().unwrap();
         s.commit_counter_reservation(r);
@@ -216,7 +223,7 @@ mod tests {
         let header = [0x08, 0x02, 0x01, 0x00, 0x02, 0x00, 30, 1];
         let mut buf = [0u8; 64];
         buf[..8].copy_from_slice(&header);
-        let ps = 8 + NwkSecurity::<SoftwareAes, 4>::aux_header_len();
+        let ps = 8 + NwkSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::aux_header_len();
         buf[ps..ps + 3].copy_from_slice(&[1, 2, 3]);
         let n = tx
             .secure_outgoing(&mut buf, 8, 3, SecurityLevel::EncMic32, me)
@@ -235,7 +242,7 @@ mod tests {
             Err(SecurityError::BadFrameCounter)
         );
         // Unknown key sequence is rejected.
-        let mut other = NwkSecurity::<SoftwareAes, 4>::new();
+        let mut other = NwkSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
         other.install_active_key(KeySequenceNumber(5), Key128::from_bytes([2; 16]));
         let mut b2 = buf;
         assert_eq!(
@@ -246,7 +253,7 @@ mod tests {
 
     #[test]
     fn counter_reservation_gates_transmission() {
-        let mut s = NwkSecurity::<SoftwareAes, 4>::new();
+        let mut s = NwkSecurity::<SoftwareAes, panweave_types::capacity::Cap<4>>::new();
         s.install_active_key(KeySequenceNumber(0), Key128::ZERO);
         let mut buf = [0u8; 40];
         assert_eq!(

@@ -16,6 +16,7 @@ use panweave_types::{AttributeId, ClusterId, CommandId};
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -486,8 +487,8 @@ const fn u16v(v: u16) -> Value<'static> {
     }
 }
 
-fn add_scale<const A: usize>(
-    c: &mut ClusterInstance<A>,
+fn add_scale<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     multiplier: AttributeDef,
     divisor: AttributeDef,
     scale: Scale,
@@ -504,7 +505,9 @@ fn add_scale<const A: usize>(
 /// the RMS voltage extremes only (the current and active power minima /
 /// maxima are defined but not instantiated, to stay within the
 /// attribute capacity).
-pub fn server<const A: usize>(capability: Capability) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>(
+    capability: Capability,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let mut kind = 0u32;
     if capability.dc.is_some() {
@@ -576,13 +579,15 @@ pub fn server<const A: usize>(capability: Capability) -> Result<ClusterInstance<
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Adds the RMS current and active power extremes of the single-phase
 /// set (Table 4-34); `set_ac` tracks them from then on.
-pub fn enable_ac_extremes<const A: usize>(c: &mut ClusterInstance<A>) -> Result<(), ZclStatus> {
+pub fn enable_ac_extremes<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+) -> Result<(), ZclStatus> {
     c.add_attribute(ac::RMS_CURRENT_MIN, &u16v(ac::UNKNOWN_U16))?;
     c.add_attribute(ac::RMS_CURRENT_MAX, &u16v(ac::UNKNOWN_U16))?;
     c.add_attribute(ac::ACTIVE_POWER_MIN, &i16v(ac::UNKNOWN_I16))?;
@@ -593,7 +598,9 @@ pub fn enable_ac_extremes<const A: usize>(c: &mut ClusterInstance<A>) -> Result<
 /// period, over / under voltage counters and periods, sag / swell
 /// periods) and the Table 4-38 thresholds beyond the overloads; the
 /// alarms are evaluated by `set_ac` against the readings.
-pub fn enable_voltage_quality<const A: usize>(c: &mut ClusterInstance<A>) -> Result<(), ZclStatus> {
+pub fn enable_voltage_quality<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+) -> Result<(), ZclStatus> {
     for a in [
         ac::AVERAGE_RMS_VOLTAGE_MEASUREMENT_PERIOD,
         ac::AVERAGE_RMS_OVER_VOLTAGE_COUNTER,
@@ -625,8 +632,8 @@ pub fn enable_voltage_quality<const A: usize>(c: &mut ClusterInstance<A>) -> Res
 /// harmonics (0…6, with their phase counterparts) and the Table 4-33
 /// formatting: the `power` scale and the harmonic multipliers as
 /// powers of ten.
-pub fn enable_ac_totals<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_ac_totals<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     power: Scale,
     harmonics: usize,
     harmonic_multiplier: i8,
@@ -704,8 +711,8 @@ pub fn enable_ac_totals<const A: usize>(
 /// Adds the measurement set of `phase` B or C (Tables 4-39 / 4-40):
 /// RMS voltage with extremes, RMS current, active / reactive / apparent
 /// power and power factor, and marks the phase in `MeasurementType`.
-pub fn enable_phase<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_phase<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     phase: Phase,
 ) -> Result<(), ZclStatus> {
     if phase == Phase::A {
@@ -753,7 +760,11 @@ pub fn enable_phase<const A: usize>(
 
 /// Records the readings of phase B or C (voltage extremes tracked; no
 /// alarms, which the phase A thresholds cover).
-pub fn set_ac_phase<const A: usize>(c: &mut ClusterInstance<A>, phase: Phase, r: AcReading) {
+pub fn set_ac_phase<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    phase: Phase,
+    r: AcReading,
+) {
     if phase == Phase::A {
         set_ac(c, r);
         return;
@@ -809,7 +820,7 @@ pub struct AcTotals {
 }
 
 /// Records the totals of Table 4-32.
-pub fn set_ac_totals<const A: usize>(c: &mut ClusterInstance<A>, t: AcTotals) {
+pub fn set_ac_totals<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, t: AcTotals) {
     track_u16(
         c,
         ac::FREQUENCY,
@@ -844,8 +855,8 @@ pub fn set_ac_totals<const A: usize>(c: &mut ClusterInstance<A>, t: AcTotals) {
 
 /// Records the measured current harmonics (order index 0…5 for the 1st,
 /// 3rd, 5th, 7th, 9th and 11th) and their phase counterparts.
-pub fn set_harmonics<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_harmonics<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     magnitudes: &[i16],
     phases: &[i16],
 ) {
@@ -863,16 +874,16 @@ pub fn set_harmonics<const A: usize>(
 
 /// Sets a manufacturer overload threshold (the `*Overload` attributes;
 /// unknown thresholds never alarm).
-pub fn set_threshold<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_threshold<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     id: AttributeId,
     value: i16,
 ) -> bool {
     c.set_i16(id, value)
 }
 
-fn track_i16<const A: usize>(
-    c: &mut ClusterInstance<A>,
+fn track_i16<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     reading: AttributeDef,
     min: AttributeDef,
     max: AttributeDef,
@@ -895,8 +906,8 @@ fn track_i16<const A: usize>(
     changed
 }
 
-fn track_u16<const A: usize>(
-    c: &mut ClusterInstance<A>,
+fn track_u16<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     reading: AttributeDef,
     min: AttributeDef,
     max: AttributeDef,
@@ -928,8 +939,8 @@ fn overload(mask: u64, bit: u8, threshold: Option<i16>, value: i64) -> bool {
 /// Records DC readings (`None` = unknown), tracks the minima / maxima
 /// and returns the overload alarm codes enabled by
 /// `DCOverloadAlarmsMask` whose threshold the reading exceeds.
-pub fn set_dc<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_dc<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     voltage: Option<i16>,
     current: Option<i16>,
     power: Option<i16>,
@@ -1006,7 +1017,10 @@ pub struct AcReading {
 /// Records AC readings, tracks the minima / maxima and returns the
 /// overload alarm codes enabled by `ACAlarmsMask` whose threshold the
 /// reading exceeds.
-pub fn set_ac<const A: usize>(c: &mut ClusterInstance<A>, r: AcReading) -> Alarms {
+pub fn set_ac<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    r: AcReading,
+) -> Alarms {
     if c.attributes.get(ac_total::FREQUENCY_MIN.id, None).is_some() {
         track_u16(
             c,
@@ -1113,12 +1127,12 @@ pub fn set_ac<const A: usize>(c: &mut ClusterInstance<A>, r: AcReading) -> Alarm
     // average-RMS excursions.
     if let Some(v) = r.rms_voltage {
         let v = i64::from(v);
-        let above = |c: &ClusterInstance<A>, id: AttributeId| {
+        let above = |c: &ClusterInstance<A, P>, id: AttributeId| {
             c.i16(id)
                 .filter(|t| *t >= 0)
                 .is_some_and(|t| v > i64::from(t))
         };
-        let below = |c: &ClusterInstance<A>, id: AttributeId| {
+        let below = |c: &ClusterInstance<A, P>, id: AttributeId| {
             c.i16(id)
                 .filter(|t| *t >= 0)
                 .is_some_and(|t| v < i64::from(t))
@@ -1329,7 +1343,7 @@ mod tests {
             &[dc::ALARM_VOLTAGE_OVERLOAD]
         );
         assert!(
-            server::<24>(Capability {
+            server::<24, crate::Full>(Capability {
                 dc: Some(
                     [Scale {
                         multiplier: 0,
@@ -1511,8 +1525,13 @@ mod tests {
             Some(-3)
         );
         assert!(
-            enable_ac_totals::<96>(&mut server(Capability::AC).unwrap(), Scale::UNITY, 7, 0)
-                .is_err()
+            enable_ac_totals::<96, crate::Full>(
+                &mut server(Capability::AC).unwrap(),
+                Scale::UNITY,
+                7,
+                0
+            )
+            .is_err()
         );
     }
 }

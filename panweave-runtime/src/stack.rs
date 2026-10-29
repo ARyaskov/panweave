@@ -1,6 +1,7 @@
 //! The [`Stack`] type: configuration, events and the public control API.
 
-use heapless::{Deque, Vec};
+use crate::profile::StackProfile;
+use heapless::Vec;
 use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{Aps, ApsConfig, DeviceState, NwkHandle, RequestId};
 use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
@@ -11,13 +12,16 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::TrustCenterPolicy;
 use panweave_storage::Storage;
+use panweave_types::capacity::{Capacity, DequeOf, VecOf};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     Channel, ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, Key128, KeyAttributes,
     KeySequenceNumber, LogicalDeviceType, MacCapability, ManufacturerCode, NwkStatus, PanId,
     ProfileId, ShortAddress, TransactionSequence,
 };
-use panweave_zcl::ClusterInstance;
+use panweave_zcl::{ClusterInstance, ZclProfile};
+
+use crate::profile::FullStack;
 use panweave_zcl::clusters::basic;
 use panweave_zcl::layer::{EndpointInstance, Origin, Zcl};
 use panweave_zdo::descriptor::{
@@ -29,7 +33,7 @@ use panweave_zdo::layer::Zdo;
 /// route discoveries and 16 broadcast transactions (a commissioning
 /// burst — Device_annce, GP Pairing, mode changes — plus the relays of a
 /// few neighbors fit within nwkNetworkBroadcastDeliveryTime).
-pub type StackNwk<C, R> = Nwk<C, R, 16, 16, 4, 16>;
+pub type StackNwk<C, R> = Nwk<C, R, panweave_nwk::layer::Dims<16, 16, 4, 16>>;
 /// Link-key entries (`apsDeviceKeyPairSet`): one per device a Trust
 /// Center keys individually, so it bounds how many devices can complete
 /// the key exchange (`small-tables`: 8).
@@ -41,9 +45,9 @@ pub const LINK_KEYS: usize = 32;
 #[cfg(feature = "small-tables")]
 pub const LINK_KEYS: usize = 8;
 /// APS layer with the stack's table sizes.
-pub type StackAps<C> = Aps<C, LINK_KEYS, 8, 8, 8>;
+pub type StackAps<C> = Aps<C, panweave_aps::layer::Dims<LINK_KEYS, 8, 8, 8>>;
 /// ZDO with up to 4 endpoints.
-pub type StackZdo = Zdo<4>;
+pub type StackZdo = Zdo<panweave_zdo::layer::Dims<4>>;
 /// Endpoints the ZCL dispatcher holds (the Green Power endpoint counts).
 pub const ENDPOINTS: usize = 2;
 /// Cluster instances per endpoint, the Basic server the stack adds
@@ -66,9 +70,29 @@ pub type StackZcl = Zcl<ENDPOINTS, ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
 /// An endpoint of the stack's dimensions.
 pub type StackEndpoint = EndpointInstance<ENDPOINT_CLUSTERS, CLUSTER_ATTRIBUTES>;
 
+/// The NWK layer of a stack of profile `P`.
+pub type ProfileNwk<C, R, P> = Nwk<C, R, <P as StackProfile>::Nwk>;
+/// The APS layer of a stack of profile `P`.
+pub type ProfileAps<C, P> = Aps<C, <P as StackProfile>::Aps>;
+/// The ZDO of a stack of profile `P`.
+pub type ProfileZdo<P> = Zdo<<P as StackProfile>::Zdo>;
+/// The ZCL dispatcher of a stack of profile `P` with `E` endpoints of
+/// `CL` clusters of `A` attributes.
+pub type ProfileZcl<P, const E: usize, const CL: usize, const A: usize> =
+    Zcl<E, CL, A, <P as StackProfile>::Zcl>;
+/// An endpoint of a stack of profile `P`.
+pub type ProfileEndpoint<P, const CL: usize, const A: usize> =
+    EndpointInstance<CL, A, <P as StackProfile>::Zcl>;
+/// A cluster instance of a stack of profile `P`.
+pub type ProfileCluster<P, const A: usize> = ClusterInstance<A, <P as StackProfile>::Zcl>;
+
 /// Gives an application endpoint the Basic cluster server it must have,
-/// when it has none.
-fn add_basic_server(instance: &mut StackEndpoint, config: &StackConfig) {
+/// when it has none. The manufacturer name and model identifier are
+/// `'static` and stay in program memory.
+fn add_basic_server<Z: ZclProfile, const CL: usize, const A: usize>(
+    instance: &mut EndpointInstance<CL, A, Z>,
+    config: &StackConfig,
+) {
     if instance
         .cluster(basic::ID, panweave_zcl::Role::Server)
         .is_none()
@@ -78,8 +102,12 @@ fn add_basic_server(instance: &mut StackEndpoint, config: &StackConfig) {
         } else {
             basic::power_source::MAINS_SINGLE_PHASE
         };
-        if let Ok(b) = basic::server(power, config.manufacturer_name, config.model) {
-            let _ = instance.add_instance(b);
+        // Built in place: a cluster instance is kilobytes in the full
+        // profile.
+        if let Ok(b) = instance.add_cluster(basic::DEF, panweave_zcl::Role::Server)
+            && basic::fill_server_static(b, power, config.manufacturer_name, config.model).is_err()
+        {
+            instance.remove_last_cluster();
         }
     }
 }
@@ -471,6 +499,27 @@ pub enum StackEvent {
         endpoint: Endpoint,
         /// Zone identifier.
         zone_id: u8,
+    },
+    /// The outcome of a frame an IAS Zone server sent its CIE (a Zone
+    /// Status Change Notification or Zone Enroll Request, ZCL8 §8.2.2.4):
+    /// `status` is `Success` once the APS acknowledgement arrived;
+    /// anything else means the frame was not delivered (no
+    /// acknowledgement after the retries, no route, refused locally, or
+    /// the outcome could not be tracked) and the application decides
+    /// when to notify again. The stack never retransmits a notification
+    /// by itself.
+    ZoneDelivery {
+        /// Endpoint of the IAS Zone server.
+        endpoint: Endpoint,
+        /// The command sent.
+        command: panweave_types::CommandId,
+        /// Its ZCL transaction sequence number.
+        seq: TransactionSequence,
+        /// The `ZoneStatus` a notification carried (0 for an enroll
+        /// request).
+        zone_status: u16,
+        /// The APS outcome.
+        status: panweave_types::ApsStatus,
     },
     /// An IAS Zone server entered test mode (`Some(seconds)`) or resumed
     /// normal operation (`None`) (ZCL8 §8.2.2.2.2).
@@ -941,34 +990,124 @@ pub(crate) struct PendingChild {
     pub initial_join: bool,
 }
 
-/// The composed stack.
-pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
+/// The [`Stack`] literal of [`Stack::new`] and [`Stack::unstarted`]: the
+/// layers as given, every other field empty. A tail expression in both,
+/// so that the value is built in the caller's return slot.
+macro_rules! stack_literal {
+    ($config:expr, $storage:expr, $mac:expr, $nwk:expr, $aps:expr, $zdo:expr, $zcl:expr, $rejoin:expr) => {
+        Stack {
+            mac: $mac,
+            nwk: $nwk,
+            aps: $aps,
+            zdo: $zdo,
+            zcl: $zcl,
+            storage: $storage,
+            config: $config,
+            now: Instant::from_millis(0),
+            events: P::Events::deque(),
+            mac_handles: P::Handles::vec(),
+            aps_handles: P::Handles::vec(),
+            phase: Phase::Idle,
+            pending_children: P::PendingChildren::vec(),
+            zone_deliveries: P::Handles::vec(),
+            network_key_sequence: KeySequenceNumber(0),
+            pending_startup: None,
+            next_poll: None,
+            fast_polls_left: 0,
+            dlk: crate::dlk::DlkState::default(),
+            last_rx: None,
+            challenge: None,
+            energy_scan: None,
+            beacon_survey: None,
+            swap_out_pending: false,
+            key_update: None,
+            factory_reset_pending: false,
+            tclk_update: None,
+            ota_discovery: None,
+            virtual_devices: P::VirtualDevices::vec(),
+            interference: crate::agility::Interference::default(),
+            fragmentation: crate::fragment_cache::FragmentationCache::default(),
+            pending_channel_change: None,
+            channel_change_lockout: None,
+            pending_restart: None,
+            parent_annce: None,
+            parent_link_failures: 0,
+            last_rejoin_attempt: None,
+            rejoin_interval_secs: $rejoin,
+            rejoin_due: None,
+            parent_loss_rejoin: false,
+            awaiting_key_rejoin: false,
+            application_key_request_list: P::KeyRequests::vec(),
+            scan_attempts_left: 0,
+            next_scan: None,
+            last_scan: (ChannelMask::EMPTY, 0),
+            fast_poll_mode: None,
+            fast_polling: false,
+            keep_alive: crate::keep_alive::KeepAlive::default(),
+            #[cfg(feature = "green-power")]
+            green_power: None,
+            touchlink: P::Touchlink::default(),
+            dropped_events: 0,
+            join_trace: P::JoinTrace::deque(),
+            join_trace_dropped: 0,
+            authorization: crate::authorization::AuthorizationState::default(),
+            restore_detail: crate::persist::RestoreDetail::NotRun,
+        }
+    };
+}
+
+/// An IAS Zone frame whose APS outcome is awaited
+/// ([`StackEvent::ZoneDelivery`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ZoneDeliveryTracker {
+    pub request: RequestId,
+    pub endpoint: Endpoint,
+    pub command: panweave_types::CommandId,
+    pub seq: TransactionSequence,
+    pub zone_status: u16,
+}
+
+/// The composed stack: block cipher `C`, random generator `R`, storage
+/// `S`, its tables dimensioned by the profile `P` ([`StackProfile`];
+/// [`FullStack`] by default) and its ZCL dispatcher holding `E`
+/// endpoints of `CL` clusters of `A` attributes.
+pub struct Stack<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile = FullStack,
+    const E: usize = ENDPOINTS,
+    const CL: usize = ENDPOINT_CLUSTERS,
+    const A: usize = CLUSTER_ATTRIBUTES,
+> {
     /// MAC service.
-    pub mac: MacService,
+    pub mac: MacService<P::Mac>,
     /// NWK layer.
-    pub nwk: StackNwk<C, R>,
+    pub nwk: ProfileNwk<C, R, P>,
     /// APS layer.
-    pub aps: StackAps<C>,
+    pub aps: ProfileAps<C, P>,
     /// ZDO.
-    pub zdo: StackZdo,
+    pub zdo: ProfileZdo<P>,
     /// ZCL dispatcher.
-    pub zcl: StackZcl,
+    pub zcl: ProfileZcl<P, E, CL, A>,
     /// Storage backend.
     pub storage: S,
     /// Configuration.
     pub config: StackConfig,
     pub(crate) now: Instant,
-    pub(crate) events: Deque<StackEvent, EVENT_CAPACITY>,
-    pub(crate) mac_handles: Vec<(TxHandle, TxHandle), 8>,
-    pub(crate) aps_handles: Vec<(TxId, NwkHandle), 8>,
+    pub(crate) events: DequeOf<StackEvent, P::Events>,
+    pub(crate) mac_handles: VecOf<(TxHandle, TxHandle), P::Handles>,
+    pub(crate) aps_handles: VecOf<(TxId, NwkHandle), P::Handles>,
     pub(crate) phase: Phase,
-    pub(crate) pending_children: Vec<PendingChild, 4>,
+    pub(crate) pending_children: VecOf<PendingChild, P::PendingChildren>,
+    /// IAS Zone frames whose APS outcome is awaited.
+    pub(crate) zone_deliveries: VecOf<ZoneDeliveryTracker, P::Handles>,
     pub(crate) network_key_sequence: KeySequenceNumber,
     /// A Commissioning startup set to apply once the leave completes.
     pub(crate) pending_startup: Option<panweave_zcl::clusters::commissioning::StartupSet>,
     pub(crate) next_poll: Option<Instant>,
     pub(crate) fast_polls_left: u8,
-    pub(crate) dlk: crate::dlk::DlkState,
+    pub(crate) dlk: crate::dlk::DlkState<P>,
     /// LQI / RSSI of the last received frame (Diagnostics cluster).
     pub(crate) last_rx: Option<(u8, i8)>,
     /// Outstanding APS frame counter challenge (`apsChallengeTargetEui64`,
@@ -991,12 +1130,12 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// Joined Zigbee Direct Virtual Devices (isVirtualDevice of their
     /// key-pair descriptors, §4.6.3.2.2.4): a network key update sends
     /// them a Basic authorization key instead of the new network key.
-    pub(crate) virtual_devices: Vec<(ExtendedAddress, Option<ShortAddress>), 8>,
+    pub(crate) virtual_devices: VecOf<(ExtendedAddress, Option<ShortAddress>), P::VirtualDevices>,
     /// Interference reporting state (Annex E).
     pub(crate) interference: crate::agility::Interference,
     /// `apsFragmentationCacheTable` and the messages held for discovery
     /// (§2.2.8.4.5.1).
-    pub(crate) fragmentation: crate::fragment_cache::FragmentationCache,
+    pub(crate) fragmentation: crate::fragment_cache::FragmentationCache<P>,
     /// A channel change this network manager broadcast, applied after
     /// `nwkNetworkBroadcastDeliveryTime`.
     pub(crate) pending_channel_change: Option<crate::agility::PendingChannelChange>,
@@ -1030,7 +1169,7 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// `applicationKeyRequestList` (Table 4-42): device pairs an
     /// application link key may be issued to under the ListedOnly
     /// policy.
-    pub application_key_request_list: Vec<(ExtendedAddress, ExtendedAddress), 8>,
+    pub application_key_request_list: VecOf<(ExtendedAddress, ExtendedAddress), P::KeyRequests>,
     /// Discovery retries left for the join in progress
     /// (`:Config_NWK_Scan_Attempts`) and when the next scan may start.
     pub(crate) scan_attempts_left: u8,
@@ -1048,31 +1187,40 @@ pub struct Stack<C: BlockCipher, R: CryptoRng, S: Storage> {
     #[cfg(feature = "green-power")]
     pub(crate) green_power: Option<crate::green_power::GreenPower<C>>,
     /// Touchlink commissioning, when enabled.
-    pub(crate) touchlink: Option<crate::touchlink::Touchlink>,
+    pub(crate) touchlink: P::Touchlink,
     /// Events dropped on overflow.
     pub dropped_events: u32,
     /// Join milestones for diagnostics ([`crate::join_trace`]).
-    pub(crate) join_trace:
-        Deque<crate::join_trace::JoinRecord, { crate::join_trace::JOIN_TRACE_CAPACITY }>,
+    pub(crate) join_trace: DequeOf<crate::join_trace::JoinRecord, P::JoinTrace>,
     /// Join milestones dropped because nobody drained them.
     pub join_trace_dropped: u32,
     /// Trust Center authorization ([`crate::authorization`]).
-    pub(crate) authorization: crate::authorization::AuthorizationState,
+    pub(crate) authorization: crate::authorization::AuthorizationState<P>,
     /// Why the last [`Stack::restore`] found no usable network.
     pub(crate) restore_detail: crate::persist::RestoreDetail,
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Builds a stack. `rng` must be cryptographically secure: it seeds
     /// NWK jitter and addresses and generates network and link keys.
     pub fn new(config: StackConfig, mac_config: MacServiceConfig, rng: R, storage: S) -> Self {
+        // The layers are locals configured before the literal, which is
+        // the tail expression: a local holding the whole stack (then
+        // returned) would add a stack-sized copy to the caller's frame,
+        // which LTO inlines into `main` (ESP32-C6 hub: docs/esp32c6-hub.md).
         let rejoin_interval_secs = config.zdo.rejoin_interval_secs;
-        let mac = MacService::new(mac_config, config.ieee);
-        let mut nib = Nib::new(config.role, config.ieee);
-        nib.rx_on_when_idle = !config.sleepy;
-        nib.capability_information = config.capability();
-        let mut nwk = Nwk::new(nib, NwkConfig::default(), rng);
         let is_tc = config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        let mac = MacService::new(mac_config, config.ieee);
+        let mut nwk = Nwk::new(Self::nib_for(&config), NwkConfig::default(), rng);
         let mut aps = Aps::new(
             config.ieee,
             ApsConfig {
@@ -1080,11 +1228,104 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 ..ApsConfig::default()
             },
         );
-        aps.seed_counter(nwk.rng().next_u8());
+        let seed = nwk.rng().next_u8();
+        Self::configure_aps(&mut aps, &config, seed);
+        let zdo = Zdo::new(
+            Self::node_descriptor(&config),
+            Self::power_descriptor(&config),
+        );
+        stack_literal!(
+            config,
+            storage,
+            mac,
+            nwk,
+            aps,
+            zdo,
+            {
+                let mut z = Zcl::new();
+                z.set_ieee(config.ieee);
+                z
+            },
+            rejoin_interval_secs
+        )
+    }
+
+    /// [`Stack::new`] into `slot` (a `static`, or a field of a larger
+    /// value): the layers are built in place as far as the optimizer
+    /// can, instead of in a stack-sized temporary that is then copied. On
+    /// a small microcontroller the copy is what overflows the stack.
+    pub fn new_in(
+        slot: &mut core::mem::MaybeUninit<Self>,
+        config: StackConfig,
+        mac_config: MacServiceConfig,
+        rng: R,
+        storage: S,
+    ) -> &mut Self {
+        let s = slot.write(Self::unstarted(config, mac_config, rng, storage));
+        s.start_up();
+        s
+    }
+
+    /// The first half of [`Stack::new`]: every field from its
+    /// constructor, with no mutation in between (so that each layer can
+    /// be constructed directly in its place). Call
+    /// [`Stack::start_up`] on the result before anything else; a value
+    /// embedded in a larger struct is built this way.
+    pub fn unstarted(
+        config: StackConfig,
+        mac_config: MacServiceConfig,
+        rng: R,
+        storage: S,
+    ) -> Self {
+        let rejoin_interval_secs = config.zdo.rejoin_interval_secs;
+        let is_tc = config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        let nib = Self::nib_for(&config);
+        let node = Self::node_descriptor(&config);
+        let power = Self::power_descriptor(&config);
+        let ieee = config.ieee;
+        stack_literal!(
+            config,
+            storage,
+            MacService::new(mac_config, ieee),
+            Nwk::new(nib, NwkConfig::default(), rng),
+            Aps::new(
+                ieee,
+                ApsConfig {
+                    is_trust_center: is_tc,
+                    ..ApsConfig::default()
+                },
+            ),
+            Zdo::new(node, power),
+            Zcl::new(),
+            rejoin_interval_secs
+        )
+    }
+
+    /// The second half of [`Stack::new`] (see [`Stack::unstarted`]): the
+    /// APS counter seed, the startup AIB attributes and the
+    /// pre-configured Trust Center link key.
+    pub fn start_up(&mut self) {
+        let seed = self.nwk.rng().next_u8();
+        Self::configure_aps(&mut self.aps, &self.config, seed);
+        self.zcl.set_ieee(self.config.ieee);
+    }
+
+    /// The NIB of a new stack.
+    fn nib_for(config: &StackConfig) -> Nib {
+        let mut nib = Nib::new(config.role, config.ieee);
+        nib.rx_on_when_idle = !config.sleepy;
+        nib.capability_information = config.capability();
+        nib
+    }
+
+    /// The APS counter seed, the startup AIB attributes and the
+    /// pre-configured Trust Center link key.
+    fn configure_aps(aps: &mut ProfileAps<C, P>, config: &StackConfig, seed: u8) {
+        let is_tc = config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        aps.seed_counter(seed);
         // §2.2.5 / Table 2-24: the startup AIB attributes come from the
         // configuration; apsUseExtendedPANID is learnt on joining.
-        aps.aib.designated_coordinator =
-            config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        aps.aib.designated_coordinator = is_tc;
         aps.aib.channel_mask = config.channels;
         if is_tc {
             aps.aib.trust_center_address = config.ieee;
@@ -1099,7 +1340,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             e.attributes = KeyAttributes::ProvisionalKey;
             let _ = aps.security.install(e);
         }
-        let node = NodeDescriptor {
+    }
+
+    /// The node descriptor of a new stack.
+    fn node_descriptor(config: &StackConfig) -> NodeDescriptor {
+        let is_tc = config.role == LogicalDeviceType::Coordinator && !config.distributed;
+        NodeDescriptor {
             logical_type: config.role,
             fragmentation_supported: true,
             aps_flags: 0,
@@ -1115,8 +1361,12 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }),
             max_outgoing_transfer_size: u16::try_from(panweave_aps::MAX_ASDU).unwrap_or(128),
             descriptor_capability: 0,
-        };
-        let power = if config.sleepy {
+        }
+    }
+
+    /// The power descriptor of a new stack.
+    fn power_descriptor(config: &StackConfig) -> PowerDescriptor {
+        if config.sleepy {
             PowerDescriptor {
                 mode: panweave_zdo::descriptor::PowerMode::Periodic,
                 available_sources: PowerDescriptor::SOURCE_DISPOSABLE,
@@ -1125,68 +1375,6 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         } else {
             PowerDescriptor::MAINS
-        };
-        let zdo = Zdo::new(node, power);
-        Stack {
-            mac,
-            nwk,
-            aps,
-            zdo,
-            zcl: {
-                let mut z = Zcl::new();
-                z.set_ieee(config.ieee);
-                z
-            },
-            storage,
-            config,
-            now: Instant::from_millis(0),
-            events: Deque::new(),
-            mac_handles: Vec::new(),
-            aps_handles: Vec::new(),
-            phase: Phase::Idle,
-            pending_children: Vec::new(),
-            network_key_sequence: KeySequenceNumber(0),
-            pending_startup: None,
-            next_poll: None,
-            fast_polls_left: 0,
-            dlk: crate::dlk::DlkState::default(),
-            last_rx: None,
-            challenge: None,
-            energy_scan: None,
-            beacon_survey: None,
-            swap_out_pending: false,
-            key_update: None,
-            factory_reset_pending: false,
-            tclk_update: None,
-            ota_discovery: None,
-            virtual_devices: Vec::new(),
-            interference: crate::agility::Interference::default(),
-            fragmentation: crate::fragment_cache::FragmentationCache::default(),
-            pending_channel_change: None,
-            channel_change_lockout: None,
-            pending_restart: None,
-            parent_annce: None,
-            parent_link_failures: 0,
-            last_rejoin_attempt: None,
-            rejoin_interval_secs,
-            rejoin_due: None,
-            parent_loss_rejoin: false,
-            awaiting_key_rejoin: false,
-            application_key_request_list: Vec::new(),
-            scan_attempts_left: 0,
-            next_scan: None,
-            last_scan: (ChannelMask::EMPTY, 0),
-            fast_poll_mode: None,
-            fast_polling: false,
-            keep_alive: crate::keep_alive::KeepAlive::default(),
-            #[cfg(feature = "green-power")]
-            green_power: None,
-            touchlink: None,
-            dropped_events: 0,
-            join_trace: Deque::new(),
-            join_trace_dropped: 0,
-            authorization: crate::authorization::AuthorizationState::default(),
-            restore_detail: crate::persist::RestoreDetail::NotRun,
         }
     }
 
@@ -1196,7 +1384,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     pub fn add_endpoint(
         &mut self,
         descriptor: SimpleDescriptor,
-        mut instance: StackEndpoint,
+        mut instance: ProfileEndpoint<P, CL, A>,
     ) -> Result<(), EndpointError> {
         add_basic_server(&mut instance, &self.config);
         self.zdo
@@ -1215,7 +1403,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         &mut self,
         endpoint: Endpoint,
         profile: ProfileId,
-        fill: impl FnOnce(&mut StackEndpoint) -> Option<SimpleDescriptor>,
+        fill: impl FnOnce(&mut ProfileEndpoint<P, CL, A>) -> Option<SimpleDescriptor>,
     ) -> Result<(), EndpointError> {
         let instance = self
             .zcl
@@ -1730,7 +1918,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// The device state the APS should be in for `authorized`.
     pub(crate) fn aps_state(authorized: bool) -> DeviceState {
         if authorized {

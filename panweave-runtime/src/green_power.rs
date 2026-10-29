@@ -43,6 +43,7 @@ use panweave_zcl::{Access, AttributeDef, ClusterDef, ClusterInstance, DataType, 
 use panweave_zdo::descriptor::SimpleDescriptor;
 
 use crate::context::AddrView;
+use crate::profile::StackProfile;
 use crate::stack::{EndpointError, Phase, Stack, StackEvent};
 
 /// Proxy Table capacity (`gppMaxProxyTableEntries`, the recommended 20).
@@ -172,7 +173,16 @@ fn bits(width: u8, bits: u64) -> Value<'static> {
     Value::Bits { width, bits }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Enables the Green Power Basic Proxy: registers the Green Power
     /// EndPoint (242, profile 0xA1E0, device GP Proxy Basic) with the
     /// Green Power cluster client and restores the persisted Proxy Table.
@@ -215,7 +225,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         )
         .ok_or(EndpointError)?;
         let mut ep = EndpointInstance::new(gp_cluster::ENDPOINT, gp_cluster::PROFILE);
-        let client: crate::StackCluster = ClusterInstance::new(
+        let client: crate::ProfileCluster<P, A> = ClusterInstance::new(
             ClusterDef {
                 id: gp_cluster::ID,
                 revision: gp_cluster::REVISION,
@@ -235,7 +245,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         );
         ep.add_instance(client).map_err(|_| EndpointError)?;
         if let Some(o) = &sink {
-            let mut server: crate::StackCluster = ClusterInstance::new(
+            let mut server: crate::ProfileCluster<P, A> = ClusterInstance::new(
                 ClusterDef {
                     id: gp_cluster::ID,
                     revision: gp_cluster::REVISION,

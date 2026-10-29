@@ -21,7 +21,7 @@ use panweave_types::{
     KeySequenceNumber, KeyType, NwkStatus, ProfileId, ShortAddress,
 };
 
-type Node = Aps<SoftwareAes, 8, 8, 8, 8>;
+type Node = Aps<SoftwareAes, panweave_aps::layer::Dims<8, 8, 8, 8>>;
 
 const TC_IEEE: ExtendedAddress = ExtendedAddress(0x00AA_0000_0000_0001);
 const ROUTER_IEEE: ExtendedAddress = ExtendedAddress(0x00AA_0000_0000_0002);

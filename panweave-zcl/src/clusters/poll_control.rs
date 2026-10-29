@@ -9,8 +9,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -117,12 +118,29 @@ pub const fn quarter_seconds(q: u32) -> Duration {
 
 /// Builds a server instance with the Table 3-132 defaults and the
 /// battery-protection minima / maxima given.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     check_in_interval_min: u32,
     long_poll_interval_min: u32,
     fast_poll_timeout_max: u16,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(SERVER_DEF, Role::Server);
+    fill_server(
+        &mut c,
+        check_in_interval_min,
+        long_poll_interval_min,
+        fast_poll_timeout_max,
+    )?;
+    Ok(c)
+}
+
+/// [`server`] filled into an instance created with [`SERVER_DEF`] (built
+/// in place by [`crate::layer::EndpointInstance::add_cluster`]).
+pub fn fill_server<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    check_in_interval_min: u32,
+    long_poll_interval_min: u32,
+    fast_poll_timeout_max: u16,
+) -> Result<(), ZclStatus> {
     let four = |v: u32| Value::Uint {
         width: 4,
         value: u64::from(v),
@@ -138,18 +156,18 @@ pub fn server<const A: usize>(
     c.add_attribute(CHECK_IN_INTERVAL_MIN, &four(check_in_interval_min))?;
     c.add_attribute(LONG_POLL_INTERVAL_MIN, &four(long_poll_interval_min))?;
     c.add_attribute(FAST_POLL_TIMEOUT_MAX, &two(fast_poll_timeout_max))?;
-    c.state = ClusterState::PollControl(State::default());
+    c.set_state(State::default())?;
     c.write_guard = Some(guard);
-    Ok(c)
+    Ok(())
 }
 
 /// Builds a client instance with its check-in policy.
-pub fn client<const A: usize>(
+pub fn client<const A: usize, P: ZclProfile>(
     start_fast_polling: bool,
     fast_poll_timeout: u16,
-) -> ClusterInstance<A> {
+) -> ClusterInstance<A, P> {
     let mut c = ClusterInstance::new(CLIENT_DEF, Role::Client);
-    c.state = ClusterState::PollControl(State {
+    let _ = c.set_state(State {
         client_start_fast_polling: start_fast_polling,
         client_fast_poll_timeout: fast_poll_timeout,
         ..State::default()
@@ -158,7 +176,11 @@ pub fn client<const A: usize>(
 }
 
 /// Validation of network writes (§3.16.4.1.1, §3.16.4.1.4).
-fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+fn guard<const A: usize, P: ZclProfile>(
+    t: &AttributeTable<A, P>,
+    id: AttributeId,
+    v: &Value<'_>,
+) -> ZclStatus {
     let Some(value) = v.as_u64() else {
         return ZclStatus::Success;
     };
@@ -179,19 +201,14 @@ fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) 
     }
 }
 
-fn state<const A: usize>(c: &mut ClusterInstance<A>) -> &mut State {
-    if !matches!(c.state, ClusterState::PollControl(_)) {
-        c.state = ClusterState::PollControl(State::default());
-    }
-    match &mut c.state {
-        ClusterState::PollControl(s) => s,
-        // Just installed above.
-        _ => unreachable!(),
-    }
+fn state<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut State> {
+    c.state_or_default::<State>()
 }
 
-fn rearm<const A: usize>(c: &mut ClusterInstance<A>) {
-    let s = *state(c);
+fn rearm<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
+    let Some(&mut s) = state(c) else {
+        return;
+    };
     c.tick = [s.next_check_in, s.awaiting_until, s.fast_poll_until]
         .into_iter()
         .flatten()
@@ -199,7 +216,7 @@ fn rearm<const A: usize>(c: &mut ClusterInstance<A>) {
 }
 
 /// `LongPollInterval` as a duration.
-pub fn long_poll_interval<const A: usize>(c: &ClusterInstance<A>) -> Duration {
+pub fn long_poll_interval<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Duration {
     quarter_seconds(
         c.u64(LONG_POLL_INTERVAL.id)
             .and_then(|v| u32::try_from(v).ok())
@@ -208,7 +225,7 @@ pub fn long_poll_interval<const A: usize>(c: &ClusterInstance<A>) -> Duration {
 }
 
 /// `ShortPollInterval` as a duration.
-pub fn short_poll_interval<const A: usize>(c: &ClusterInstance<A>) -> Duration {
+pub fn short_poll_interval<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Duration {
     quarter_seconds(u32::from(
         c.u16(SHORT_POLL_INTERVAL.id)
             .unwrap_or(defaults::SHORT_POLL_INTERVAL),
@@ -216,19 +233,23 @@ pub fn short_poll_interval<const A: usize>(c: &ClusterInstance<A>) -> Duration {
 }
 
 /// True while the server is in (temporary or requested) fast poll mode.
-pub fn fast_polling<const A: usize>(c: &mut ClusterInstance<A>) -> bool {
-    let s = *state(c);
+pub fn fast_polling<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> bool {
+    let Some(&mut s) = state(c) else {
+        return false;
+    };
     s.awaiting_until.is_some() || s.fast_poll_until.is_some()
 }
 
 /// Starts (or restarts, after `CheckInInterval` changed, §3.16.6.3) the
 /// check-in schedule.
-pub fn start<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) {
+pub fn start<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, now: Instant) {
     let interval = c
         .u64(CHECK_IN_INTERVAL.id)
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(0);
-    let s = state(c);
+    let Some(s) = state(c) else {
+        return;
+    };
     s.scheduled_interval = interval;
     s.next_check_in = (interval > 0).then(|| now + quarter_seconds(interval));
     rearm(c);
@@ -245,7 +266,10 @@ pub enum Tick {
 }
 
 /// Advances the server timers.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<Tick> {
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<Tick> {
     if c.role != Role::Server {
         return None;
     }
@@ -253,14 +277,14 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
         .u64(CHECK_IN_INTERVAL.id)
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(0);
-    if state(c).scheduled_interval != interval {
+    if state(c).is_some_and(|s| s.scheduled_interval != interval) {
         start(c, now);
     }
     let due = c.tick?;
     if !now.has_reached(due) {
         return None;
     }
-    let s = state(c);
+    let s = state(c)?;
     if let Some(t) = s.next_check_in
         && now.has_reached(t)
     {
@@ -308,8 +332,8 @@ pub enum Outcome {
 
 /// Processes a cluster-specific command received by a server or client
 /// instance (§3.16.5).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     command: CommandId,
     payload: &[u8],
     now: Instant,
@@ -319,7 +343,9 @@ pub fn handle<const A: usize>(
         if command != CMD_CHECK_IN {
             return Outcome::Default(ZclStatus::UnsupportedClusterCommand);
         }
-        let s = *state(c);
+        let Some(&mut s) = state(c) else {
+            return Outcome::Default(ZclStatus::Failure);
+        };
         let t = s.client_fast_poll_timeout.to_le_bytes();
         return Outcome::CheckInResponse([u8::from(s.client_start_fast_polling), t[0], t[1]]);
     }
@@ -335,7 +361,9 @@ pub fn handle<const A: usize>(
             let default_timeout = c
                 .u16(FAST_POLL_TIMEOUT.id)
                 .unwrap_or(defaults::FAST_POLL_TIMEOUT);
-            let s = state(c);
+            let Some(s) = state(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             if s.awaiting_until.is_none() && s.fast_poll_until.is_none() {
                 // After the temporary fast poll mode (§3.16.5.3).
                 return Outcome::Default(ZclStatus::Failure);
@@ -365,7 +393,9 @@ pub fn handle<const A: usize>(
             }
         }
         CMD_FAST_POLL_STOP => {
-            let s = state(c);
+            let Some(s) = state(c) else {
+                return Outcome::Default(ZclStatus::Failure);
+            };
             if s.fast_poll_until.is_none() {
                 return Outcome::Default(ZclStatus::Failure);
             }

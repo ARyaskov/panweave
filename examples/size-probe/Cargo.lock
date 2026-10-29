@@ -239,7 +239,7 @@ checksum = "a513e167849a384b7f9b746e517604398518590a9142f4846a32e3c2a4de7b11"
 
 [[package]]
 name = "panweave"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-aps"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-bdb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-direct"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-green-power"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-nwk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-security"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "cipher",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-smart-energy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "heapless",
  "panweave-types",
@@ -420,6 +420,7 @@ dependencies = [
 name = "panweave-types"
 version = "0.1.0"
 dependencies = [
+ "heapless",
  "rand_core",
  "subtle",
  "zeroize",
@@ -427,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zcl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -438,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zdo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-aps",

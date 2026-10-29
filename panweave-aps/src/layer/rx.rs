@@ -8,7 +8,7 @@ use panweave_security::frame::SecurityError;
 use panweave_types::time::Instant;
 use panweave_types::{ClusterId, Endpoint, ExtendedAddress, GroupAddress, ProfileId, ShortAddress};
 
-use super::{Aps, ApsAction, ApsEvent, AsduBuf, DeviceState, NwkView, PersistItem};
+use super::{Aps, ApsAction, ApsDims, ApsEvent, AsduBuf, DeviceState, NwkView, PersistItem};
 use crate::aib::constants;
 use crate::frame::{Addressing, DeliveryMode, ExtendedHeader, Fragmentation, FrameType, Header};
 
@@ -113,14 +113,7 @@ pub(crate) struct FrameSecurity {
     pub extended_nonce: bool,
 }
 
-impl<
-    C: BlockCipher,
-    const KEYS: usize,
-    const BINDINGS: usize,
-    const GROUPS: usize,
-    const DUPS: usize,
-> Aps<C, KEYS, BINDINGS, GROUPS, DUPS>
-{
+impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
     /// NLDE-DATA.indication. `buf` holds the APS frame and is decrypted
     /// in place; `src`/`dst` are the NWK addresses, `src_ieee` the IEEE
     /// address of the sender when the NWK layer knows it, `nwk_secured`

@@ -21,9 +21,19 @@ use panweave_zdo::zdp::{AddrRequestType, AddrRsp, IeeeAddrReq, SimpleDescReq, Si
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::AddrView;
+use crate::profile::StackProfile;
 use crate::stack::{JoinMode, Stack, StackEvent};
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Node for Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Node for Stack<C, R, S, P, E, CL, A>
+{
     fn role(&self) -> LogicalDeviceType {
         self.config.role
     }
@@ -210,7 +220,16 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node for Stack<C, R, S> {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Translates a stack event for the BDB machine; `None` when the
     /// event is of no interest to commissioning.
     pub fn bdb_event(event: &StackEvent) -> Option<BdbEvent> {

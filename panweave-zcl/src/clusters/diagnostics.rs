@@ -8,6 +8,7 @@ use panweave_types::ClusterId;
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -210,7 +211,7 @@ pub const SERVER_ATTRIBUTES: &[AttributeDef] = &[
 ];
 
 /// Builds a server with the counters a Panweave stack maintains.
-pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     for a in SERVER_ATTRIBUTES {
         let v = match a.ty {
@@ -224,18 +225,22 @@ pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn set_u16<const A: usize>(c: &mut ClusterInstance<A>, def: AttributeDef, v: Option<u16>) {
+fn set_u16<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    def: AttributeDef,
+    v: Option<u16>,
+) {
     if let Some(v) = v {
         c.set_u16(def.id, v);
     }
 }
 
 /// Writes the supplied counters into the attributes.
-pub fn update<const A: usize>(c: &mut ClusterInstance<A>, k: &Counters) {
+pub fn update<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, k: &Counters) {
     set_u16(c, NUMBER_OF_RESETS, k.resets);
     set_u16(c, PERSISTENT_MEMORY_WRITES, k.persistent_writes);
     for (def, v) in [

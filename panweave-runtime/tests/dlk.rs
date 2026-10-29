@@ -230,6 +230,54 @@ fn install_code_authenticated_negotiation() {
     );
 }
 
+/// A sleepy joiner gets the Trust Center's frames through its parent's
+/// indirect queue, which may hand it the Transport Key before the Confirm
+/// Key. The network key, transported under the negotiated key, completes
+/// the negotiation: both sides keep the same verified key (before the
+/// fix the session expired and the joiner restored its install-code key
+/// while the Trust Center kept the negotiated one).
+#[test]
+fn sleepy_joiner_completes_install_code_negotiation() {
+    let (mut sim, c, r) = network(InstallCodePolicy::Required);
+    let code = InstallCode::new(&[
+        0x83, 0xFE, 0xD3, 0x40, 0x7A, 0x93, 0x97, 0x23, 0xA5, 0xC6, 0x39, 0xB2, 0x69, 0x16, 0xD5,
+        0x05, 0xC3, 0xB5,
+    ])
+    .unwrap();
+    let ic_key = link_key_from_install_code::<panweave_security::cipher::SoftwareAes>(&code);
+    let mut entry = LinkKeyEntry::provisional(JOINER, ic_key.clone(), LinkKeyKind::Unique);
+    entry.initial_join_authentication = InitialJoinAuthentication::InstallCodeKey;
+    sim.stack(c).aps.install_link_key(entry).unwrap();
+    sim.stack(c).flush();
+    let mut jcfg = StackConfig::new(LogicalDeviceType::EndDevice, JOINER);
+    jcfg.sleepy = true;
+    jcfg.poll_interval = Duration::from_millis(1000);
+    jcfg.preconfigured_link_key = (COORD, ic_key.clone(), LinkKeyKind::Unique);
+    let j = sim.add_stack("joiner", stack(jcfg, 6), Box::new(OnOffApp::default()));
+    // The Trust Center is the parent.
+    sim.block(j, r);
+    sim.stack(j).join(JoinMode::Association).unwrap();
+    assert!(sim.run_until(Duration::from_secs(60), |x| joined(x, j)));
+    sim.run_for(Duration::from_secs(30));
+    let tc_entry = sim.stack(c).aps.security.entry(JOINER).unwrap().clone();
+    let j_entry = sim.stack(j).aps.security.entry(COORD).unwrap().clone();
+    assert_eq!(tc_entry.key.as_bytes(), j_entry.key.as_bytes());
+    assert_ne!(j_entry.key.as_bytes(), ic_key.as_bytes());
+    assert_eq!(j_entry.attributes, KeyAttributes::VerifiedKey);
+    assert!(
+        !sim.events(j)
+            .iter()
+            .any(|e| matches!(e, StackEvent::KeyNegotiationFailed { .. })),
+        "{:?}",
+        sim.events(j)
+    );
+    assert!(
+        sim.events(j)
+            .iter()
+            .any(|e| matches!(e, StackEvent::AuthenticationTokenStored))
+    );
+}
+
 #[test]
 fn wrong_passphrase_fails_and_restores_the_entry() {
     let (mut sim, c, _r) = network(InstallCodePolicy::Required);

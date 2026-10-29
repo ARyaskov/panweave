@@ -8,8 +8,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -168,7 +169,10 @@ pub struct Transition {
 /// Builds a server instance with the given level range: `CurrentLevel`
 /// (default reporting), `RemainingTime`, `MinLevel`, `MaxLevel`,
 /// `Options`, the On/Off coupling attributes and `StartUpCurrentLevel`.
-pub fn server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>(
+    min: u8,
+    max: u8,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let one = |v: u8| Value::Uint {
         width: 1,
@@ -189,19 +193,22 @@ pub fn server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, Zc
     c.add_attribute(OFF_TRANSITION_TIME, &two(TIME_UNDEFINED))?;
     c.add_attribute(DEFAULT_MOVE_RATE, &one(50))?;
     c.add_attribute(START_UP_CURRENT_LEVEL, &one(0xff))?;
-    c.state = ClusterState::Level(Transition::default());
+    c.set_state(Transition::default())?;
     c.write_guard = Some(guard);
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Builds a Level Control for Lighting server (§3.19): the level range
 /// is 1…0xfe (0 is never used, 0xff undefined).
-pub fn lighting_server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn lighting_server<const A: usize, P: ZclProfile>(
+    min: u8,
+    max: u8,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     if min == 0 || max > 0xfe || min > max {
         return Err(ZclStatus::InvalidValue);
     }
@@ -211,8 +218,8 @@ pub fn lighting_server<const A: usize>(min: u8, max: u8) -> Result<ClusterInstan
 /// Adds the frequency attributes (`CurrentFrequency` reported,
 /// `MinFrequency` / `MaxFrequency` in 10 Hz, 0 = undefined) and the
 /// Move to Closest Frequency command to a server (§3.10.2.2.5–7).
-pub fn enable_frequency<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn enable_frequency<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     min: u16,
     max: u16,
 ) -> Result<(), ZclStatus> {
@@ -234,12 +241,12 @@ pub fn enable_frequency<const A: usize>(
 
 /// Builds a Pulse Width Modulation server (§3.20): the duty cycle
 /// `min..=max` percent (at most 100) and the frequency range in 10 Hz.
-pub fn pwm_server<const A: usize>(
+pub fn pwm_server<const A: usize, P: ZclProfile>(
     min: u8,
     max: u8,
     min_frequency: u16,
     max_frequency: u16,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     if max > 100 || min > max {
         return Err(ZclStatus::InvalidValue);
     }
@@ -250,13 +257,16 @@ pub fn pwm_server<const A: usize>(
 }
 
 /// `CurrentFrequency` (0 unknown / unsupported).
-pub fn current_frequency<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+pub fn current_frequency<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u16 {
     c.u16(CURRENT_FREQUENCY.id).unwrap_or(0)
 }
 
 /// Sets `CurrentFrequency` to the closest supported frequency (the
 /// range `MinFrequency`…`MaxFrequency` where defined); returns it.
-pub fn set_frequency<const A: usize>(c: &mut ClusterInstance<A>, frequency: u16) -> u16 {
+pub fn set_frequency<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    frequency: u16,
+) -> u16 {
     let min = c.u16(MIN_FREQUENCY.id).unwrap_or(0);
     let max = c.u16(MAX_FREQUENCY.id).unwrap_or(0);
     let mut f = frequency;
@@ -274,8 +284,8 @@ pub fn set_frequency<const A: usize>(c: &mut ClusterInstance<A>, frequency: u16)
 /// maximum level maps to `couple_min_mireds` (the coolest coupled
 /// colour), the minimum level to `physical_max_mireds` (the warmest),
 /// linearly in between like an incandescent bulb dimming down.
-pub fn coupled_mireds<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn coupled_mireds<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     couple_min_mireds: u16,
     physical_max_mireds: u16,
 ) -> u16 {
@@ -291,8 +301,8 @@ pub fn coupled_mireds<const A: usize>(
 }
 
 /// Range checks of Table 3-56 for network writes.
-fn guard<const A: usize>(
-    t: &crate::attribute::AttributeTable<A>,
+fn guard<const A: usize, P: ZclProfile>(
+    t: &crate::attribute::AttributeTable<A, P>,
     id: panweave_types::AttributeId,
     v: &Value<'_>,
 ) -> ZclStatus {
@@ -318,27 +328,22 @@ fn guard<const A: usize>(
 }
 
 /// `CurrentLevel`.
-pub fn current_level<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+pub fn current_level<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
     c.u8(CURRENT_LEVEL.id).unwrap_or(0)
 }
 
-fn min_level<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+fn min_level<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
     c.u8(MIN_LEVEL.id).unwrap_or(0)
 }
 
-fn max_level<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+fn max_level<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
     c.u8(MAX_LEVEL.id).unwrap_or(0xfe)
 }
 
-fn transition<const A: usize>(c: &mut ClusterInstance<A>) -> &mut Transition {
-    if !matches!(c.state, ClusterState::Level(_)) {
-        c.state = ClusterState::Level(Transition::default());
-    }
-    match &mut c.state {
-        ClusterState::Level(t) => t,
-        // Just installed above.
-        _ => unreachable!(),
-    }
+fn transition<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+) -> Option<&mut Transition> {
+    c.state_or_default::<Transition>()
 }
 
 /// Result of a received Level Control server command.
@@ -362,8 +367,8 @@ pub enum Outcome {
 
 /// Starts a transition from the current level to `target` taking
 /// `tenths` tenths of a second (0 = immediate).
-pub fn start<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn start<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     target: u8,
     tenths: u16,
     with_on_off: bool,
@@ -371,7 +376,9 @@ pub fn start<const A: usize>(
 ) {
     let from = current_level(c);
     let target = target.clamp(min_level(c), max_level(c));
-    let t = transition(c);
+    let Some(t) = transition(c) else {
+        return;
+    };
     t.active = true;
     t.from = from;
     t.target = target;
@@ -383,8 +390,10 @@ pub fn start<const A: usize>(
 }
 
 /// Stops the transition in progress at the current level (§3.10.2.3.4).
-pub fn stop<const A: usize>(c: &mut ClusterInstance<A>) {
-    let t = transition(c);
+pub fn stop<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
+    let Some(t) = transition(c) else {
+        return;
+    };
     t.active = false;
     t.restore_after = false;
     t.stored = None;
@@ -395,8 +404,8 @@ pub fn stop<const A: usize>(c: &mut ClusterInstance<A>) {
 /// Processes a cluster-specific command received by the server
 /// (§3.10.2.3). `on_off` is the endpoint's `OnOff` value when an On/Off
 /// server exists on the endpoint.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     command: CommandId,
     payload: &[u8],
     on_off: Option<bool>,
@@ -539,7 +548,11 @@ enum Parsed {
 
 /// Effect of an On / Off command received by the On/Off cluster of the
 /// same endpoint (Table 3-55).
-pub fn on_off_effect<const A: usize>(c: &mut ClusterInstance<A>, on: bool, now: Instant) {
+pub fn on_off_effect<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    on: bool,
+    now: Instant,
+) {
     let (min, cur) = (min_level(c), current_level(c));
     let on_level = c.u8(ON_LEVEL.id).filter(|l| *l != ON_LEVEL_UNDEFINED);
     let on_off_time = c.u16(ON_OFF_TRANSITION_TIME.id).unwrap_or(0);
@@ -554,21 +567,27 @@ pub fn on_off_effect<const A: usize>(c: &mut ClusterInstance<A>, on: bool, now: 
     // The level in effect before the first of a burst of On/Off commands
     // is what gets restored (§3.10.2.1.1).
     let stored = {
-        let t = transition(c);
+        let Some(t) = transition(c) else {
+            return;
+        };
         *t.stored.get_or_insert(cur)
     };
     if on {
         c.set_u8(CURRENT_LEVEL.id, min);
         let target = on_level.unwrap_or(stored);
         start(c, target, on_time, false, now);
-        let t = transition(c);
+        let Some(t) = transition(c) else {
+            return;
+        };
         t.restore_after = false;
         if on_level.is_some() {
             t.stored = None;
         }
     } else {
         start(c, min, off_time, false, now);
-        let t = transition(c);
+        let Some(t) = transition(c) else {
+            return;
+        };
         t.restore_after = on_level.is_none();
         if on_level.is_some() {
             t.stored = None;
@@ -591,12 +610,15 @@ pub struct Tick {
 }
 
 /// Advances the transition; returns the tick result when one ran.
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<Tick> {
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<Tick> {
     let due = c.tick?;
     if !now.has_reached(due) {
         return None;
     }
-    let t = *transition(c);
+    let &mut t = transition(c)?;
     if !t.active {
         c.tick = None;
         return None;
@@ -623,7 +645,7 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
     c.set_u16(REMAINING_TIME.id, remaining);
     let mut turn_off = false;
     if done {
-        let tr = transition(c);
+        let tr = transition(c)?;
         tr.active = false;
         let restore = tr.restore_after.then_some(tr.stored).flatten();
         tr.restore_after = false;
@@ -646,7 +668,7 @@ pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<
 
 /// Applies `StartUpCurrentLevel` at power-up (Table 3-58) given the
 /// previous level; returns the resulting level.
-pub fn start_up<const A: usize>(c: &mut ClusterInstance<A>, previous: u8) -> u8 {
+pub fn start_up<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, previous: u8) -> u8 {
     let v = match c.u8(START_UP_CURRENT_LEVEL.id) {
         Some(0x00) => min_level(c),
         Some(0xff) | None => previous,
@@ -658,13 +680,13 @@ pub fn start_up<const A: usize>(c: &mut ClusterInstance<A>, previous: u8) -> u8 
 
 /// Scene extension field set of the Level Control server (§3.10.2.5):
 /// `CurrentLevel`.
-pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 1] {
+pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 1] {
     [current_level(c)]
 }
 
 /// Applies a scene extension field set over `tenths` tenths of a second.
-pub fn apply_scene_fields<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     fields: &[u8],
     tenths: u16,
     now: Instant,
@@ -681,8 +703,8 @@ mod tests {
     #[test]
     fn frequency_lighting_and_pwm() {
         let t0 = Instant::from_millis(0);
-        assert!(lighting_server::<16>(0, 254).is_err());
-        assert!(lighting_server::<16>(1, 255).is_err());
+        assert!(lighting_server::<16, crate::Full>(0, 254).is_err());
+        assert!(lighting_server::<16, crate::Full>(1, 255).is_err());
         let mut c: ClusterInstance<16> = lighting_server(1, 254).unwrap();
         // Without the frequency attributes the command is unsupported.
         assert_eq!(
@@ -745,7 +767,7 @@ mod tests {
         let mid = coupled_mireds(&c, 153, 500);
         assert!((320..=330).contains(&mid), "{mid}");
         // PWM: a duty cycle of at most 100 %, the frequency range built in.
-        assert!(pwm_server::<16>(0, 101, 0, 0).is_err());
+        assert!(pwm_server::<16, crate::Full>(0, 101, 0, 0).is_err());
         let mut p: ClusterInstance<16> = pwm_server(0, 100, 1, 5000).unwrap();
         assert_eq!(p.def.id, PWM_ID);
         assert_eq!(max_level(&p), 100);

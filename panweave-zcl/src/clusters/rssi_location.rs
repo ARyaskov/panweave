@@ -14,8 +14,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId, ExtendedAddress};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -724,10 +725,10 @@ impl State {
 /// three-dimensional location: coordinates, `Power` and
 /// `PathLossExponent` unknown, `LocationMethod` `method`,
 /// `NumberRSSIMeasurements` 1, periods 0.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     ieee: ExtendedAddress,
     method: u8,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let unknown = Value::Int {
         width: 2,
@@ -755,31 +756,28 @@ pub fn server<const A: usize>(
         NUMBER_RSSI_MEASUREMENTS,
         &Value::Uint { width: 1, value: 1 },
     )?;
-    c.state = ClusterState::RssiLocation(State::new(ieee));
+    c.set_state(State::new(ieee))?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// The server's transient state.
-pub fn state<const A: usize>(c: &ClusterInstance<A>) -> Option<&State> {
-    match &c.state {
-        ClusterState::RssiLocation(s) => Some(s),
-        _ => None,
-    }
+pub fn state<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&State> {
+    c.state_ref::<State>()
 }
 
-fn state_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut State> {
-    match &mut c.state {
-        ClusterState::RssiLocation(s) => Some(s),
-        _ => None,
-    }
+fn state_mut<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut State> {
+    c.state_mut::<State>()
 }
 
-fn set_location_type<const A: usize>(c: &mut ClusterInstance<A>, t: LocationType) {
+fn set_location_type<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    t: LocationType,
+) {
     c.set(
         LOCATION_TYPE.id,
         &Value::Data {
@@ -790,13 +788,16 @@ fn set_location_type<const A: usize>(c: &mut ClusterInstance<A>, t: LocationType
 }
 
 /// The server's `LocationType`.
-pub fn location_type<const A: usize>(c: &ClusterInstance<A>) -> LocationType {
+pub fn location_type<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> LocationType {
     LocationType::from_raw(c.u8(LOCATION_TYPE.id).unwrap_or(0))
 }
 
 /// The server's location as reported (`LocationAge` measured from the
 /// last calculation, `now`).
-pub fn location<const A: usize>(c: &ClusterInstance<A>, now: Instant) -> LocationData {
+pub fn location<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+    now: Instant,
+) -> LocationData {
     let location_type = location_type(c);
     let age = state(c).and_then(|s| s.calculated_at).map_or(0, |t| {
         u16::try_from(now.saturating_duration_since(t).as_secs()).unwrap_or(u16::MAX)
@@ -825,7 +826,9 @@ pub fn location<const A: usize>(c: &ClusterInstance<A>, now: Instant) -> Locatio
 }
 
 /// The server's device configuration.
-pub fn configuration<const A: usize>(c: &ClusterInstance<A>) -> DeviceConfiguration {
+pub fn configuration<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+) -> DeviceConfiguration {
     DeviceConfiguration {
         power: c.i16(POWER.id).unwrap_or(UNKNOWN),
         path_loss_exponent: c.u16(PATH_LOSS_EXPONENT.id).unwrap_or(0xffff),
@@ -838,8 +841,8 @@ pub fn configuration<const A: usize>(c: &ClusterInstance<A>) -> DeviceConfigurat
 /// Records a calculated (measured) location: the coordinates, the
 /// confidence and the number of devices used, `LocationAge` restarting
 /// at 0. Returns whether a periodic notification is configured.
-pub fn set_measured<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_measured<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     coordinates: (i16, i16, Option<i16>),
     quality: u8,
     devices: u8,
@@ -862,8 +865,8 @@ pub fn set_measured<const A: usize>(
 }
 
 /// Sets an absolute location (also the effect of Set Absolute Location).
-pub fn set_absolute<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_absolute<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     l: &AbsoluteLocation,
     now: Instant,
 ) {
@@ -881,8 +884,8 @@ pub fn set_absolute<const A: usize>(
 
 /// Applies a device configuration (the effect of Set Device
 /// Configuration).
-pub fn set_configuration<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_configuration<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cfg: &DeviceConfiguration,
     now: Instant,
 ) {
@@ -899,7 +902,7 @@ pub fn set_configuration<const A: usize>(
 
 /// (Re)arms the periodic Location Data Notification from
 /// `ReportingPeriod`.
-fn schedule_report<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) {
+fn schedule_report<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, now: Instant) {
     let period = c.u16(REPORTING_PERIOD.id).unwrap_or(0);
     if let Some(s) = state_mut(c) {
         s.next_report = (period > 0).then(|| now + Duration::from_secs(u64::from(period)));
@@ -907,7 +910,7 @@ fn schedule_report<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) {
     rearm(c);
 }
 
-fn rearm<const A: usize>(c: &mut ClusterInstance<A>) {
+fn rearm<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
     c.tick = state(c).and_then(State::earliest);
 }
 
@@ -940,8 +943,8 @@ pub enum Outcome {
 }
 
 /// Handles a received command from `src`.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
     src: (panweave_types::ShortAddress, panweave_types::Endpoint),
@@ -1075,7 +1078,10 @@ pub enum Due {
 
 /// Services the timer: returns the work due at `now`, one item per
 /// call (call until `None`).
-pub fn tick<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> Option<Due> {
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> Option<Due> {
     let reporting = u64::from(c.u16(REPORTING_PERIOD.id).unwrap_or(0).max(1));
     let calculation = u64::from(c.u16(CALCULATION_PERIOD.id).unwrap_or(0));
     let s = state_mut(c)?;

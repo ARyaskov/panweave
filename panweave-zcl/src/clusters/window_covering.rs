@@ -11,6 +11,7 @@ use panweave_types::{AttributeId, ClusterId, CommandId};
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -237,7 +238,11 @@ pub enum Outcome {
 }
 
 /// Write guard: `Mode` accepts the defined bits only.
-fn guard<const A: usize>(_t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+fn guard<const A: usize, P: ZclProfile>(
+    _t: &AttributeTable<A, P>,
+    id: AttributeId,
+    v: &Value<'_>,
+) -> ZclStatus {
     if id == MODE.id && v.as_u64().is_none_or(|m| m & !u64::from(mode::ALL) != 0) {
         ZclStatus::InvalidValue
     } else {
@@ -262,11 +267,11 @@ fn u8v(v: u8) -> Value<'static> {
 /// Builds a server of `kind` (Table 7-41) with the given lift and tilt
 /// control; closed-loop axes carry the current position, its
 /// percentage (reported) and the installed limits.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     kind: u8,
     lift: Control,
     tilt: Control,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     if kind > covering_type::PROJECTOR_SCREEN {
         return Err(ZclStatus::InvalidValue);
     }
@@ -327,16 +332,16 @@ pub fn server<const A: usize>(
             bits: u64::from(mode::DEFAULT),
         },
     )?;
-    c.write_guard = Some(guard::<A>);
+    c.write_guard = Some(guard::<A, P>);
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn bits<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> u8 {
+fn bits<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, id: AttributeId) -> u8 {
     c.attributes
         .value(id)
         .and_then(|v| v.as_u64())
@@ -345,7 +350,7 @@ fn bits<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> u8 {
 }
 
 /// The lift control of a server instance, read back from its attributes.
-pub fn lift_control<const A: usize>(c: &ClusterInstance<A>) -> Control {
+pub fn lift_control<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Control {
     let kind = c.u8(WINDOW_COVERING_TYPE.id).unwrap_or(0);
     match (
         c.u16(INSTALLED_OPEN_LIMIT_LIFT.id),
@@ -362,7 +367,7 @@ pub fn lift_control<const A: usize>(c: &ClusterInstance<A>) -> Control {
 }
 
 /// The tilt control of a server instance, read back from its attributes.
-pub fn tilt_control<const A: usize>(c: &ClusterInstance<A>) -> Control {
+pub fn tilt_control<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Control {
     let kind = c.u8(WINDOW_COVERING_TYPE.id).unwrap_or(0);
     match (
         c.u16(INSTALLED_OPEN_LIMIT_TILT.id),
@@ -380,13 +385,13 @@ pub fn tilt_control<const A: usize>(c: &ClusterInstance<A>) -> Control {
 
 /// Whether `Mode` has the maintenance bit set: motion over the network
 /// is refused (Table 7-44 bit 2).
-pub fn in_maintenance<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn in_maintenance<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     bits(c, MODE.id) & mode::MAINTENANCE != 0
 }
 
 /// Mirrors the `Mode` reversal bit into `ConfigStatus` (Table 7-42
 /// bit 2); called after a network write.
-pub fn after_write<const A: usize>(c: &mut ClusterInstance<A>) {
+pub fn after_write<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
     let reversed = bits(c, MODE.id) & mode::REVERSED != 0;
     let mut status = bits(c, CONFIG_STATUS.id) & !config_status::REVERSED;
     if reversed {
@@ -433,7 +438,7 @@ pub fn position(open: u16, closed: u16, percent: u8) -> u16 {
 /// Records the lift position (cm) of a closed-loop server, updates its
 /// percentage and counts an actuation; returns whether the percentage
 /// changed.
-pub fn set_lift<const A: usize>(c: &mut ClusterInstance<A>, lift: u16) -> bool {
+pub fn set_lift<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, lift: u16) -> bool {
     let Control::ClosedLoop { open, closed, .. } = lift_control(c) else {
         return false;
     };
@@ -450,7 +455,7 @@ pub fn set_lift<const A: usize>(c: &mut ClusterInstance<A>, lift: u16) -> bool {
 /// Records the tilt position (0.1°) of a closed-loop server, updates
 /// its percentage and counts an actuation; returns whether the
 /// percentage changed.
-pub fn set_tilt<const A: usize>(c: &mut ClusterInstance<A>, tilt: u16) -> bool {
+pub fn set_tilt<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, tilt: u16) -> bool {
     let Control::ClosedLoop { open, closed, .. } = tilt_control(c) else {
         return false;
     };
@@ -466,8 +471,8 @@ pub fn set_tilt<const A: usize>(c: &mut ClusterInstance<A>, tilt: u16) -> bool {
 
 /// Records percentages directly (e.g. a timed closed loop without an
 /// encoder), also deriving the positions from the installed limits.
-pub fn set_percentages<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_percentages<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     lift: Option<u8>,
     tilt: Option<u8>,
 ) {
@@ -484,13 +489,13 @@ pub fn set_percentages<const A: usize>(
 }
 
 /// Current lift percentage, `None` when unknown or unsupported.
-pub fn lift_percentage<const A: usize>(c: &ClusterInstance<A>) -> Option<u8> {
+pub fn lift_percentage<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u8> {
     c.u8(CURRENT_POSITION_LIFT_PERCENTAGE.id)
         .filter(|p| *p <= 100)
 }
 
 /// Current tilt percentage, `None` when unknown or unsupported.
-pub fn tilt_percentage<const A: usize>(c: &ClusterInstance<A>) -> Option<u8> {
+pub fn tilt_percentage<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<u8> {
     c.u8(CURRENT_POSITION_TILT_PERCENTAGE.id)
         .filter(|p| *p <= 100)
 }
@@ -504,7 +509,11 @@ fn within(open: u16, closed: u16, v: u16) -> bool {
 /// on an open-loop axis becomes Close (0 %) or Open; an axis the
 /// device lacks is `UNSUPPORTED_COMMAND`; maintenance mode refuses
 /// every motion with `FAILURE`.
-pub fn handle<const A: usize>(c: &ClusterInstance<A>, cmd: CommandId, payload: &[u8]) -> Outcome {
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+    cmd: CommandId,
+    payload: &[u8],
+) -> Outcome {
     let lift = lift_control(c);
     let tilt = tilt_control(c);
     let command = match cmd {
@@ -561,7 +570,7 @@ pub fn handle<const A: usize>(c: &ClusterInstance<A>, cmd: CommandId, payload: &
 
 /// Scene extension field set (§7.4.2.4): CurrentPositionLiftPercentage,
 /// CurrentPositionTiltPercentage (0xff when unknown).
-pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 2] {
+pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 2] {
     [
         lift_percentage(c).unwrap_or(PERCENTAGE_UNKNOWN),
         tilt_percentage(c).unwrap_or(PERCENTAGE_UNKNOWN),
@@ -572,8 +581,8 @@ pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 2] {
 /// of a second: axes the device lacks or unknown percentages are
 /// dropped, open-loop axes ignore the transition time (§7.4.2.4).
 /// `None` when nothing applies or maintenance mode is on.
-pub fn apply_scene_fields<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     fields: &[u8],
     tenths: u16,
 ) -> Option<Command> {
@@ -647,7 +656,7 @@ mod tests {
         assert_eq!(lift_control(&shade), Control::OpenLoop);
         assert_eq!(tilt_control(&shade), Control::Unsupported);
         assert!(shade.u8(CURRENT_POSITION_LIFT_PERCENTAGE.id).is_none());
-        assert!(server::<24>(0x0a, LIFT, TILT).is_err());
+        assert!(server::<24, crate::Full>(0x0a, LIFT, TILT).is_err());
     }
 
     #[test]

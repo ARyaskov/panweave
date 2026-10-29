@@ -90,7 +90,7 @@ fn frame(header: &Header, payload: &[u8]) -> Vec<u8> {
 /// actions; returns the (header, payload) of the first reply.
 fn command(
     zcl: &mut Node,
-    groups: &mut GroupTable<4>,
+    groups: &mut GroupTable<panweave_types::capacity::Cap<4>>,
     cluster: ClusterId,
     cmd: CommandId,
     payload: &[u8],
@@ -139,7 +139,7 @@ fn is_on(zcl: &Node) -> bool {
 #[test]
 fn on_with_timed_off_counts_down_and_guards_the_off_state() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     // Accept only when on, while off: discarded.
     let st = default_status(command(
         &mut zcl,
@@ -216,7 +216,7 @@ fn on_with_timed_off_counts_down_and_guards_the_off_state() {
 #[test]
 fn level_transitions_run_on_the_tick_and_couple_with_on_off() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     // Off + ExecuteIfOff clear: Move to Level is suppressed.
     let st = default_status(command(
         &mut zcl,
@@ -319,7 +319,7 @@ fn level_transitions_run_on_the_tick_and_couple_with_on_off() {
 #[test]
 fn scenes_store_recall_and_the_global_scene() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     g.add(GroupAddress(7), EP).unwrap();
     // Add Scene for a group the endpoint is not in → INVALID_FIELD.
     let (h, p) = command(
@@ -570,7 +570,7 @@ fn poll_control_server_checks_in_and_fast_polls() {
         }]
     );
     // Check-in Response: fast poll for 4 quarter-seconds.
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     let st = default_status(command(
         &mut zcl,
         &mut g,
@@ -716,7 +716,7 @@ fn poll_control_server_checks_in_and_fast_polls() {
 #[test]
 fn reset_to_factory_defaults_restores_attributes_and_reporting() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     let _ = command(&mut zcl, &mut g, on_off::ID, on_off::CMD_ON, &[], true);
     zcl.cluster_mut(EP, level::ID, Role::Server)
         .unwrap()
@@ -726,7 +726,8 @@ fn reset_to_factory_defaults_restores_attributes_and_reporting() {
     c.attributes
         .get_mut(on_off::ON_OFF.id, None)
         .unwrap()
-        .configure_reporting(5, 0xffff, 0, T0);
+        .configure_reporting(5, 0xffff, 0, T0)
+        .unwrap();
     assert!(is_on(&zcl));
     let _ = events(&mut zcl);
     let st = default_status(command(
@@ -765,7 +766,7 @@ fn reset_to_factory_defaults_restores_attributes_and_reporting() {
 #[test]
 fn color_control_through_the_dispatcher_and_scenes() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     g.add(GroupAddress(7), EP).unwrap();
     // Add a colour-temperature lamp to the endpoint.
     zcl.endpoint_mut(EP)
@@ -890,7 +891,7 @@ fn color_control_through_the_dispatcher_and_scenes() {
 #[test]
 fn level_couples_the_colour_temperature_and_pwm_runs_beside_it() {
     let mut zcl = lamp();
-    let mut g = GroupTable::<4>::new();
+    let mut g = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     zcl.endpoint_mut(EP)
         .unwrap()
         .add_instance(

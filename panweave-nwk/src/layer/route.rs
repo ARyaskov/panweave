@@ -4,10 +4,11 @@
 use heapless::Vec;
 use panweave_codec::Decode;
 use panweave_security::cipher::BlockCipher;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Duration, Instant, NwkStatus, Rng, ShortAddress};
 
 use super::rx::CommandContext;
-use super::{MAX_NPDU, Nwk, NwkAction, NwkError, NwkEvent, PendingRreq, TxKind};
+use super::{MAX_NPDU, Nwk, NwkAction, NwkDims, NwkError, NwkEvent, PendingRreq, TxKind};
 use crate::command::{
     LinkStatus, LinkStatusEntry, ManyToOne, NetworkStatus, NetworkStatusCode, NwkCommand,
     RouteRecord, RouteReply, RouteRequest,
@@ -17,15 +18,7 @@ use crate::neighbor::{NeighborEntry, Relationship};
 use crate::nib::constants;
 use crate::routing::{DiscoveryEntry, RouteEntry, RouteStatus, incoming_route_is_suitable};
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// NLME-ROUTE-DISCOVERY.request. `dst == None` starts a many-to-one
     /// advertisement (this device becomes a concentrator);
     /// `no_route_cache` selects the many-to-one variant.
@@ -842,7 +835,7 @@ impl<
             return;
         }
         // Collect and sort router neighbors by address (§3.4.8.3.2).
-        let mut entries: Vec<LinkStatusEntry, NEIGHBORS> = Vec::new();
+        let mut entries: VecOf<LinkStatusEntry, D::Neighbors> = D::Neighbors::vec();
         for n in self.neighbors.routers() {
             if !n.short.is_unicast() {
                 continue;

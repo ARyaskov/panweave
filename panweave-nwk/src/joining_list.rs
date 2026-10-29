@@ -5,8 +5,8 @@
 //! rather than in a per-interface MAC PIB, and applies to every enabled
 //! interface alike.
 
-use heapless::Vec;
 use panweave_types::ExtendedAddress;
+use panweave_types::capacity::{Capacity, VecOf};
 
 /// Joining policy values (Table 2-112).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -44,22 +44,42 @@ impl JoiningPolicy {
 }
 
 /// The policy with its list and update id.
-#[derive(Clone, Debug, Default)]
-pub struct JoiningList<const N: usize> {
+#[derive(Debug)]
+pub struct JoiningList<K: Capacity> {
     /// Current policy.
     pub policy: JoiningPolicy,
     /// `IeeeJoiningListUpdateID`: incremented on every change, wrapping.
     pub update_id: u8,
-    list: Vec<ExtendedAddress, N>,
+    list: VecOf<ExtendedAddress, K>,
 }
 
-impl<const N: usize> JoiningList<N> {
+impl<K: Capacity> Clone for JoiningList<K> {
+    fn clone(&self) -> Self {
+        JoiningList {
+            policy: self.policy,
+            update_id: self.update_id,
+            list: K::clone_vec(&self.list),
+        }
+    }
+}
+
+impl<K: Capacity> Default for JoiningList<K> {
+    fn default() -> Self {
+        JoiningList {
+            policy: JoiningPolicy::default(),
+            update_id: Default::default(),
+            list: K::vec(),
+        }
+    }
+}
+
+impl<K: Capacity> JoiningList<K> {
     /// ALL_JOIN with an empty list.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         JoiningList {
             policy: JoiningPolicy::AllJoin,
             update_id: 0,
-            list: Vec::new(),
+            list: K::vec(),
         }
     }
 
@@ -162,7 +182,7 @@ mod tests {
 
     #[test]
     fn policy_and_list_gate_joins() {
-        let mut j: JoiningList<4> = JoiningList::new();
+        let mut j: JoiningList<panweave_types::capacity::Cap<4>> = JoiningList::new();
         let a = ExtendedAddress(1);
         let b = ExtendedAddress(2);
         assert!(j.allows(a));

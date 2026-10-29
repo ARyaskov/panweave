@@ -1,5 +1,9 @@
 # ROM / RAM footprint
 
+The figures below are the full stack's. The battery-sensor profile
+(Panweave Lite, 16 KiB of static RAM on a Cortex-M33) is in
+[`lite.md`](lite.md).
+
 Measured on a bare-metal Cortex-M4F (`thumbv7em-none-eabihf`) with the
 size probe in `examples/size-probe`: a facade `Node` configured as a
 router with an On/Off Light endpoint, software AES, RAM storage

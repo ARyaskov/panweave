@@ -19,8 +19,9 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId};
 use subtle::ConstantTimeEq;
 
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 
 /// Cluster identifier.
 pub const ID: ClusterId = ClusterId(0x0501);
@@ -357,9 +358,9 @@ impl Outcome {
 
 /// Builds a server whose panel is disarmed and ready, requiring `code`
 /// (`None`: none) for Arm and Bypass.
-pub fn server<const A: usize>(code: Option<Code>) -> ClusterInstance<A> {
+pub fn server<const A: usize, P: ZclProfile>(code: Option<Code>) -> ClusterInstance<A, P> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
-    c.state = ClusterState::IasAce(Panel {
+    let _ = c.set_state(Panel {
         audible: audible::DEFAULT,
         code,
         ready: true,
@@ -369,28 +370,25 @@ pub fn server<const A: usize>(code: Option<Code>) -> ClusterInstance<A> {
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn panel_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Panel> {
-    match &mut c.state {
-        ClusterState::IasAce(p) => Some(p),
-        _ => None,
-    }
+fn panel_mut<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut Panel> {
+    c.state_mut::<Panel>()
 }
 
 /// The panel state of a server.
-pub fn panel<const A: usize>(c: &ClusterInstance<A>) -> Option<&Panel> {
-    match &c.state {
-        ClusterState::IasAce(p) => Some(p),
-        _ => None,
-    }
+pub fn panel<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&Panel> {
+    c.state_ref::<Panel>()
 }
 
 /// Adds or replaces a zone (by identifier); `Err` when the table is
 /// full.
-pub fn add_zone<const A: usize>(c: &mut ClusterInstance<A>, zone: Zone) -> Result<(), Zone> {
+pub fn add_zone<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    zone: Zone,
+) -> Result<(), Zone> {
     let Some(p) = panel_mut(c) else {
         return Err(zone);
     };
@@ -403,7 +401,7 @@ pub fn add_zone<const A: usize>(c: &mut ClusterInstance<A>, zone: Zone) -> Resul
 }
 
 /// Removes a zone; returns whether it existed.
-pub fn remove_zone<const A: usize>(c: &mut ClusterInstance<A>, id: u8) -> bool {
+pub fn remove_zone<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, id: u8) -> bool {
     let Some(p) = panel_mut(c) else {
         return false;
     };
@@ -416,8 +414,8 @@ pub fn remove_zone<const A: usize>(c: &mut ClusterInstance<A>, id: u8) -> bool {
 
 /// Records a zone's `ZoneStatus` and returns the Zone Status Changed
 /// command for the bound clients (`None` for an unknown zone).
-pub fn set_zone_status<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_zone_status<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     id: u8,
     status: u16,
 ) -> Option<Frame> {
@@ -446,8 +444,8 @@ fn panel_status_payload(p: &Panel, w: &mut Writer<'_>) -> Result<(), CodecError>
 /// and the alarm status, and returns the Panel Status Changed command
 /// for the bound clients (§8.3.2.4.5). Disarming clears the bypass
 /// list (§8.3.2.4.7.4).
-pub fn set_panel_status<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_panel_status<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     status: u8,
     seconds_remaining: u8,
     alarm: u8,
@@ -466,7 +464,7 @@ pub fn set_panel_status<const A: usize>(
 }
 
 /// Marks the panel ready (or not) to arm.
-pub fn set_ready<const A: usize>(c: &mut ClusterInstance<A>, ready: bool) {
+pub fn set_ready<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, ready: bool) {
     if let Some(p) = panel_mut(c) {
         p.ready = ready;
     }
@@ -487,7 +485,9 @@ fn bypassed_list(p: &Panel) -> Option<Frame> {
 }
 
 /// The Set Bypassed Zone List command for the current bypass list.
-pub fn bypassed_zone_list<const A: usize>(c: &ClusterInstance<A>) -> Option<Frame> {
+pub fn bypassed_zone_list<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+) -> Option<Frame> {
     bypassed_list(panel(c)?)
 }
 
@@ -500,8 +500,8 @@ fn read_string<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], CodecError> {
 }
 
 /// Handles a received command (§8.3.2.3).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
 ) -> Outcome {

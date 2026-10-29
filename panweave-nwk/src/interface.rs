@@ -12,6 +12,7 @@
 //! runtime's to switch.
 
 use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Channel, ChannelMask, ChannelPage};
 
 /// Largest interface index (Table 3-39).
@@ -204,17 +205,29 @@ pub enum InterfaceError {
 }
 
 /// The table.
-#[derive(Clone, Debug, Default)]
-pub struct MacInterfaceTable<const N: usize> {
-    entries: Vec<MacInterfaceEntry, N>,
+#[derive(Debug)]
+pub struct MacInterfaceTable<K: Capacity> {
+    entries: VecOf<MacInterfaceEntry, K>,
 }
 
-impl<const N: usize> MacInterfaceTable<N> {
+impl<K: Capacity> Clone for MacInterfaceTable<K> {
+    fn clone(&self) -> Self {
+        MacInterfaceTable {
+            entries: K::clone_vec(&self.entries),
+        }
+    }
+}
+
+impl<K: Capacity> Default for MacInterfaceTable<K> {
+    fn default() -> Self {
+        MacInterfaceTable { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> MacInterfaceTable<K> {
     /// A table with one enabled radio interface (index 0).
     pub fn single(supported: ChannelMask) -> Self {
-        let mut t = MacInterfaceTable {
-            entries: Vec::new(),
-        };
+        let mut t = MacInterfaceTable { entries: K::vec() };
         let _ = t.entries.push(MacInterfaceEntry::radio(0, supported));
         t
     }
@@ -385,7 +398,8 @@ mod tests {
 
     #[test]
     fn set_and_get_interface_follow_3_2_2_34() {
-        let mut t: MacInterfaceTable<4> = MacInterfaceTable::single(ChannelMask::ALL_2_4GHZ);
+        let mut t: MacInterfaceTable<panweave_types::capacity::Cap<4>> =
+            MacInterfaceTable::single(ChannelMask::ALL_2_4GHZ);
         assert_eq!(t.enabled().count(), 1);
         // Unknown index.
         let mut req = SetInterface {

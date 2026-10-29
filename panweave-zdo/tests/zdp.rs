@@ -217,8 +217,8 @@ fn node_desc(lt: LogicalDeviceType) -> NodeDescriptor {
 }
 
 struct Pair {
-    a: Zdo<4>,
-    b: Zdo<4>,
+    a: Zdo<panweave_zdo::layer::Dims<4>>,
+    b: Zdo<panweave_zdo::layer::Dims<4>>,
     ca: Ctx,
     cb: Ctx,
     now: Instant,
@@ -230,11 +230,14 @@ struct Pair {
 
 impl Pair {
     fn new() -> Self {
-        let mut a = Zdo::<4>::new(
+        let mut a = Zdo::<panweave_zdo::layer::Dims<4>>::new(
             node_desc(LogicalDeviceType::Coordinator),
             PowerDescriptor::MAINS,
         );
-        let mut b = Zdo::<4>::new(node_desc(LogicalDeviceType::Router), PowerDescriptor::MAINS);
+        let mut b = Zdo::<panweave_zdo::layer::Dims<4>>::new(
+            node_desc(LogicalDeviceType::Router),
+            PowerDescriptor::MAINS,
+        );
         a.add_endpoint(
             SimpleDescriptor::new(
                 Endpoint(1),
@@ -289,7 +292,7 @@ impl Pair {
     }
 
     fn deliver(
-        zdo: &mut Zdo<4>,
+        zdo: &mut Zdo<panweave_zdo::layer::Dims<4>>,
         ctx: &mut Ctx,
         from: ShortAddress,
         from_ieee: ExtendedAddress,

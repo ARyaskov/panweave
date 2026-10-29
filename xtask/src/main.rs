@@ -410,6 +410,7 @@ fn gate() -> Result<(), String> {
         "panweave-smart-energy",
         "panweave",
         "panweave-hub",
+        "panweave-lite",
     ];
     let target = std::env::var("PANWEAVE_NO_STD_TARGET")
         .unwrap_or_else(|_| "thumbv7em-none-eabihf".to_string());
@@ -456,8 +457,85 @@ fn gate() -> Result<(), String> {
     } else {
         println!("gate: target {target} not installed; skipping bare-metal no_std check");
     }
+    lite_footprint(&root)?;
     conformance(true)?;
     codegen(true)
+}
+
+/// Panweave Lite on the EFR32MG22: the link build of `examples/lite-probe`
+/// (which fails when the static RAM leaves less than the stack reserve in
+/// 32 KiB) and the footprint regression check against
+/// `examples/lite-probe/footprint-baseline.json`; with QEMU installed the
+/// measured-stack run too.
+fn lite_footprint(root: &Path) -> Result<(), String> {
+    let target = "thumbv8m.main-none-eabihf";
+    let installed = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(target))
+        .unwrap_or(false);
+    if !installed {
+        println!("gate: target {target} not installed; skipping the Lite footprint check");
+        return Ok(());
+    }
+    let probe = root.join("examples").join("lite-probe");
+    let elf_dir = probe.join("target").join(target).join("release");
+    run(
+        &probe,
+        "cargo",
+        &["build", "--release", "--features", "dlk"],
+    )?;
+    let link = probe.join("target").join("efr32-dlk.elf");
+    fs::copy(elf_dir.join("panweave-lite-probe"), &link).map_err(|e| e.to_string())?;
+    let mut args = vec![
+        root.join("scripts")
+            .join("lite_footprint.py")
+            .display()
+            .to_string(),
+        link.display().to_string(),
+        "--check".into(),
+        probe.join("footprint-baseline.json").display().to_string(),
+    ];
+    let qemu = Command::new("qemu-system-arm")
+        .arg("--version")
+        .output()
+        .is_ok();
+    if qemu {
+        run(
+            &probe,
+            "cargo",
+            &["build", "--release", "--features", "qemu,dlk"],
+        )?;
+        let log = probe.join("target").join("qemu-dlk.log");
+        let out = Command::new("qemu-system-arm")
+            .args([
+                "-M",
+                "mps2-an505",
+                "-cpu",
+                "cortex-m33",
+                "-nographic",
+                "-semihosting-config",
+                "enable=on,target=native",
+                "-kernel",
+            ])
+            .arg(elf_dir.join("panweave-lite-probe"))
+            .output()
+            .map_err(|e| format!("qemu: {e}"))?;
+        fs::write(&log, &out.stdout).map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(
+                "the Lite QEMU scenario failed (see examples/lite-probe/target/qemu-dlk.log)"
+                    .into(),
+            );
+        }
+        args.push("--qemu".into());
+        args.push(log.display().to_string());
+    } else {
+        println!("gate: qemu-system-arm not found; the Lite stack is not measured");
+    }
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run(root, python, &refs)
 }
 
 #[derive(Debug, Deserialize)]

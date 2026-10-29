@@ -21,6 +21,7 @@ use panweave_zdo::zdp::{
     ZdpStatus, cluster,
 };
 
+use crate::profile::StackProfile;
 use crate::stack::{Phase, Stack, StackEvent};
 
 /// Time allowed for the responses to a broadcast discovery.
@@ -62,7 +63,16 @@ impl OtaDiscovery {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Discovers the upgrade server of the OTA client on `endpoint`
     /// (ZCL8 §11.8). With `UpgradeServerID` preprogrammed the server's
     /// network address is resolved; otherwise the first OTA server to

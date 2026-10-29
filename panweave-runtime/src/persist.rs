@@ -23,6 +23,9 @@ use panweave_types::{
 
 use panweave_zcl::Role;
 
+use panweave_types::capacity::{Capacity, VecOf};
+
+use crate::profile::StackProfile;
 use crate::stack::{Phase, Stack};
 
 /// Format version of the NIB record.
@@ -39,9 +42,6 @@ const GROUPS_FORMAT: u8 = 1;
 const AIB_FORMAT: u8 = 3;
 /// Format version of the children record.
 const CHILDREN_FORMAT: u8 = 1;
-
-/// Largest serialized record.
-const RECORD: usize = 512;
 
 /// Outcome of [`Stack::restore`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -108,15 +108,31 @@ impl RestoreDetail {
     }
 }
 
-fn record<S: Storage>(storage: &mut S, key: Key) -> Result<Option<Vec<u8, RECORD>>, StorageError> {
-    let mut buf = [0u8; RECORD];
+fn record<S: Storage, K: Capacity>(
+    storage: &mut S,
+    key: Key,
+) -> Result<Option<VecOf<u8, K>>, StorageError> {
+    // Loaded straight into the returned buffer: one record-sized buffer
+    // on the stack, not two.
+    let mut buf = K::vec();
+    let _ = buf.resize_default(K::N);
     let Some(n) = storage.load(key, &mut buf)? else {
         return Ok(None);
     };
-    Ok(Vec::from_slice(buf.get(..n).unwrap_or(&[])).ok())
+    buf.truncate(n);
+    Ok(Some(buf))
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Stores the saved startup sets of the Commissioning server on
     /// `endpoint` (ZCL8 §13.2.2.3.2: non-volatile).
     pub fn persist_startup_sets(&mut self, endpoint: Endpoint) -> Result<(), StorageError> {
@@ -206,7 +222,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// address, End Device Configuration and Device Timeout of every
     /// end-device neighbor).
     pub fn persist_children(&mut self) -> Result<(), StorageError> {
-        let mut buf = [0u8; RECORD];
+        let mut buf = P::Record::vec();
+        let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(CHILDREN_FORMAT);
         for e in self.nwk.neighbors.end_device_children() {
@@ -254,7 +271,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// scalar AIB attributes.
     pub fn persist_link_keys(&mut self) -> Result<(), StorageError> {
         self.storage.erase_kind(Kind::LinkKey)?;
-        let mut records: Vec<(u64, [u8; 48], usize), { crate::stack::LINK_KEYS }> = Vec::new();
+        // Each record is stored as soon as it is encoded.
+        let mut count = 0u8;
         for e in self.aps.security.keys().iter() {
             let mut buf = [0u8; 48];
             let mut w = Writer::new(&mut buf);
@@ -273,11 +291,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 return Err(StorageError::Full);
             }
             let n = w.position();
-            let _ = records.push((e.partner.0, buf, n));
-        }
-        for (partner, buf, n) in &records {
             self.storage
-                .store(Key::with_id(Kind::LinkKey, *partner), &buf[..*n])?;
+                .store(Key::with_id(Kind::LinkKey, e.partner.0), &buf[..n])?;
+            count = count.saturating_add(1);
         }
         // The AIB record doubles as the index of link-key records: the
         // storage trait has no enumeration. Format 2 appends the startup
@@ -287,10 +303,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(AIB_FORMAT);
         let _ = w.u64_le(self.aps.aib.trust_center_address.0);
-        #[allow(clippy::cast_possible_truncation)]
-        let _ = w.u8(records.len() as u8);
-        for (partner, _, _) in &records {
-            let _ = w.u64_le(*partner);
+        let _ = w.u8(count);
+        for e in self.aps.security.keys().iter().take(usize::from(count)) {
+            let _ = w.u64_le(e.partner.0);
         }
         let aib = &self.aps.aib;
         let _ = w.u8(u8::from(aib.designated_coordinator));
@@ -309,7 +324,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Persists the binding table.
     pub fn persist_bindings(&mut self) -> Result<(), StorageError> {
-        let mut buf = [0u8; RECORD];
+        let mut buf = P::Record::vec();
+        let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(BINDINGS_FORMAT);
         for b in self.aps.bindings.iter() {
@@ -338,7 +354,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     /// Persists the group table.
     pub fn persist_groups(&mut self) -> Result<(), StorageError> {
-        let mut buf = [0u8; RECORD];
+        let mut buf = P::Record::vec();
+        let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
         let _ = w.u8(GROUPS_FORMAT);
         for g in self.aps.groups.iter() {
@@ -407,8 +424,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 .restore_outgoing_counter(u32::from_le_bytes(fc));
         }
         self.restore_startup_sets()?;
-        let nib = record(&mut self.storage, Key::single(Kind::Nib))?;
-        let keys = record(&mut self.storage, Key::single(Kind::NetworkKeys))?;
+        let nib = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Nib))?;
+        let keys = record::<S, P::Record>(&mut self.storage, Key::single(Kind::NetworkKeys))?;
         let (nib, keys) = match (nib, keys) {
             (Some(n), Some(k)) => (n, k),
             (None, None) => {
@@ -481,8 +498,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         }
         // Frame counter: continue after the last persisted reservation
         // (never reuse a value, §4.3.4).
-        let mut partners: Vec<u64, { crate::stack::LINK_KEYS }> = Vec::new();
-        if let Some(aib) = record(&mut self.storage, Key::single(Kind::Aib))? {
+        let mut partners: VecOf<u64, <P::Aps as panweave_aps::layer::ApsDims>::Keys> =
+            <P::Aps as panweave_aps::layer::ApsDims>::Keys::vec();
+        if let Some(aib) = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Aib))? {
             let mut r = Reader::new(&aib);
             let format = r.u8().ok();
             if matches!(format, Some(1..=AIB_FORMAT))
@@ -536,7 +554,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
 
     fn restore_link_keys(&mut self, partners: &[u64]) -> Result<(), StorageError> {
         for &p in partners {
-            let Some(rec) = record(&mut self.storage, Key::with_id(Kind::LinkKey, p))? else {
+            let Some(rec) =
+                record::<S, P::Record>(&mut self.storage, Key::with_id(Kind::LinkKey, p))?
+            else {
                 continue;
             };
             let mut r = Reader::new(&rec);
@@ -588,7 +608,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         if !self.nwk.nib.is_router_or_coordinator() {
             return Ok(());
         }
-        let Some(rec) = record(&mut self.storage, Key::single(Kind::Children))? else {
+        let Some(rec) = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Children))?
+        else {
             return Ok(());
         };
         let mut r = Reader::new(&rec);
@@ -624,7 +645,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     }
 
     fn restore_bindings_and_groups(&mut self) -> Result<(), StorageError> {
-        if let Some(rec) = record(&mut self.storage, Key::single(Kind::Bindings))? {
+        if let Some(rec) = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Bindings))? {
             let mut r = Reader::new(&rec);
             if r.u8().ok() == Some(BINDINGS_FORMAT) {
                 while r.remaining() >= 4 {
@@ -653,7 +674,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                 }
             }
         }
-        if let Some(rec) = record(&mut self.storage, Key::single(Kind::Groups))? {
+        if let Some(rec) = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Groups))? {
             let mut r = Reader::new(&rec);
             if r.u8().ok() == Some(GROUPS_FORMAT) {
                 while r.remaining() >= 3 {

@@ -15,8 +15,9 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -584,11 +585,11 @@ impl Profiles {
 /// (at most [`MAX_PROFILES`], at least 1), `MultipleScheduling` and
 /// `EnergyRemote` as given, `EnergyFormatting` 0x01 (one decimal) and
 /// `ScheduleMode` 0.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     profiles: u8,
     multiple_scheduling: bool,
     energy_remote: bool,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let n = usize::from(profiles).clamp(1, MAX_PROFILES);
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(
@@ -635,29 +636,25 @@ pub fn server<const A: usize>(
             },
         });
     }
-    c.state = ClusterState::PowerProfile(state);
+    c.set_state(state)?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// The server's profiles.
-pub fn profiles<const A: usize>(c: &ClusterInstance<A>) -> Option<&Profiles> {
-    match &c.state {
-        ClusterState::PowerProfile(p) => Some(p),
-        _ => None,
-    }
+pub fn profiles<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&Profiles> {
+    c.state_ref::<Profiles>()
 }
 
 /// The server's profiles, mutably.
-pub fn profiles_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Profiles> {
-    match &mut c.state {
-        ClusterState::PowerProfile(p) => Some(p),
-        _ => None,
-    }
+pub fn profiles_mut<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+) -> Option<&mut Profiles> {
+    c.state_mut::<Profiles>()
 }
 
 /// Result of a received command (§3.17.5).
@@ -692,8 +689,8 @@ pub enum Outcome {
 }
 
 /// Handles a received command.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
 ) -> Outcome {

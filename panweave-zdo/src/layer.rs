@@ -7,9 +7,10 @@
 //! permit joining, leave) is reached through the [`ZdoContext`] trait,
 //! which the runtime implements over the NWK and APS layers.
 
-use heapless::{Deque, Vec};
+use heapless::Vec;
 use panweave_aps::layer::{DataIndication, Delivery, RelayInfo, SecurityStatus};
 use panweave_codec::{Decode, Encode, Writer};
+use panweave_types::capacity::{Cap, Capacity, DequeOf, VecOf};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ClusterId, Endpoint, ExtendedAddress, LogicalDeviceType, MacCapability, ProfileId,
@@ -326,8 +327,41 @@ struct PendingRequest {
     deadline: Instant,
 }
 
-/// The ZDO.
-pub struct Zdo<const EPS: usize> {
+/// The capacities of a [`Zdo`], chosen at compile time.
+pub trait ZdoDims: 'static {
+    /// Application endpoints (simple descriptors).
+    type Endpoints: Capacity;
+    /// Outstanding client requests.
+    type Pending: Capacity;
+    /// Actions and events (each).
+    type Queue: Capacity;
+}
+
+/// `EPS` endpoints with [`PENDING_REQUESTS`] outstanding requests and
+/// [`QUEUE_CAPACITY`] queues.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Dims<const EPS: usize>;
+
+impl<const EPS: usize> ZdoDims for Dims<EPS> {
+    type Endpoints = Cap<EPS>;
+    type Pending = Cap<PENDING_REQUESTS>;
+    type Queue = Cap<QUEUE_CAPACITY>;
+}
+
+/// The ZDO of an end device with one application endpoint: a device
+/// answers requests and sends few of its own (Device_annce, the
+/// Trust Center's Node_Desc_req and key negotiation).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct EndDevice;
+
+impl ZdoDims for EndDevice {
+    type Endpoints = Cap<1>;
+    type Pending = Cap<2>;
+    type Queue = Cap<3>;
+}
+
+/// The ZDO, its tables dimensioned by `D` ([`ZdoDims`]).
+pub struct Zdo<D: ZdoDims = Dims<4>> {
     /// Node descriptor.
     pub node: NodeDescriptor,
     /// Node power descriptor.
@@ -336,17 +370,17 @@ pub struct Zdo<const EPS: usize> {
     pub restricted_mode: bool,
     /// `apsZdoResponseTimeout`.
     pub response_timeout: Duration,
-    endpoints: Vec<SimpleDescriptor, EPS>,
+    endpoints: VecOf<SimpleDescriptor, D::Endpoints>,
     seq: TransactionSequence,
-    pending: Vec<PendingRequest, PENDING_REQUESTS>,
-    actions: Deque<ZdoAction, QUEUE_CAPACITY>,
-    events: Deque<ZdoEvent, QUEUE_CAPACITY>,
+    pending: VecOf<PendingRequest, D::Pending>,
+    actions: DequeOf<ZdoAction, D::Queue>,
+    events: DequeOf<ZdoEvent, D::Queue>,
     now: Instant,
     /// Events dropped on queue overflow.
     pub dropped: u32,
 }
 
-impl<const EPS: usize> Zdo<EPS> {
+impl<D: ZdoDims> Zdo<D> {
     /// Creates a ZDO with the given descriptors.
     pub fn new(node: NodeDescriptor, power: PowerDescriptor) -> Self {
         Zdo {
@@ -354,11 +388,11 @@ impl<const EPS: usize> Zdo<EPS> {
             power,
             restricted_mode: false,
             response_timeout: Duration::from_secs(3),
-            endpoints: Vec::new(),
+            endpoints: D::Endpoints::vec(),
             seq: TransactionSequence(0),
-            pending: Vec::new(),
-            actions: Deque::new(),
-            events: Deque::new(),
+            pending: D::Pending::vec(),
+            actions: D::Queue::deque(),
+            events: D::Queue::deque(),
             now: Instant::from_millis(0),
             dropped: 0,
         }
@@ -1047,7 +1081,7 @@ impl<const EPS: usize> Zdo<EPS> {
             }
             cluster::ACTIVE_EP_REQ => {
                 let req = ActiveEpReq::decode_exact(data).ok()?;
-                let mut eps: Vec<u8, EPS> = Vec::new();
+                let mut eps: VecOf<u8, D::Endpoints> = D::Endpoints::vec();
                 let status = if req.addr == me {
                     for d in &self.endpoints {
                         let _ = eps.push(d.endpoint.0);
@@ -1086,7 +1120,7 @@ impl<const EPS: usize> Zdo<EPS> {
                     }
                     return None;
                 }
-                let mut eps: Vec<u8, EPS> = Vec::new();
+                let mut eps: VecOf<u8, D::Endpoints> = D::Endpoints::vec();
                 for d in &self.endpoints {
                     if Self::matches(d, &req) {
                         let _ = eps.push(d.endpoint.0);

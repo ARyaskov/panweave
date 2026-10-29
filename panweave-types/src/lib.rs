@@ -32,6 +32,7 @@ extern crate alloc;
 
 pub mod address;
 pub mod capability;
+pub mod capacity;
 pub mod channel;
 pub mod device;
 pub mod ids;

@@ -10,10 +10,11 @@
 //! Time is injected: the runtime calls [`Aps::poll_timers`] and consults
 //! [`Aps::next_deadline`].
 
-use heapless::{Deque, Vec};
+use heapless::Vec;
 use panweave_security::aux_header::{KeyIdentifier, SecurityLevel};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::frame_counter::Reservation;
+use panweave_types::capacity::{Cap, Capacity, DequeOf, VecOf};
 use panweave_types::time::Instant;
 use panweave_types::{
     ApsStatus, ClusterId, Endpoint, ExtendedAddress, GroupAddress, Key128, KeySequenceNumber,
@@ -50,6 +51,11 @@ pub const MAX_JOINER_TLVS: usize = constants::JOINER_TLVS_UNFRAGMENTED_MAX_SIZE;
 
 /// Number of outstanding transmissions.
 pub const PENDING_TX: usize = 6;
+
+/// Delay before a transmission whose counter reservation could not be
+/// persisted is offered again.
+pub const COUNTER_RETRY_DELAY: panweave_types::time::Duration =
+    panweave_types::time::Duration::from_millis(1000);
 
 /// Capacity of the action and event queues.
 pub const QUEUE_CAPACITY: usize = 16;
@@ -536,54 +542,98 @@ pub struct Loopback {
     pub asdu: AsduBuf,
 }
 
-/// The APS sub-layer.
-pub struct Aps<
-    C: BlockCipher,
-    const KEYS: usize,
-    const BINDINGS: usize,
-    const GROUPS: usize,
-    const DUPS: usize,
-> {
+/// The capacities of an [`Aps`]'s tables and queues, chosen at compile
+/// time ([`Dims`]: the four tables a deployment tunes with default
+/// queues; [`EndDevice`]: a device that talks to its Trust Center and a
+/// coordinator).
+pub trait ApsDims: 'static {
+    /// `apsDeviceKeyPairSet` entries.
+    type Keys: Capacity;
+    /// Binding table entries.
+    type Bindings: Capacity;
+    /// Group table entries.
+    type Groups: Capacity;
+    /// Duplicate rejection records.
+    type Duplicates: Capacity;
+    /// Actions for the NWK layer and events for the upper layer (each).
+    type Queue: Capacity;
+    /// Outstanding transmissions (and requests).
+    type PendingTx: Capacity;
+    /// Partners whose link key is retired from data traffic.
+    type StaleKeys: Capacity;
+}
+
+/// Table capacities `KEYS`, `BINDINGS`, `GROUPS` and `DUPS` with the
+/// default queues ([`QUEUE_CAPACITY`], [`PENDING_TX`]) and eight retired
+/// keys.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Dims<const KEYS: usize, const BINDINGS: usize, const GROUPS: usize, const DUPS: usize>;
+
+impl<const KEYS: usize, const BINDINGS: usize, const GROUPS: usize, const DUPS: usize> ApsDims
+    for Dims<KEYS, BINDINGS, GROUPS, DUPS>
+{
+    type Keys = Cap<KEYS>;
+    type Bindings = Cap<BINDINGS>;
+    type Groups = Cap<GROUPS>;
+    type Duplicates = Cap<DUPS>;
+    type Queue = Cap<QUEUE_CAPACITY>;
+    type PendingTx = Cap<PENDING_TX>;
+    type StaleKeys = Cap<8>;
+}
+
+/// Table capacities of an end device: the Trust Center link key and one
+/// application link key, the bindings of a reporting sensor (its CIE or
+/// coordinator, a second report destination), two groups, and small
+/// queues: two outstanding transmissions (a report waiting behind an
+/// acknowledged frame).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct EndDevice;
+
+impl ApsDims for EndDevice {
+    type Keys = Cap<2>;
+    type Bindings = Cap<2>;
+    type Groups = Cap<2>;
+    type Duplicates = Cap<4>;
+    type Queue = Cap<4>;
+    type PendingTx = Cap<2>;
+    type StaleKeys = Cap<1>;
+}
+
+/// The APS sub-layer, its tables dimensioned by `D` ([`ApsDims`]).
+pub struct Aps<C: BlockCipher, D: ApsDims = Dims<8, 8, 8, 8>> {
     /// Scalar AIB attributes.
     pub aib: Aib,
     /// Configuration.
     pub config: ApsConfig,
     /// Key-pair set and APS frame security.
-    pub security: ApsSecurity<C, KEYS>,
+    pub security: ApsSecurity<C, D::Keys>,
     /// Binding table.
-    pub bindings: BindingTable<BINDINGS>,
+    pub bindings: BindingTable<D::Bindings>,
     /// Group table.
-    pub groups: GroupTable<GROUPS>,
+    pub groups: GroupTable<D::Groups>,
     /// Statistics.
     pub stats: ApsStats,
-    pub(crate) dedup: DuplicateRejectionTable<DUPS>,
+    pub(crate) dedup: DuplicateRejectionTable<D::Duplicates>,
     pub(crate) local_ieee: ExtendedAddress,
     pub(crate) local_short: ShortAddress,
     pub(crate) state: DeviceState,
     pub(crate) counter: u8,
     pub(crate) now: Instant,
-    pub(crate) actions: Deque<ApsAction, QUEUE_CAPACITY>,
-    pub(crate) events: Deque<ApsEvent, QUEUE_CAPACITY>,
-    pub(crate) pending: Vec<tx::PendingTx, PENDING_TX>,
-    pub(crate) requests: Vec<tx::RequestState, PENDING_TX>,
+    pub(crate) actions: DequeOf<ApsAction, D::Queue>,
+    pub(crate) events: DequeOf<ApsEvent, D::Queue>,
+    pub(crate) pending: VecOf<tx::PendingTx, D::PendingTx>,
+    pub(crate) requests: VecOf<tx::RequestState, D::PendingTx>,
     pub(crate) reassembly: Option<rx::Reassembly>,
     pub(crate) loopback: Option<Loopback>,
     /// Partners whose link key is retired from data traffic (SE 1.4a
     /// §5.4.5): their secured data frames are dropped without an
     /// acknowledgement, their APS commands still processed.
-    pub(crate) stale_keys: Vec<ExtendedAddress, 8>,
+    pub(crate) stale_keys: VecOf<ExtendedAddress, D::StaleKeys>,
     pub(crate) next_request: u16,
     pub(crate) next_handle: u16,
 }
 
-impl<
-    C: BlockCipher,
-    const KEYS: usize,
-    const BINDINGS: usize,
-    const GROUPS: usize,
-    const DUPS: usize,
-> Aps<C, KEYS, BINDINGS, GROUPS, DUPS>
-{
+impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
     /// Creates the layer for the device with IEEE address `local_ieee`.
     pub fn new(local_ieee: ExtendedAddress, config: ApsConfig) -> Self {
         Aps {
@@ -599,13 +649,13 @@ impl<
             state: DeviceState::NotJoined,
             counter: 0,
             now: Instant::from_millis(0),
-            actions: Deque::new(),
-            events: Deque::new(),
-            pending: Vec::new(),
-            requests: Vec::new(),
+            actions: D::Queue::deque(),
+            events: D::Queue::deque(),
+            pending: D::PendingTx::vec(),
+            requests: D::PendingTx::vec(),
             reassembly: None,
             loopback: None,
-            stale_keys: Vec::new(),
+            stale_keys: D::StaleKeys::vec(),
             next_request: 1,
             next_handle: 1,
         }
@@ -700,6 +750,21 @@ impl<
         self.security.commit_counter_reservation(partner, r);
         self.release_counter_pending();
         self.service_pending();
+    }
+
+    /// Reports that `partner`'s [`ApsAction::CounterReservation`] could
+    /// not be persisted: transmissions waiting for it stay unsecured and
+    /// are offered again after [`COUNTER_RETRY_DELAY`], requesting a new
+    /// reservation then (one write attempt per delay while the storage
+    /// fails, never a frame beyond the committed bound).
+    pub fn abort_counter_reservation(&mut self, partner: ExtendedAddress) {
+        self.security.abort_counter_reservation(partner);
+        let until = self.now.saturating_add(COUNTER_RETRY_DELAY);
+        for p in &mut self.pending {
+            if p.state == tx::TxState::CounterPending && p.partner.is_none_or(|q| q == partner) {
+                p.state = tx::TxState::Deferred { until };
+            }
+        }
     }
 
     /// Advances time: acknowledgement timeouts, reassembly expiry and
@@ -814,7 +879,8 @@ impl<
         use panweave_codec::Encode;
         let overhead = header.encoded_len()
             + aps_security.map_or(0, |ext| {
-                ApsSecurity::<C, KEYS>::aux_header_len(ext) + self.config.security_level.mic_len()
+                ApsSecurity::<C, D::Keys>::aux_header_len(ext)
+                    + self.config.security_level.mic_len()
             });
         self.config.nwk_max_payload.saturating_sub(overhead)
     }

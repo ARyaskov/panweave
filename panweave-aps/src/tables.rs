@@ -4,7 +4,7 @@
 //! All tables are fixed-capacity and heap-free; the capacities are const
 //! generics chosen by the integrator.
 
-use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::time::Instant;
 use panweave_types::{ApsStatus, ClusterId, Endpoint, ExtendedAddress, GroupAddress, ShortAddress};
 
@@ -38,24 +38,38 @@ pub struct BindingEntry {
 }
 
 /// The binding table (`apsBindingTable`).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BindingTable<const N: usize> {
-    entries: Vec<BindingEntry, N>,
+#[cfg_attr(feature = "serde", serde(bound = ""))]
+pub struct BindingTable<K: Capacity> {
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            serialize_with = "panweave_types::capacity::serde_vec::serialize::<_, K, _>",
+            deserialize_with = "panweave_types::capacity::serde_vec::deserialize::<_, K, _>"
+        )
+    )]
+    entries: VecOf<BindingEntry, K>,
 }
 
-impl<const N: usize> Default for BindingTable<N> {
+impl<K: Capacity> Clone for BindingTable<K> {
+    fn clone(&self) -> Self {
+        BindingTable {
+            entries: K::clone_vec(&self.entries),
+        }
+    }
+}
+
+impl<K: Capacity> Default for BindingTable<K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize> BindingTable<N> {
+impl<K: Capacity> BindingTable<K> {
     /// Empty table.
-    pub const fn new() -> Self {
-        BindingTable {
-            entries: Vec::new(),
-        }
+    pub fn new() -> Self {
+        BindingTable { entries: K::vec() }
     }
 
     /// APSME-BIND.request: adds an entry. Duplicate entries succeed
@@ -124,7 +138,7 @@ impl<const N: usize> BindingTable<N> {
 
     /// Capacity.
     pub const fn capacity(&self) -> usize {
-        N
+        K::N
     }
 
     /// Removes all entries.
@@ -200,24 +214,38 @@ pub struct GroupEntry {
 }
 
 /// The group table (`apsGroupTable`).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct GroupTable<const N: usize> {
-    entries: Vec<GroupEntry, N>,
+#[cfg_attr(feature = "serde", serde(bound = ""))]
+pub struct GroupTable<K: Capacity> {
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            serialize_with = "panweave_types::capacity::serde_vec::serialize::<_, K, _>",
+            deserialize_with = "panweave_types::capacity::serde_vec::deserialize::<_, K, _>"
+        )
+    )]
+    entries: VecOf<GroupEntry, K>,
 }
 
-impl<const N: usize> Default for GroupTable<N> {
+impl<K: Capacity> Clone for GroupTable<K> {
+    fn clone(&self) -> Self {
+        GroupTable {
+            entries: K::clone_vec(&self.entries),
+        }
+    }
+}
+
+impl<K: Capacity> Default for GroupTable<K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize> GroupTable<N> {
+impl<K: Capacity> GroupTable<K> {
     /// Empty table.
-    pub const fn new() -> Self {
-        GroupTable {
-            entries: Vec::new(),
-        }
+    pub fn new() -> Self {
+        GroupTable { entries: K::vec() }
     }
 
     /// APSME-ADD-GROUP.request.
@@ -311,23 +339,29 @@ struct DuplicateRecord {
 
 /// The duplicate rejection table (§2.2.8.4.2). Frames whose (source,
 /// APS counter) pair matches a live entry are duplicates.
-#[derive(Clone, Debug)]
-pub struct DuplicateRejectionTable<const N: usize> {
-    entries: Vec<DuplicateRecord, N>,
+#[derive(Debug)]
+pub struct DuplicateRejectionTable<K: Capacity> {
+    entries: VecOf<DuplicateRecord, K>,
 }
 
-impl<const N: usize> Default for DuplicateRejectionTable<N> {
+impl<K: Capacity> Clone for DuplicateRejectionTable<K> {
+    fn clone(&self) -> Self {
+        DuplicateRejectionTable {
+            entries: K::clone_vec(&self.entries),
+        }
+    }
+}
+
+impl<K: Capacity> Default for DuplicateRejectionTable<K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize> DuplicateRejectionTable<N> {
+impl<K: Capacity> DuplicateRejectionTable<K> {
     /// Empty table.
-    pub const fn new() -> Self {
-        DuplicateRejectionTable {
-            entries: Vec::new(),
-        }
+    pub fn new() -> Self {
+        DuplicateRejectionTable { entries: K::vec() }
     }
 
     /// Records `(src, counter)` at `now`. Returns true when the pair was
@@ -392,7 +426,7 @@ mod tests {
 
     #[test]
     fn binding_table_bind_unbind() {
-        let mut t = BindingTable::<2>::new();
+        let mut t = BindingTable::<panweave_types::capacity::Cap<2>>::new();
         let e1 = BindingEntry {
             src_endpoint: Endpoint(1),
             cluster: ClusterId(6),
@@ -431,7 +465,7 @@ mod tests {
 
     #[test]
     fn group_table_membership() {
-        let mut g = GroupTable::<2>::new();
+        let mut g = GroupTable::<panweave_types::capacity::Cap<2>>::new();
         assert_eq!(g.add(GroupAddress(1), Endpoint(1)), Ok(()));
         assert_eq!(g.add(GroupAddress(1), Endpoint(5)), Ok(()));
         assert_eq!(g.add(GroupAddress(2), Endpoint(1)), Ok(()));
@@ -443,7 +477,7 @@ mod tests {
             g.add(GroupAddress(1), Endpoint(0)),
             Err(ApsStatus::InvalidParameter)
         );
-        let eps: Vec<Endpoint, 4> = g.endpoints(GroupAddress(1)).iter().collect();
+        let eps: heapless::Vec<Endpoint, 4> = g.endpoints(GroupAddress(1)).iter().collect();
         assert_eq!(eps.as_slice(), &[Endpoint(1), Endpoint(5)]);
         assert!(g.contains(GroupAddress(2), Endpoint(1)));
         assert_eq!(
@@ -460,7 +494,7 @@ mod tests {
 
     #[test]
     fn duplicate_rejection_expiry_and_eviction() {
-        let mut d = DuplicateRejectionTable::<2>::new();
+        let mut d = DuplicateRejectionTable::<panweave_types::capacity::Cap<2>>::new();
         let t0 = Instant::from_millis(0);
         let life = Duration::from_millis(100);
         assert!(!d.check_and_record(ShortAddress(1), 1, t0, life));

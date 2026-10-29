@@ -23,7 +23,7 @@ use panweave_types::{
     KeySequenceNumber, LogicalDeviceType, MacCapability, MacStatus, NwkStatus, PanId, ShortAddress,
 };
 
-type Layer = Nwk<SoftwareAes, DeterministicRng, 16, 16, 8, 8>;
+type Layer = Nwk<SoftwareAes, DeterministicRng, panweave_nwk::layer::Dims<16, 16, 8, 8>>;
 
 struct Node {
     nwk: Layer,

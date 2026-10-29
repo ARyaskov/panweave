@@ -6,6 +6,7 @@ use panweave_aps::layer::RelayInfo;
 use panweave_aps::tables::BindingEntry;
 use panweave_codec::Writer;
 use panweave_codec::tlv::{Tlv, TlvSet};
+use panweave_nwk::layer::{Nwk, NwkDims};
 use panweave_nwk::neighbor::Relationship;
 use panweave_nwk::routing::RouteStatus;
 use panweave_nwk::tlv::tag as tlv_tag;
@@ -30,12 +31,13 @@ use panweave_zdo::zdp::{
     RouteRecordStatus, TriState, ZdpStatus,
 };
 
-use crate::stack::{StackAps, StackNwk};
+use crate::profile::StackProfile;
+use crate::stack::{ProfileAps, ProfileNwk};
 
 /// Read-only address view over the NWK tables.
-pub(crate) struct AddrView<'a, C: BlockCipher, R: Rng>(pub &'a StackNwk<C, R>);
+pub(crate) struct AddrView<'a, C: BlockCipher, R: Rng, D: NwkDims>(pub &'a Nwk<C, R, D>);
 
-impl<C: BlockCipher, R: Rng> NwkView for AddrView<'_, C, R> {
+impl<C: BlockCipher, R: Rng, D: NwkDims> NwkView for AddrView<'_, C, R, D> {
     fn ieee_of(&self, short: ShortAddress) -> Option<ExtendedAddress> {
         if short == self.0.nib.network_address {
             return Some(self.0.nib.ieee_address);
@@ -74,9 +76,9 @@ impl<C: BlockCipher, R: Rng> NwkView for AddrView<'_, C, R> {
 }
 
 /// The ZDO's view of the stack.
-pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng> {
-    pub nwk: &'a mut StackNwk<C, R>,
-    pub aps: &'a mut StackAps<C>,
+pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng, P: StackProfile> {
+    pub nwk: &'a mut ProfileNwk<C, R, P>,
+    pub aps: &'a mut ProfileAps<C, P>,
     pub policy: &'a TrustCenterPolicy,
     pub is_trust_center: bool,
     /// Set when the binding table changed (runtime persists it).
@@ -88,7 +90,7 @@ pub(crate) struct ZdoCtx<'a, C: BlockCipher, R: CryptoRng> {
     /// accepts through Bind_req.
     pub max_bind: u8,
     /// Key negotiation state.
-    pub dlk: &'a mut DlkState,
+    pub dlk: &'a mut DlkState<P>,
 }
 
 fn relationship_of(r: Relationship) -> NeighborRelationship {
@@ -102,7 +104,7 @@ fn relationship_of(r: Relationship) -> NeighborRelationship {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng> ZdoContext for ZdoCtx<'_, C, R> {
+impl<C: BlockCipher, R: CryptoRng, P: StackProfile> ZdoContext for ZdoCtx<'_, C, R, P> {
     fn local_short(&self) -> ShortAddress {
         self.nwk.nib.network_address
     }

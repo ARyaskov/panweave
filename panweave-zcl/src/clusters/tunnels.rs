@@ -15,6 +15,7 @@ use panweave_types::{ClusterId, CommandId, ExtendedAddress};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Generic Tunnel cluster identifier.
@@ -73,7 +74,8 @@ impl<'a> TransferApdu<'a> {
 }
 
 /// Builds an ISO 7816 Tunnel server, FREE.
-pub fn iso7816_tunnel_server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn iso7816_tunnel_server<const A: usize, P: ZclProfile>()
+-> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(ISO7816_TUNNEL_DEF, Role::Server);
     c.add_attribute(
         ISO7816_STATUS,
@@ -86,18 +88,18 @@ pub fn iso7816_tunnel_server<const A: usize>() -> Result<ClusterInstance<A>, Zcl
 }
 
 /// Builds an ISO 7816 Tunnel client.
-pub fn iso7816_tunnel_client<const A: usize>() -> ClusterInstance<A> {
+pub fn iso7816_tunnel_client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(ISO7816_TUNNEL_DEF.mirrored(), Role::Client)
 }
 
 /// Whether the ISO 7816 server is BUSY (a card inserted).
-pub fn iso7816_busy<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn iso7816_busy<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     c.u8(ISO7816_STATUS.id) == Some(ISO7816_BUSY)
 }
 
 /// Insert Smart Card at the server (§9.5.5.3.2.3): BUSY is a FAILURE,
 /// FREE becomes BUSY with SUCCESS.
-pub fn iso7816_insert<const A: usize>(c: &mut ClusterInstance<A>) -> ZclStatus {
+pub fn iso7816_insert<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> ZclStatus {
     if iso7816_busy(c) {
         return ZclStatus::Failure;
     }
@@ -107,7 +109,7 @@ pub fn iso7816_insert<const A: usize>(c: &mut ClusterInstance<A>) -> ZclStatus {
 
 /// Extract Smart Card at the server (§9.5.5.3.3.3): FREE is a FAILURE,
 /// BUSY becomes FREE with SUCCESS.
-pub fn iso7816_extract<const A: usize>(c: &mut ClusterInstance<A>) -> ZclStatus {
+pub fn iso7816_extract<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> ZclStatus {
     if !iso7816_busy(c) {
         return ZclStatus::Failure;
     }
@@ -250,11 +252,11 @@ impl<'a> TransferNpdu<'a> {
 
 /// Builds a Generic Tunnel server with the transfer sizes and protocol
 /// address given.
-pub fn generic_tunnel_server<const A: usize>(
+pub fn generic_tunnel_server<const A: usize, P: ZclProfile>(
     incoming: u16,
     outgoing: u16,
     protocol_address: &[u8],
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(GENERIC_TUNNEL_DEF, Role::Server);
     c.add_attribute(
         MAXIMUM_INCOMING_TRANSFER_SIZE,
@@ -281,25 +283,25 @@ pub fn generic_tunnel_server<const A: usize>(
 }
 
 /// Builds a Generic Tunnel client.
-pub fn generic_tunnel_client<const A: usize>() -> ClusterInstance<A> {
+pub fn generic_tunnel_client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(GENERIC_TUNNEL_DEF.mirrored(), Role::Client)
 }
 
 /// Builds a BACnet Protocol Tunnel server (the Generic Tunnel server
 /// beside it carries the device identifier as its protocol address,
 /// §9.3.2.1).
-pub fn bacnet_tunnel_server<const A: usize>() -> ClusterInstance<A> {
+pub fn bacnet_tunnel_server<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(BACNET_PROTOCOL_TUNNEL_DEF, Role::Server)
 }
 
 /// Builds a BACnet Protocol Tunnel client.
-pub fn bacnet_tunnel_client<const A: usize>() -> ClusterInstance<A> {
+pub fn bacnet_tunnel_client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(BACNET_PROTOCOL_TUNNEL_DEF.mirrored(), Role::Client)
 }
 
 /// The server's `ProtocolAddress`, copied out (empty when unset).
-pub fn protocol_address<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn protocol_address<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
 ) -> heapless::Vec<u8, MAX_PROTOCOL_ADDRESS> {
     let mut out = heapless::Vec::new();
     if let Some(Value::String { bytes: Some(b), .. }) = c.attributes.value(PROTOCOL_ADDRESS.id) {
@@ -310,7 +312,10 @@ pub fn protocol_address<const A: usize>(
 
 /// Sets the server's `ProtocolAddress`; the application advertises it
 /// afterwards (§9.2.2.4.4). Returns whether it changed.
-pub fn set_protocol_address<const A: usize>(c: &mut ClusterInstance<A>, address: &[u8]) -> bool {
+pub fn set_protocol_address<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    address: &[u8],
+) -> bool {
     c.set(
         PROTOCOL_ADDRESS.id,
         &Value::String {
@@ -322,8 +327,8 @@ pub fn set_protocol_address<const A: usize>(c: &mut ClusterInstance<A>, address:
 
 /// A Match Protocol Address at the server (§9.2.2.3.3): the response
 /// when the address equals `ProtocolAddress`, otherwise nothing.
-pub fn handle_match<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn handle_match<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     device: ExtendedAddress,
     payload: &[u8],
     out: &mut [u8],
@@ -343,8 +348,8 @@ pub fn handle_match<const A: usize>(
 }
 
 /// The Advertise Protocol Address payload of the server (§9.2.2.4.3).
-pub fn advertise<const A: usize>(
-    c: &ClusterInstance<A>,
+pub fn advertise<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
     out: &mut [u8],
 ) -> Result<usize, CodecError> {
     let mine = protocol_address(c);

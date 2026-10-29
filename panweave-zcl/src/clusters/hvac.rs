@@ -10,8 +10,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Thermostat cluster (§6.3).
@@ -453,7 +454,10 @@ pub mod thermostat {
         }
     }
 
-    fn i16_of<const A: usize>(t: &AttributeTable<A>, id: AttributeId) -> Option<i16> {
+    fn i16_of<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+    ) -> Option<i16> {
         t.value(id)
             .and_then(|v| v.as_i64())
             .and_then(|v| i16::try_from(v).ok())
@@ -475,7 +479,11 @@ pub mod thermostat {
 
     /// Write guard: setpoint limits and the dead band (§6.3.2.2.2),
     /// `SystemMode` against the control sequence, the dead-band range.
-    fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = v.as_i64().unwrap_or(0);
         let dead_band = i64::from(i16_of(t, MIN_SETPOINT_DEAD_BAND.id).unwrap_or(0)) * 10;
         let lim = |id: AttributeId, fallback: AttributeId, default: i16| {
@@ -651,7 +659,7 @@ pub mod thermostat {
 
     /// Clamps a written setback into its min / max (§6.3.2.2.4.4: the
     /// write succeeds with the bound).
-    fn after_write<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {
+    fn after_write<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, id: AttributeId) {
         let (min_id, max_id) = if id == OCCUPIED_SETBACK.id {
             (OCCUPIED_SETBACK_MIN.id, OCCUPIED_SETBACK_MAX.id)
         } else if id == UNOCCUPIED_SETBACK.id {
@@ -693,7 +701,9 @@ pub mod thermostat {
 
     /// Builds a server with the mandatory attributes for `capability`,
     /// the user limits, dead band, control sequence and system mode.
-    pub fn server<const A: usize>(capability: Capability) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        capability: Capability,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_reported_attribute(LOCAL_TEMPERATURE, &i16v(UNKNOWN), TEMPERATURE_REPORTING)?;
         c.add_attribute(OCCUPANCY, &Value::Bits { width: 1, bits: 1 })?;
@@ -738,12 +748,12 @@ pub mod thermostat {
         c.add_attribute(CONTROL_SEQUENCE_OF_OPERATION, &Value::Enum8(seq))?;
         c.add_attribute(SYSTEM_MODE, &Value::Enum8(system_mode::AUTO))?;
         c.add_attribute(THERMOSTAT_RUNNING_MODE, &Value::Enum8(system_mode::OFF))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
@@ -752,8 +762,8 @@ pub mod thermostat {
     /// most [`MAX_DAILY_TRANSITIONS`], `weekly` at most
     /// [`MAX_WEEKLY_TRANSITIONS`]), `TemperatureSetpointHold` and the
     /// Set / Get / Clear Weekly Schedule commands.
-    pub fn enable_weekly_schedule<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn enable_weekly_schedule<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         start_of_week: u8,
         weekly: u8,
         daily: u8,
@@ -786,7 +796,9 @@ pub mod thermostat {
         } else {
             SCHEDULE_DEF
         };
-        let s = extras_mut(c);
+        let Some(s) = extras_mut(c) else {
+            return Err(ZclStatus::Failure);
+        };
         s.weekly = weekly;
         s.daily = daily;
         s.dirty = true;
@@ -794,29 +806,22 @@ pub mod thermostat {
     }
 
     /// The weekly schedule of a server (`None` without the extension).
-    pub fn schedule<const A: usize>(c: &ClusterInstance<A>) -> Option<&Schedule> {
-        match &c.state {
-            ClusterState::Thermostat(s) if s.weekly > 0 => Some(s),
-            _ => None,
-        }
+    pub fn schedule<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&Schedule> {
+        c.state_ref::<Schedule>().filter(|s| s.weekly > 0)
     }
 
-    fn extras_mut<const A: usize>(c: &mut ClusterInstance<A>) -> &mut Schedule {
-        if !matches!(c.state, ClusterState::Thermostat(_)) {
-            c.state = ClusterState::Thermostat(Schedule::default());
-        }
-        match &mut c.state {
-            ClusterState::Thermostat(s) => s,
-            _ => unreachable!(),
-        }
+    fn extras_mut<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+    ) -> Option<&mut Schedule> {
+        c.state_or_default::<Schedule>()
     }
 
     /// Adds the setpoint change tracking set (§6.3.2.2.4): the change
     /// source / amount / timestamp, the occupied and unoccupied setbacks
     /// with their bounds (0.1 °C; `SETBACK_UNUSED` disables one) and
     /// `EmergencyHeatDelta`. Setback writes beyond the bounds are clamped.
-    pub fn enable_setpoint_tracking<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn enable_setpoint_tracking<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         occupied: (u8, u8),
         unoccupied: (u8, u8),
     ) -> Result<(), ZclStatus> {
@@ -848,15 +853,15 @@ pub mod thermostat {
         c.add_attribute(UNOCCUPIED_SETBACK_MIN, &u8v(unoccupied.0))?;
         c.add_attribute(UNOCCUPIED_SETBACK_MAX, &u8v(unoccupied.1))?;
         c.add_attribute(EMERGENCY_HEAT_DELTA, &u8v(SETBACK_UNUSED))?;
-        c.after_write = Some(after_write::<A>);
+        c.after_write = Some(after_write::<A, P>);
         Ok(())
     }
 
     /// Adds the AC information set (§6.3.2.2.5) at its defaults, plus
     /// `TemperatureSetpointHoldDuration`,
     /// `ThermostatProgrammingOperationMode` and `ThermostatRunningState`.
-    pub fn enable_ac_information<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn enable_ac_information<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
     ) -> Result<(), ZclStatus> {
         c.add_attribute(
             TEMPERATURE_SETPOINT_HOLD_DURATION,
@@ -883,8 +888,10 @@ pub mod thermostat {
     }
 
     /// Enables the relay status log (§6.3.2.3.5) and its command.
-    pub fn enable_relay_log<const A: usize>(c: &mut ClusterInstance<A>) {
-        let _ = extras_mut(c);
+    pub fn enable_relay_log<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
+        let Some(_) = extras_mut(c) else {
+            return;
+        };
         c.def = if c.def.received.contains(&CMD_SET_WEEKLY_SCHEDULE) {
             FULL_DEF
         } else {
@@ -896,8 +903,8 @@ pub mod thermostat {
     /// the current local temperature, `humidity` (0xff unknown) and the
     /// running mode's setpoint; the oldest record makes room. Also
     /// mirrors the heat / cool bits into `ThermostatRunningState`.
-    pub fn record_relay_status<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn record_relay_status<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         time_of_day: u16,
         relay_status: u8,
         humidity: u8,
@@ -920,7 +927,9 @@ pub mod thermostat {
                 },
             );
         }
-        let s = extras_mut(c);
+        let Some(s) = extras_mut(c) else {
+            return;
+        };
         if s.relay_log.is_full() {
             s.relay_log.remove(0);
         }
@@ -940,8 +949,8 @@ pub mod thermostat {
     /// Records a setpoint change for the tracking set (§6.3.2.2.4):
     /// `source`, the delta from `previous` to `new` and, when known, the
     /// UTC time.
-    pub fn note_setpoint_change<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn note_setpoint_change<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         source: u8,
         previous: i16,
         new: i16,
@@ -966,7 +975,10 @@ pub mod thermostat {
 
     /// Stamps the last recorded setpoint change with the UTC time (the
     /// dispatcher supplies it from the endpoint's Time server).
-    pub fn stamp_setpoint_change<const A: usize>(c: &mut ClusterInstance<A>, utc: u32) {
+    pub fn stamp_setpoint_change<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        utc: u32,
+    ) {
         if c.attributes
             .get(SETPOINT_CHANGE_SOURCE_TIMESTAMP.id, None)
             .is_some()
@@ -983,10 +995,10 @@ pub mod thermostat {
 
     /// The Get Relay Status Log Response (§6.3.2.4.2): the newest unread
     /// record (LIFO), or the newest record again once all were read.
-    fn relay_status_log_response<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    fn relay_status_log_response<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
     ) -> Option<Vec<u8, 10>> {
-        let s = extras_mut(c);
+        let s = extras_mut(c)?;
         let n = s.relay_log.len();
         // The unread records are the newest `unread`; LIFO hands out the
         // newest of them first.
@@ -1008,16 +1020,18 @@ pub mod thermostat {
         Some(out)
     }
 
-    fn schedule_mut<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Schedule> {
-        match &mut c.state {
-            ClusterState::Thermostat(s) if s.weekly > 0 => Some(s),
-            _ => None,
-        }
+    fn schedule_mut<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+    ) -> Option<&mut Schedule> {
+        c.state_mut::<Schedule>().filter(|s| s.weekly > 0)
     }
 
     /// Whether the schedule needs running: it changed, or its next
     /// transition is due.
-    pub fn schedule_due<const A: usize>(c: &ClusterInstance<A>, now: Instant) -> bool {
+    pub fn schedule_due<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+        now: Instant,
+    ) -> bool {
         schedule(c).is_some_and(|s| s.dirty) || c.tick.is_some_and(|t| now.has_reached(t))
     }
 
@@ -1058,8 +1072,8 @@ pub mod thermostat {
     /// Saturday) or `u32::MAX` when unknown. Applies the transition in
     /// force once (not while `TemperatureSetpointHold` is on), arms
     /// `tick` for the next one and returns the setpoints it applied.
-    pub fn tick<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn tick<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         now: Instant,
         local_time: u32,
     ) -> Option<(Option<i16>, Option<i16>)> {
@@ -1117,7 +1131,9 @@ pub mod thermostat {
     }
 
     /// Abs limits of the setpoints (Table 6-11 defaults when absent).
-    fn abs_limits<const A: usize>(c: &ClusterInstance<A>) -> (i16, i16, i16, i16) {
+    fn abs_limits<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+    ) -> (i16, i16, i16, i16) {
         (
             c.i16(ABS_MIN_HEAT_SETPOINT_LIMIT.id)
                 .unwrap_or(DEFAULT_ABS_MIN_HEAT),
@@ -1131,7 +1147,7 @@ pub mod thermostat {
     }
 
     /// The Mode for Sequence bits a server implements.
-    fn supported_modes<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+    fn supported_modes<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
         let mut m = 0;
         if c.attributes
             .get(OCCUPIED_HEATING_SETPOINT.id, None)
@@ -1151,8 +1167,8 @@ pub mod thermostat {
     /// Set Weekly Schedule (§6.3.2.3.2.8): the transitions replace those
     /// of every day named; the whole command is refused before anything
     /// changes.
-    fn set_weekly_schedule<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    fn set_weekly_schedule<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         payload: &[u8],
     ) -> ZclStatus {
         let supported = supported_modes(c);
@@ -1239,8 +1255,8 @@ pub mod thermostat {
     /// days cannot share one response, so INVALID_FIELD as allowed); the
     /// modes returned are those asked for that the server implements,
     /// a setpoint a transition lacks reads as [`UNKNOWN`].
-    fn get_weekly_schedule<const A: usize>(
-        c: &ClusterInstance<A>,
+    fn get_weekly_schedule<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
         payload: &[u8],
     ) -> Result<Vec<u8, RESPONSE_MAX>, ZclStatus> {
         let s = schedule(c).ok_or(ZclStatus::UnsupportedClusterCommand)?;
@@ -1282,8 +1298,8 @@ pub mod thermostat {
     /// Sets `LocalTemperature` (0.01 °C, `None` = unknown) and updates
     /// `ThermostatRunningMode` per Table 6-17; returns whether the
     /// temperature changed.
-    pub fn set_local_temperature<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn set_local_temperature<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         t: Option<i16>,
     ) -> bool {
         let changed = c.set_i16(LOCAL_TEMPERATURE.id, t.unwrap_or(UNKNOWN));
@@ -1294,7 +1310,7 @@ pub mod thermostat {
 
     /// The running mode implied by `SystemMode`, the setpoints and the
     /// local temperature (Table 6-17): Off, Cool or Heat.
-    pub fn running_mode<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+    pub fn running_mode<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
         let mode = c.u8(SYSTEM_MODE.id).unwrap_or(system_mode::OFF);
         let temp = c.i16(LOCAL_TEMPERATURE.id).filter(|t| *t != UNKNOWN);
         let heat_sp = c.i16(OCCUPIED_HEATING_SETPOINT.id);
@@ -1348,8 +1364,8 @@ pub mod thermostat {
     /// setpoint moves by `amount` tenths of a degree, clamped to its
     /// limits and the dead band — and the weekly schedule commands
     /// (§6.3.2.3.2–4) when the extension is enabled.
-    pub fn handle<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         cmd: CommandId,
         payload: &[u8],
     ) -> Outcome {
@@ -1479,7 +1495,7 @@ pub mod thermostat {
 
     /// Scene extension field set (§6.3.2.6): OccupiedCoolingSetpoint,
     /// OccupiedHeatingSetpoint, SystemMode.
-    pub fn scene_fields<const A: usize>(c: &ClusterInstance<A>) -> [u8; 5] {
+    pub fn scene_fields<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> [u8; 5] {
         let mut f = [0u8; 5];
         f[..2].copy_from_slice(
             &c.i16(OCCUPIED_COOLING_SETPOINT.id)
@@ -1496,7 +1512,10 @@ pub mod thermostat {
     }
 
     /// Applies a scene extension field set (unknown values skipped).
-    pub fn apply_scene_fields<const A: usize>(c: &mut ClusterInstance<A>, fields: &[u8]) {
+    pub fn apply_scene_fields<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+        fields: &[u8],
+    ) {
         if let [c0, c1, h0, h1, mode, ..] = fields {
             let cool = i16::from_le_bytes([*c0, *c1]);
             let heat = i16::from_le_bytes([*h0, *h1]);
@@ -1593,7 +1612,11 @@ pub mod fan_control {
         }
     }
 
-    fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+    fn guard<const A: usize, P: ZclProfile>(
+        t: &AttributeTable<A, P>,
+        id: AttributeId,
+        v: &Value<'_>,
+    ) -> ZclStatus {
         let val = u8::try_from(v.as_i64().unwrap_or(-1)).unwrap_or(0xff);
         if id == FAN_MODE.id {
             let seq = u8::try_from(t.u64(FAN_MODE_SEQUENCE.id).unwrap_or(2)).unwrap_or(2);
@@ -1614,24 +1637,26 @@ pub mod fan_control {
     }
 
     /// Builds a server offering `sequence`.
-    pub fn server<const A: usize>(sequence: u8) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        sequence: u8,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         if sequence > sequence::ON_AUTO {
             return Err(ZclStatus::InvalidValue);
         }
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(FAN_MODE, &Value::Enum8(fan_mode::AUTO))?;
         c.add_attribute(FAN_MODE_SEQUENCE, &Value::Enum8(sequence))?;
-        c.write_guard = Some(guard::<A>);
+        c.write_guard = Some(guard::<A, P>);
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// Current `FanMode`.
-    pub fn fan_mode<const A: usize>(c: &ClusterInstance<A>) -> u8 {
+    pub fn fan_mode<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u8 {
         c.u8(FAN_MODE.id).unwrap_or(fan_mode::OFF)
     }
 }
@@ -1798,7 +1823,7 @@ mod tests {
         assert!(mode_in_sequence(sequence::ON_AUTO, fan_mode::ON));
         assert!(!mode_in_sequence(sequence::ON_AUTO, fan_mode::LOW));
         assert_eq!(fan_mode(&c), fan_mode::AUTO);
-        assert!(server::<8>(7).is_err());
+        assert!(server::<8, crate::Full>(7).is_err());
     }
 
     fn scheduled() -> ClusterInstance<36> {
@@ -2075,7 +2100,7 @@ mod tests {
         enable_ac_information(&mut c).unwrap();
         enable_relay_log(&mut c);
         assert!(
-            enable_setpoint_tracking::<64>(
+            enable_setpoint_tracking::<64, crate::Full>(
                 &mut server(Capability::Heating).unwrap(),
                 (30, 5),
                 (0xff, 0xff)

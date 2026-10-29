@@ -99,7 +99,6 @@
 //! [`StackEvent::DeviceAuthorized`]: crate::StackEvent::DeviceAuthorized
 //! [`StackEvent::KeyExchangeTimedOut`]: crate::StackEvent::KeyExchangeTimedOut
 
-use heapless::Vec;
 use panweave_aps::layer::NwkView;
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{KeyNegotiationState, LinkKeyEntry, LinkKeyKind};
@@ -108,8 +107,11 @@ use panweave_storage::Storage;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{ApsStatus, CryptoRng, ExtendedAddress, KeyAttributes, ShortAddress};
 
+use panweave_types::capacity::{Capacity, VecOf};
+
 use crate::context::AddrView;
 use crate::join_trace::JoinStage;
+use crate::profile::StackProfile;
 use crate::{Stack, StackEvent};
 
 /// Devices that can be inside their key-exchange window at once. A
@@ -133,7 +135,7 @@ pub const RESOLUTION_TIMEOUT_MS: u64 = 10_000;
 
 /// Outstanding IEEE address resolutions (one per NWK address, not
 /// repeated within [`RESOLUTION_TIMEOUT_MS`]).
-const RESOLUTIONS: usize = 4;
+pub(crate) const RESOLUTIONS: usize = 4;
 
 /// Longest a key-exchange window can be stretched by Key Establishment
 /// traffic (Smart Energy CBKE), seconds after it opened.
@@ -297,29 +299,45 @@ pub(crate) struct PendingKeyExchange {
 }
 
 /// Authorization bookkeeping of a Trust Center.
-#[derive(Debug, Default)]
-pub(crate) struct AuthorizationState {
-    pub pending: Vec<PendingKeyExchange, KEY_EXCHANGE_PENDING_CAPACITY>,
-    pub exempt: Vec<Exemption, KEY_EXCHANGE_EXEMPTIONS>,
+#[derive(Debug)]
+pub(crate) struct AuthorizationState<P: StackProfile> {
+    pub pending: VecOf<PendingKeyExchange, P::KeyExchanges>,
+    pub exempt: VecOf<Exemption, P::Exemptions>,
     /// Devices restored from a Trust Center swap-out backup that have not
     /// renewed their (hashed) link key yet: R23.2 §4.7.4.1.2.6 step 8
     /// has them request a new one, which a verified entry would otherwise
     /// not be granted under `TclkRequestPolicy::ProvisionalOnly`.
-    pub swap_out_renewals: Vec<ExtendedAddress, { crate::stack::LINK_KEYS }>,
+    pub swap_out_renewals: VecOf<ExtendedAddress, P::SwapOutRenewals>,
     /// Application frames refused, by reason.
     pub denied: DeniedFrames,
     /// Devices removed because their key-exchange window passed.
     pub timed_out: u32,
     /// Application frames waiting for their originator to be resolved.
-    pub held: Vec<(crate::pump::OwnedIndication, Instant), RESOLUTION_HOLD>,
+    pub held: VecOf<(crate::pump::OwnedIndication, Instant), P::HeldFrames>,
     /// IEEE address resolutions in progress, with their deadline.
-    pub resolving: Vec<(ShortAddress, Instant), RESOLUTIONS>,
+    pub resolving: VecOf<(ShortAddress, Instant), P::Resolutions>,
     /// Commissioning exemptions consumed / expired unused.
     pub exemptions_used: u32,
     pub exemptions_expired: u32,
 }
 
-impl AuthorizationState {
+impl<P: StackProfile> Default for AuthorizationState<P> {
+    fn default() -> Self {
+        AuthorizationState {
+            pending: P::KeyExchanges::vec(),
+            exempt: P::Exemptions::vec(),
+            swap_out_renewals: P::SwapOutRenewals::vec(),
+            denied: DeniedFrames::default(),
+            timed_out: 0,
+            held: P::HeldFrames::vec(),
+            resolving: P::Resolutions::vec(),
+            exemptions_used: 0,
+            exemptions_expired: 0,
+        }
+    }
+}
+
+impl<P: StackProfile> AuthorizationState<P> {
     pub(crate) fn pending_index(&self, device: ExtendedAddress) -> Option<usize> {
         self.pending.iter().position(|p| p.device == device)
     }
@@ -357,7 +375,16 @@ impl AuthorizationState {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// How this Trust Center regards `device` (see the module
     /// documentation). Any device is [`Authorization::Authorized`] on a
     /// node that is not the Trust Center, or when the policy does not

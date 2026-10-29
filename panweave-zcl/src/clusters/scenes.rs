@@ -11,6 +11,7 @@ use panweave_types::{ClusterId, CommandId};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -226,7 +227,7 @@ impl SceneTable {
 }
 
 /// Builds a server instance (names unsupported).
-pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(SCENE_COUNT, &Value::Uint { width: 1, value: 0 })?;
     c.add_attribute(CURRENT_SCENE, &Value::Uint { width: 1, value: 0 })?;
@@ -237,21 +238,25 @@ pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// Marks the device state as no longer matching the current scene
 /// (§3.7.2.2.1.4), e.g. after an On/Off or Level Control command.
-pub fn invalidate<const A: usize>(c: &mut ClusterInstance<A>) {
+pub fn invalidate<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
     c.set_bool(SCENE_VALID.id, false);
 }
 
-fn sync_count<const A: usize>(c: &mut ClusterInstance<A>, t: &SceneTable) {
+fn sync_count<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, t: &SceneTable) {
     c.set_u8(SCENE_COUNT.id, u8::try_from(t.len()).unwrap_or(u8::MAX));
 }
 
-fn mark_current<const A: usize>(c: &mut ClusterInstance<A>, group: u16, scene: u8) {
+fn mark_current<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    group: u16,
+    scene: u8,
+) {
     c.set_u8(CURRENT_SCENE.id, scene);
     c.set_u16(CURRENT_GROUP.id, group);
     c.set_bool(SCENE_VALID.id, true);
@@ -321,8 +326,8 @@ fn status_response(
 /// endpoint's scene table `t`. `member` answers whether the endpoint
 /// belongs to a group; `unicast` is false for group / broadcast
 /// deliveries. Response payloads are written to `out`.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     t: &mut SceneTable,
     command: CommandId,
     payload: &[u8],
@@ -573,8 +578,8 @@ fn copy(t: &mut SceneTable, all: bool, from_g: u16, from_s: u8, to_g: u16, to_s:
 /// Completes a Store Scene (§3.7.2.4.6.2 steps 3–5) with the endpoint's
 /// current extension field sets (`{cluster, length, fields}`…):
 /// transition time and name of an existing entry are kept.
-pub fn complete_store<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn complete_store<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     t: &mut SceneTable,
     group: u16,
     scene: u8,
@@ -617,8 +622,8 @@ pub fn complete_store<const A: usize>(
 
 /// Stores the global scene (group 0, scene 0; §3.8.2.2.2) from the
 /// endpoint's extension field sets.
-pub fn store_global<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn store_global<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     t: &mut SceneTable,
     field_sets: &[u8],
 ) {
@@ -629,7 +634,10 @@ pub fn store_global<const A: usize>(
 
 /// The global scene's transition time and field sets, if stored; marks
 /// it current.
-pub fn global<const A: usize>(c: &mut ClusterInstance<A>, t: &SceneTable) -> Option<SceneEntry> {
+pub fn global<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    t: &SceneTable,
+) -> Option<SceneEntry> {
     let e = t.get(0, 0).cloned()?;
     mark_current(c, 0, 0);
     Some(e)

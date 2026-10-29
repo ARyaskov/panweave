@@ -17,8 +17,8 @@ use subtle::ConstantTimeEq;
 use super::rx::{DataIndication, FrameSecurity, RelayInfo, RxContext};
 use super::tx::{PostAction, TxKind, TxParams, Wrap};
 use super::{
-    Aps, ApsAction, ApsError, ApsEvent, AsduBuf, DeviceState, NwkView, PersistItem, RequestId,
-    TransportedKey,
+    Aps, ApsAction, ApsDims, ApsError, ApsEvent, AsduBuf, DeviceState, NwkView, PersistItem,
+    RequestId, TransportedKey,
 };
 use crate::command::{
     ApsCommand, ApsCommandId, ConfirmKey, KeyDescriptor, RelayMessage, RemoveDevice, RequestKey,
@@ -49,14 +49,7 @@ pub enum KeyRoute {
     Broadcast,
 }
 
-impl<
-    C: BlockCipher,
-    const KEYS: usize,
-    const BINDINGS: usize,
-    const GROUPS: usize,
-    const DUPS: usize,
-> Aps<C, KEYS, BINDINGS, GROUPS, DUPS>
-{
+impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
     fn encode_command(cmd: &ApsCommand<'_>) -> Result<AsduBuf, ApsError> {
         let mut payload = AsduBuf::new();
         payload

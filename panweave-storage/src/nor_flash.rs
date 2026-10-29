@@ -153,10 +153,24 @@ const fn round_up(n: u32, align: u32) -> u32 {
     n.div_ceil(align) * align
 }
 
+/// Octets moved per flash access when a record is read, written or
+/// copied: records stream through this much stack, not a whole record.
+const CHUNK: usize = 64;
+
+/// The largest multiple of the store's alignment within [`CHUNK`].
+#[allow(clippy::cast_possible_truncation)]
+const fn chunk<F: NorFlash>() -> usize {
+    let a = align::<F>() as usize;
+    CHUNK - CHUNK % a
+}
+
 fn crc16(bytes: &[u8]) -> u16 {
+    crc16_update(0xffff, bytes)
+}
+
+fn crc16_update(mut crc: u16, bytes: &[u8]) -> u16 {
     // CRC-16/CCITT-FALSE, bit by bit: the store writes a few records an
     // hour and has no use for a table.
-    let mut crc: u16 = 0xffff;
     for &b in bytes {
         crc ^= u16::from(b) << 8;
         for _ in 0..8 {
@@ -168,6 +182,53 @@ fn crc16(bytes: &[u8]) -> u16 {
         }
     }
     crc
+}
+
+/// Streams a record into the log in aligned chunks of at most [`CHUNK`]
+/// octets, padding the tail with 0xFF.
+struct ChunkWriter {
+    buf: [u8; CHUNK],
+    fill: usize,
+    at: u32,
+}
+
+impl ChunkWriter {
+    const fn new(at: u32) -> Self {
+        ChunkWriter {
+            buf: [0xff; CHUNK],
+            fill: 0,
+            at,
+        }
+    }
+
+    fn push<F: NorFlash>(&mut self, flash: &mut F, mut bytes: &[u8]) -> Result<(), StorageError> {
+        let cap = chunk::<F>();
+        while !bytes.is_empty() {
+            let n = (cap - self.fill).min(bytes.len());
+            self.buf[self.fill..self.fill + n].copy_from_slice(&bytes[..n]);
+            self.fill += n;
+            bytes = &bytes[n..];
+            if self.fill == cap {
+                self.flush(flash)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn flush<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), StorageError> {
+        if self.fill == 0 {
+            return Ok(());
+        }
+        let n = round_up(self.fill as u32, align::<F>()) as usize;
+        flash
+            .write(self.at, &self.buf[..n])
+            .map_err(|_| StorageError::Io)?;
+        self.at += n as u32;
+        self.buf = [0xff; CHUNK];
+        self.fill = 0;
+        Ok(())
+    }
 }
 
 /// One decoded record header.
@@ -194,9 +255,14 @@ impl Record {
 impl<F: NorFlash> NorFlashStore<F> {
     /// Opens the store in `len` octets at `base` (both multiples of two
     /// sectors), formatting the region when no half carries a valid
-    /// header.
+    /// header. Fails with `Io` for a flash whose read or write granule
+    /// exceeds 64 octets.
     pub fn new(flash: F, base: u32, len: u32) -> Result<Self, StorageError> {
         let sector = sector::<F>();
+        // Records stream through CHUNK-octet buffers.
+        if align::<F>() as usize > CHUNK {
+            return Err(StorageError::Io);
+        }
         if len < 2 * sector || !len.is_multiple_of(2 * sector) || !base.is_multiple_of(sector) {
             return Err(StorageError::Io);
         }
@@ -334,16 +400,51 @@ impl<F: NorFlash> NorFlashStore<F> {
         let Some(dst) = buf.get_mut(..n) else {
             return Err(StorageError::BufferTooSmall);
         };
-        if n > 0 {
-            // Read the aligned span the payload lies in.
-            let padded = round_up(u32::from(r.len), align::<F>()) as usize;
-            let mut tmp = [0u8; MAX_RECORD + 16];
+        // The aligned part straight into `dst`, the unaligned tail
+        // through a chunk.
+        let a = align::<F>() as usize;
+        let body = n - n % a;
+        let base = self.half_base(half) + at + HEADER_LEN;
+        if body > 0 {
             self.flash
-                .read(self.half_base(half) + at + HEADER_LEN, &mut tmp[..padded])
+                .read(base, &mut dst[..body])
                 .map_err(|_| StorageError::Io)?;
-            dst.copy_from_slice(&tmp[..n]);
+        }
+        if body < n {
+            let mut tmp = [0u8; CHUNK];
+            #[allow(clippy::cast_possible_truncation)]
+            self.flash
+                .read(base + body as u32, &mut tmp[..a])
+                .map_err(|_| StorageError::Io)?;
+            dst[body..].copy_from_slice(&tmp[..n - body]);
         }
         let ok = crc16(dst) == r.crc;
+        if !ok {
+            self.stats.corrupt_records = self.stats.corrupt_records.saturating_add(1);
+        }
+        Ok(ok)
+    }
+
+    /// Whether a record's payload matches its CRC, read chunk by chunk.
+    fn payload_intact(&mut self, half: u32, at: u32, r: &Record) -> Result<bool, StorageError> {
+        let src = self.half_base(half) + at + HEADER_LEN;
+        let len = usize::from(r.len);
+        let cap = chunk::<F>();
+        let mut crc = 0xffff;
+        let mut done = 0usize;
+        while done < len {
+            let mut tmp = [0u8; CHUNK];
+            let n = (len - done).min(cap);
+            #[allow(clippy::cast_possible_truncation)]
+            let padded = round_up(n as u32, align::<F>()) as usize;
+            #[allow(clippy::cast_possible_truncation)]
+            self.flash
+                .read(src + done as u32, &mut tmp[..padded])
+                .map_err(|_| StorageError::Io)?;
+            crc = crc16_update(crc, &tmp[..n]);
+            done += n;
+        }
+        let ok = crc == r.crc;
         if !ok {
             self.stats.corrupt_records = self.stats.corrupt_records.saturating_add(1);
         }
@@ -424,17 +525,16 @@ impl<F: NorFlash> NorFlashStore<F> {
                 return Err(StorageError::Full);
             }
         }
-        let mut buf = [0xffu8; HEADER + MAX_RECORD + 16];
-        buf[0] = TAG_RECORD;
-        buf[1] = kind;
-        buf[2] = flags;
-        buf[3] = 0;
-        buf[4..6].copy_from_slice(&len.to_le_bytes());
-        buf[6..8].copy_from_slice(&crc16(data).to_le_bytes());
-        buf[8..16].copy_from_slice(&id.to_le_bytes());
-        buf[HEADER..HEADER + data.len()].copy_from_slice(data);
         let at = self.half_base(self.active) + self.tail;
-        if self.flash.write(at, &buf[..size as usize]).is_err() {
+        let mut w = ChunkWriter::new(at);
+        let written = w
+            .push(
+                &mut self.flash,
+                &record_header(kind, flags, id, len, crc16(data)),
+            )
+            .and_then(|()| w.push(&mut self.flash, data))
+            .and_then(|()| w.flush(&mut self.flash));
+        if written.is_err() {
             self.stats.io_errors = self.stats.io_errors.saturating_add(1);
             return Err(StorageError::Io);
         }
@@ -450,24 +550,33 @@ impl<F: NorFlash> NorFlashStore<F> {
         self.erase_half(new)?;
         let mut out = HEADER_LEN;
         let mut at = HEADER_LEN;
-        let mut payload = [0u8; MAX_RECORD];
         while let Some(r) = self.read_record(old, at)? {
-            if self.is_live(old, at, r)? && self.read_payload(old, at, &r, &mut payload)? {
-                let size = r.size::<F>();
-                let mut buf = [0xffu8; HEADER + MAX_RECORD + 16];
-                buf[0] = TAG_RECORD;
-                buf[1] = r.kind;
-                buf[2] = r.flags;
-                buf[3] = 0;
-                buf[4..6].copy_from_slice(&r.len.to_le_bytes());
-                buf[6..8].copy_from_slice(&r.crc.to_le_bytes());
-                buf[8..16].copy_from_slice(&r.id.to_le_bytes());
-                buf[HEADER..HEADER + usize::from(r.len)]
-                    .copy_from_slice(&payload[..usize::from(r.len)]);
-                self.flash
-                    .write(self.half_base(new) + out, &buf[..size as usize])
-                    .map_err(|_| StorageError::Io)?;
-                out += size;
+            if self.is_live(old, at, r)? && self.payload_intact(old, at, &r)? {
+                let mut w = ChunkWriter::new(self.half_base(new) + out);
+                w.push(
+                    &mut self.flash,
+                    &record_header(r.kind, r.flags, r.id, r.len, r.crc),
+                )?;
+                // The payload, chunk by chunk.
+                let src = self.half_base(old) + at + HEADER_LEN;
+                let mut done = 0usize;
+                let len = usize::from(r.len);
+                let cap = chunk::<F>();
+                while done < len {
+                    let mut tmp = [0u8; CHUNK];
+                    let n = (len - done).min(cap);
+                    // Both below MAX_RECORD + CHUNK.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let padded = round_up(n as u32, align::<F>()) as usize;
+                    #[allow(clippy::cast_possible_truncation)]
+                    self.flash
+                        .read(src + done as u32, &mut tmp[..padded])
+                        .map_err(|_| StorageError::Io)?;
+                    w.push(&mut self.flash, &tmp[..n])?;
+                    done += n;
+                }
+                w.flush(&mut self.flash)?;
+                out += r.size::<F>();
             }
             at += r.size::<F>();
         }
@@ -481,6 +590,19 @@ impl<F: NorFlash> NorFlashStore<F> {
         self.stats.compactions = self.stats.compactions.saturating_add(1);
         self.erase_half(old)
     }
+}
+
+/// The 16-octet header of a record.
+fn record_header(kind: u8, flags: u8, id: u64, len: u16, crc: u16) -> [u8; HEADER] {
+    let mut h = [0xffu8; HEADER];
+    h[0] = TAG_RECORD;
+    h[1] = kind;
+    h[2] = flags;
+    h[3] = 0;
+    h[4..6].copy_from_slice(&len.to_le_bytes());
+    h[6..8].copy_from_slice(&crc.to_le_bytes());
+    h[8..16].copy_from_slice(&id.to_le_bytes());
+    h
 }
 
 impl<F: NorFlash> Storage for NorFlashStore<F> {
@@ -715,6 +837,29 @@ mod tests {
         assert!(s.free() > S / 2, "{}", s.free());
         // Over-long records are refused, not split.
         assert_eq!(s.store(nib, &[0; MAX_RECORD + 1]), Err(StorageError::Full));
+    }
+
+    #[test]
+    fn long_unaligned_records_stream_through_compaction() {
+        let mut s = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
+        let big = Key::single(Kind::Bindings);
+        let data: Vec<u8> = (0..MAX_RECORD - 3)
+            .map(|i| u8::try_from((i * 7 + 3) % 256).unwrap())
+            .collect();
+        s.store(big, &data).unwrap();
+        let counter = Key::single(Kind::NwkFrameCounter);
+        for i in 0..600u32 {
+            s.store(counter, &i.to_le_bytes()).unwrap();
+        }
+        assert!(s.stats.compactions > 0);
+        let mut buf = [0u8; MAX_RECORD];
+        assert_eq!(s.load(big, &mut buf).unwrap(), Some(data.len()));
+        assert_eq!(&buf[..data.len()], &data[..]);
+        // Reopened from the flash alone.
+        let flash = s.flash;
+        let mut s = NorFlashStore::new(flash, 0, 2 * S).unwrap();
+        assert_eq!(s.load(big, &mut buf).unwrap(), Some(data.len()));
+        assert_eq!(&buf[..data.len()], &data[..]);
     }
 
     #[test]

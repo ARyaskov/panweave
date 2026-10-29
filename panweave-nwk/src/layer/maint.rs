@@ -6,7 +6,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_types::{Duration, ExtendedAddress, Instant, Rng, ShortAddress};
 
 use super::rx::CommandContext;
-use super::{Nwk, NwkAction, NwkEvent, NwkRequest, TxKind};
+use super::{Nwk, NwkAction, NwkDims, NwkEvent, NwkRequest, TxKind};
 use crate::command::{
     EndDeviceTimeoutRequest, EndDeviceTimeoutResponse, NetworkStatusCode, NwkCommand,
     ParentInformation, TimeoutResponseStatus,
@@ -14,15 +14,7 @@ use crate::command::{
 use crate::frame::{FrameType, Header};
 use crate::neighbor::Relationship;
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// Advances time and runs every timer-driven procedure. Call whenever
     /// [`Nwk::next_deadline`] has passed and before feeding inputs.
     pub fn poll_timers(&mut self, now: Instant) {

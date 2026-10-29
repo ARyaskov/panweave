@@ -2,6 +2,7 @@
 //! acknowledgement tracking.
 
 use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Instant, ShortAddress};
 
 /// Maximum router neighbors tracked for passive acknowledgement per
@@ -44,17 +45,29 @@ impl BroadcastRecord {
 }
 
 /// Fixed-capacity broadcast transaction table.
-#[derive(Clone, Debug, Default)]
-pub struct BroadcastTransactionTable<const N: usize> {
-    records: Vec<BroadcastRecord, N>,
+#[derive(Debug)]
+pub struct BroadcastTransactionTable<K: Capacity> {
+    records: VecOf<BroadcastRecord, K>,
 }
 
-impl<const N: usize> BroadcastTransactionTable<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for BroadcastTransactionTable<K> {
+    fn clone(&self) -> Self {
         BroadcastTransactionTable {
-            records: Vec::new(),
+            records: K::clone_vec(&self.records),
         }
+    }
+}
+
+impl<K: Capacity> Default for BroadcastTransactionTable<K> {
+    fn default() -> Self {
+        BroadcastTransactionTable { records: K::vec() }
+    }
+}
+
+impl<K: Capacity> BroadcastTransactionTable<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        BroadcastTransactionTable { records: K::vec() }
     }
 
     /// Finds the record for `(source, sequence)`.
@@ -149,7 +162,7 @@ mod tests {
 
     #[test]
     fn duplicate_detection_and_expiry_reuse() {
-        let mut t = BroadcastTransactionTable::<1>::new();
+        let mut t = BroadcastTransactionTable::<panweave_types::capacity::Cap<1>>::new();
         let now = Instant::ZERO;
         let exp = now + Duration::from_secs(9);
         t.insert(rec(1, exp), now).unwrap();

@@ -8,7 +8,7 @@ use panweave_aps::layer::{
     ApsAction, ApsEvent, DataIndication, DataRequest, Delivery, Destination, DeviceState, KeyRoute,
     PersistItem, TransportedKey, TxOptions,
 };
-use panweave_aps::layer::{RelayInfo, SecurityStatus};
+use panweave_aps::layer::{RelayInfo, RequestId, SecurityStatus};
 use panweave_codec::Decode;
 use panweave_codec::Encode;
 use panweave_codec::tlv::TlvSet;
@@ -23,6 +23,7 @@ use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_security::trust_center::{JoinDecision, JoinKind};
 use panweave_storage::{Key, Kind, Storage};
+use panweave_types::capacity::Capacity;
 use panweave_types::time::Duration;
 use panweave_types::{
     ApsStatus, CryptoRng, Endpoint, ExtendedAddress, Key128, KeySequenceNumber, KeyType,
@@ -49,6 +50,7 @@ const PARENT_ANNOUNCE_JITTER_MAX: Duration = Duration::from_secs(10);
 use panweave_zdo::{ZdpStatus, cluster};
 
 use crate::context::{AddrView, ZdoCtx};
+use crate::profile::StackProfile;
 use crate::stack::{
     BeaconSurveyRequest, Challenge, EnergyScanRequest, PendingChild, Phase, Stack, StackEvent,
     ZclFrame, ZdpData,
@@ -121,7 +123,16 @@ impl OwnedIndication {
     }
 }
 
-impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
+impl<
+    C: BlockCipher,
+    R: CryptoRng,
+    S: Storage,
+    P: StackProfile,
+    const E: usize,
+    const CL: usize,
+    const A: usize,
+> Stack<C, R, S, P, E, CL, A>
+{
     /// Runs the inter-layer pump until nothing moves.
     pub(crate) fn pump(&mut self) {
         for _ in 0..64 {
@@ -753,6 +764,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         .is_ok();
                     if ok {
                         self.nwk.commit_counter_reservation(r);
+                    } else {
+                        // Retried with the next frame to secure; nothing is
+                        // secured beyond the committed bound meanwhile.
+                        self.nwk.abort_counter_reservation();
                     }
                 }
             }
@@ -1402,8 +1417,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
     /// instead of the key itself (§4.6.3.2.2.4), NWK-secured, through
     /// its parent when it joined through one.
     pub(crate) fn update_virtual_devices_keys(&mut self, sequence: KeySequenceNumber) {
-        let devices = self.virtual_devices.clone();
-        for (device, parent) in devices {
+        let devices = P::VirtualDevices::clone_vec(&self.virtual_devices);
+        for &(device, parent) in devices.iter() {
             let Some(short) = AddrView(&self.nwk).short_of(device) else {
                 continue;
             };
@@ -2051,6 +2066,8 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         .is_ok();
                     if ok {
                         self.aps.commit_counter_reservation(partner, reservation);
+                    } else {
+                        self.aps.abort_counter_reservation(partner);
                     }
                 }
                 ApsAction::Persist(item) => {
@@ -2075,7 +2092,18 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
         while let Some(e) = self.aps.next_event() {
             any = true;
             match e {
-                ApsEvent::DataConfirm { .. } => {}
+                ApsEvent::DataConfirm { id, status } => {
+                    if let Some(i) = self.zone_deliveries.iter().position(|t| t.request == id) {
+                        let t = self.zone_deliveries.swap_remove(i);
+                        self.push_event(StackEvent::ZoneDelivery {
+                            endpoint: t.endpoint,
+                            command: t.command,
+                            seq: t.seq,
+                            zone_status: t.zone_status,
+                            status,
+                        });
+                    }
+                }
                 ApsEvent::CommandConfirm { id, status, .. } => {
                     if let Some(i) = self.pending_children.iter().position(|p| p.request == id) {
                         let child = self.pending_children.swap_remove(i);
@@ -2106,7 +2134,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                     }
                 }
                 ApsEvent::TransportKey {
-                    key, authorizes, ..
+                    src,
+                    key,
+                    authorizes,
                 } => match key {
                     TransportedKey::Network {
                         key,
@@ -2115,6 +2145,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
                         broadcast,
                     } => {
                         if authorizes {
+                            self.verify_negotiated_key_by_transport(src);
                             self.network_key_sequence = sequence;
                             self.nwk.set_network_key(sequence, key, true);
                             let rejoin = matches!(self.phase, Phase::Joining(m) if m != crate::JoinMode::Association)
@@ -2275,6 +2306,36 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             }
         }
         any
+    }
+
+    /// A network key the Trust Center transported to authorize this
+    /// joiner arrived while the negotiated link key was still waiting for
+    /// its Confirm Key. The transport is APS-secured with a key derived
+    /// from that negotiated key, so the Trust Center holds and verified
+    /// it (it sends the network key only after verification, §4.7.3.3
+    /// steps 7–10): the negotiation is complete. This happens to a sleepy
+    /// joiner, whose parent may hand it the Transport Key before the
+    /// Confirm Key; the Confirm Key arriving after the join is no longer
+    /// accepted without NWK security, and waiting for it would expire
+    /// the session and restore the old key while the Trust Center keeps
+    /// the new one.
+    fn verify_negotiated_key_by_transport(&mut self, src: ExtendedAddress) {
+        let verifying = self
+            .dlk
+            .session
+            .as_ref()
+            .is_some_and(|s| s.partner == src && s.verifying);
+        if !verifying || src != self.aps.aib.trust_center_address {
+            return;
+        }
+        if self
+            .aps
+            .security
+            .set_attributes(src, panweave_types::KeyAttributes::VerifiedKey)
+        {
+            self.aps.request_link_key_persistence();
+        }
+        self.on_key_negotiation_confirmed(src, true);
     }
 
     /// Rejoin after losing the parent, paced by `:Config_Rejoin_Interval`
@@ -2587,7 +2648,68 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Stack<C, R, S> {
             alias: None,
         };
         let view = AddrView(&self.nwk);
-        let _ = self.aps.data_request(&req, &view);
+        let result = self.aps.data_request(&req, &view);
+        self.track_zone_delivery(cluster, src_endpoint, asdu, result);
+    }
+
+    /// Remembers an IAS Zone server frame to report its APS outcome
+    /// ([`StackEvent::ZoneDelivery`]); a frame refused at once, or one
+    /// that cannot be tracked, is reported undelivered now.
+    fn track_zone_delivery(
+        &mut self,
+        cluster: panweave_types::ClusterId,
+        src_endpoint: Endpoint,
+        asdu: &[u8],
+        result: Result<RequestId, panweave_aps::layer::ApsError>,
+    ) {
+        use panweave_zcl::clusters::ias_zone;
+        if cluster != ias_zone::ID {
+            return;
+        }
+        let Ok((header, len)) = panweave_zcl::Header::decode_prefix(asdu) else {
+            return;
+        };
+        if header.control.frame_type != panweave_zcl::FrameType::ClusterSpecific
+            || header.control.direction != panweave_zcl::Direction::ToClient
+            || !matches!(
+                header.command,
+                ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION | ias_zone::CMD_ZONE_ENROLL_REQUEST
+            )
+        {
+            return;
+        }
+        let zone_status = if header.command == ias_zone::CMD_ZONE_STATUS_CHANGE_NOTIFICATION {
+            asdu.get(len..len + 2)
+                .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+        } else {
+            0
+        };
+        let tracker = crate::stack::ZoneDeliveryTracker {
+            request: RequestId(0),
+            endpoint: src_endpoint,
+            command: header.command,
+            seq: header.seq,
+            zone_status,
+        };
+        let refused = match result {
+            Ok(request) => match self
+                .zone_deliveries
+                .push(crate::stack::ZoneDeliveryTracker { request, ..tracker })
+            {
+                Ok(()) => return,
+                // Untracked: reported as not delivered, so that the
+                // application notifies again rather than assume success.
+                Err(_) => ApsStatus::TableFull,
+            },
+            Err(e) => e.status(),
+        };
+        self.push_event(StackEvent::ZoneDelivery {
+            endpoint: tracker.endpoint,
+            command: tracker.command,
+            seq: tracker.seq,
+            zone_status: tracker.zone_status,
+            status: refused,
+        });
     }
 
     fn pump_zdo(&mut self) -> bool {

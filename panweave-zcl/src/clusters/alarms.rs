@@ -10,8 +10,9 @@ use panweave_codec::{Reader, Writer};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -98,36 +99,30 @@ impl Table {
 }
 
 /// Builds a server instance with an (empty) alarm table.
-pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(ALARM_COUNT, &Value::Uint { width: 2, value: 0 })?;
-    c.state = ClusterState::Alarms(Table::default());
+    c.set_state(Table::default())?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn table<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut Table> {
-    match &mut c.state {
-        ClusterState::Alarms(t) => Some(t),
-        _ => None,
-    }
+fn table<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut Table> {
+    c.state_mut::<Table>()
 }
 
-fn update_count<const A: usize>(c: &mut ClusterInstance<A>) {
-    let n = match &c.state {
-        ClusterState::Alarms(t) => t.entries().len(),
-        _ => 0,
-    };
+fn update_count<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) {
+    let n = c.state_ref::<Table>().map_or(0, |t| t.entries().len());
     c.set_u16(ALARM_COUNT.id, u16::try_from(n).unwrap_or(u16::MAX));
 }
 
 /// Logs an alarm in the table (§3.11.2.3) and returns the Alarm command
 /// payload to send to the bound clients.
-pub fn log<const A: usize>(c: &mut ClusterInstance<A>, entry: Entry) -> [u8; 3] {
+pub fn log<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, entry: Entry) -> [u8; 3] {
     if let Some(t) = table(c) {
         t.log(entry);
     }
@@ -137,11 +132,8 @@ pub fn log<const A: usize>(c: &mut ClusterInstance<A>, entry: Entry) -> [u8; 3] 
 }
 
 /// Logged entries, oldest first.
-pub fn entries<const A: usize>(c: &ClusterInstance<A>) -> &[Entry] {
-    match &c.state {
-        ClusterState::Alarms(t) => t.entries(),
-        _ => &[],
-    }
+pub fn entries<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> &[Entry] {
+    c.state_ref::<Table>().map_or(&[], Table::entries)
 }
 
 /// Result of a received server command.
@@ -163,8 +155,8 @@ pub enum Outcome {
 
 /// Handles a received server command; a Get Alarm Response is written
 /// to `out` (§3.11.2.5.2).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
     out: &mut [u8],

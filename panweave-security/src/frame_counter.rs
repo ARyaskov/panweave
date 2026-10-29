@@ -11,7 +11,7 @@
 //! [`IncomingCounters`]: a frame is fresh only if its counter is not below
 //! the stored value, and the stored value becomes `received + 1`.
 
-use heapless::Vec;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{ExtendedAddress, FrameCounter};
 
 /// Errors from outgoing counter allocation.
@@ -189,17 +189,29 @@ pub enum FreshnessError {
 }
 
 /// Per-sender incoming frame counters.
-#[derive(Clone, Debug, Default)]
-pub struct IncomingCounters<const N: usize> {
-    entries: Vec<(ExtendedAddress, u32), N>,
+#[derive(Debug)]
+pub struct IncomingCounters<K: Capacity> {
+    entries: VecOf<(ExtendedAddress, u32), K>,
 }
 
-impl<const N: usize> IncomingCounters<N> {
-    /// Empty table.
-    pub const fn new() -> Self {
+impl<K: Capacity> Clone for IncomingCounters<K> {
+    fn clone(&self) -> Self {
         IncomingCounters {
-            entries: Vec::new(),
+            entries: K::clone_vec(&self.entries),
         }
+    }
+}
+
+impl<K: Capacity> Default for IncomingCounters<K> {
+    fn default() -> Self {
+        IncomingCounters { entries: K::vec() }
+    }
+}
+
+impl<K: Capacity> IncomingCounters<K> {
+    /// Empty table.
+    pub fn new() -> Self {
+        IncomingCounters { entries: K::vec() }
     }
 
     /// Checks `received` from `sender` and, if fresh, records
@@ -352,7 +364,7 @@ mod tests {
 
     #[test]
     fn incoming_freshness() {
-        let mut t = IncomingCounters::<2>::new();
+        let mut t = IncomingCounters::<panweave_types::capacity::Cap<2>>::new();
         let a = ExtendedAddress(1);
         let b = ExtendedAddress(2);
         let c = ExtendedAddress(3);

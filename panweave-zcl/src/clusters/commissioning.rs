@@ -12,8 +12,9 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{AttributeId, ClusterId, CommandId, Key128};
 
 use crate::attribute::{Access, AttributeDef, AttributeTable};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -375,16 +376,13 @@ impl State {
 }
 
 /// The saved sets of a server for storage (`None` without state).
-pub fn saved_state<const A: usize>(c: &ClusterInstance<A>) -> Option<&State> {
-    match &c.state {
-        ClusterState::Commissioning(s) => Some(s),
-        _ => None,
-    }
+pub fn saved_state<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&State> {
+    c.state_ref::<State>()
 }
 
 /// Restores the saved sets of a server from storage.
-pub fn restore_saved<const A: usize>(c: &mut ClusterInstance<A>, saved: State) {
-    if let ClusterState::Commissioning(s) = &mut c.state {
+pub fn restore_saved<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, saved: State) {
+    if let Some(s) = c.state_mut::<State>() {
         *s = saved;
     }
 }
@@ -435,7 +433,11 @@ pub enum Outcome {
 /// Write guard: `StartupControl` and `StackProfile` must be known,
 /// `ShortAddress` and `PANId` in range; a rejoin with a cleared
 /// extended PAN ID is FAILURE (§13.2.2).
-fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+fn guard<const A: usize, P: ZclProfile>(
+    t: &AttributeTable<A, P>,
+    id: AttributeId,
+    v: &Value<'_>,
+) -> ZclStatus {
     let val = v.as_u64().unwrap_or(u64::MAX);
     match id {
         i if i == STARTUP_CONTROL.id => {
@@ -477,7 +479,7 @@ fn u16v(v: u16) -> Value<'static> {
 }
 
 /// Writes `set` into the attributes.
-pub fn store<const A: usize>(c: &mut ClusterInstance<A>, set: &StartupSet) {
+pub fn store<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, set: &StartupSet) {
     c.set(SHORT_ADDRESS.id, &u16v(set.short_address));
     c.set(EXTENDED_PAN_ID.id, &Value::Eui64(set.extended_pan_id));
     c.set(PAN_ID.id, &u16v(set.pan_id));
@@ -524,7 +526,7 @@ pub fn store<const A: usize>(c: &mut ClusterInstance<A>, set: &StartupSet) {
     );
 }
 
-fn key_of<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> Key128 {
+fn key_of<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>, id: AttributeId) -> Key128 {
     match c.attributes.value(id) {
         Some(Value::Key128(k)) => Key128::from_bytes(k),
         _ => Key128::default(),
@@ -532,7 +534,7 @@ fn key_of<const A: usize>(c: &ClusterInstance<A>, id: AttributeId) -> Key128 {
 }
 
 /// Reads the current startup set from the attributes.
-pub fn load<const A: usize>(c: &ClusterInstance<A>) -> StartupSet {
+pub fn load<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> StartupSet {
     let d = StartupSet::default();
     let u8_ = |id: AttributeId, def: u8| c.u8(id).unwrap_or(def);
     let u16_ = |id: AttributeId, def: u16| c.u16(id).unwrap_or(def);
@@ -573,7 +575,9 @@ pub fn load<const A: usize>(c: &ClusterInstance<A>) -> StartupSet {
 
 /// Builds a server holding `current` as the startup set (the
 /// application seeds it from the stack's live attributes).
-pub fn server<const A: usize>(current: &StartupSet) -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>(
+    current: &StartupSet,
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let d = StartupSet::default();
     c.add_attribute(SHORT_ADDRESS, &u16v(d.short_address))?;
@@ -609,29 +613,23 @@ pub fn server<const A: usize>(current: &StartupSet) -> Result<ClusterInstance<A>
         &u8v(d.concentrator_discovery_time),
     )?;
     store(&mut c, current);
-    c.state = ClusterState::Commissioning(State::default());
-    c.write_guard = Some(guard::<A>);
+    c.set_state(State::default())?;
+    c.write_guard = Some(guard::<A, P>);
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn state<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut State> {
-    match &mut c.state {
-        ClusterState::Commissioning(s) => Some(s),
-        _ => None,
-    }
+fn state<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut State> {
+    c.state_mut::<State>()
 }
 
 /// The saved startup sets.
-pub fn saved<const A: usize>(c: &ClusterInstance<A>) -> &[(u8, StartupSet)] {
-    match &c.state {
-        ClusterState::Commissioning(s) => s.saved.as_slice(),
-        _ => &[],
-    }
+pub fn saved<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> &[(u8, StartupSet)] {
+    c.state_ref::<State>().map_or(&[], |s| s.saved.as_slice())
 }
 
 fn reply(command: CommandId, status: ZclStatus) -> Outcome {
@@ -651,8 +649,8 @@ fn reply_saved(command: CommandId, status: ZclStatus) -> Outcome {
 }
 
 /// Handles a received command (§13.2.2.3).
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     cmd: CommandId,
     payload: &[u8],
 ) -> Outcome {

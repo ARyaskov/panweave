@@ -12,8 +12,9 @@ use panweave_codec::{CodecError, Reader, Writer};
 use panweave_types::{AttributeId, ClusterId, CommandId};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// EN50523 Appliance Control (§15.2).
@@ -307,7 +308,9 @@ pub mod control {
 
     /// Builds a server with `StartTime` / `FinishTime` (and
     /// `RemainingTime` when `remaining`) at 0, status OFF.
-    pub fn server<const A: usize>(remaining: bool) -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>(
+        remaining: bool,
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         let zero = Value::Uint { width: 2, value: 0 };
         c.add_attribute(START_TIME, &zero)?;
@@ -315,38 +318,34 @@ pub mod control {
         if remaining {
             c.add_attribute(REMAINING_TIME, &zero)?;
         }
-        c.state = ClusterState::ApplianceControl(State::default());
+        c.set_state(State::default())?;
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's signal state.
-    pub fn signal_state<const A: usize>(c: &ClusterInstance<A>) -> Option<SignalState> {
-        match &c.state {
-            ClusterState::ApplianceControl(s) => Some(s.signal),
-            _ => None,
-        }
+    pub fn signal_state<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+    ) -> Option<SignalState> {
+        c.state_ref::<State>().map(|s| s.signal)
     }
 
     /// Sets the server's signal state; returns whether it changed.
-    pub fn set_signal_state<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn set_signal_state<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         signal: SignalState,
     ) -> bool {
-        match &mut c.state {
-            ClusterState::ApplianceControl(s) => {
+        match c.state_mut::<State>() {
+            Some(s) => {
                 let changed = s.signal != signal;
                 s.signal = signal;
                 changed
             }
-            _ => {
-                c.state = ClusterState::ApplianceControl(State { signal });
-                true
-            }
+            None => c.set_state(State { signal }).is_ok(),
         }
     }
 
@@ -379,8 +378,8 @@ pub mod control {
     }
 
     /// Handles a received command (§15.2.4).
-    pub fn handle<const A: usize>(
-        c: &ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
         cmd: CommandId,
         payload: &[u8],
     ) -> Outcome {
@@ -521,9 +520,9 @@ pub mod identification {
 
     /// Builds a server with `BasicIdentification`; the extended set is
     /// added by the application.
-    pub fn server<const A: usize>(
+    pub fn server<const A: usize, P: ZclProfile>(
         basic: BasicIdentification,
-    ) -> Result<ClusterInstance<A>, ZclStatus> {
+    ) -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(
             BASIC_IDENTIFICATION,
@@ -536,12 +535,14 @@ pub mod identification {
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's `BasicIdentification`.
-    pub fn basic<const A: usize>(c: &ClusterInstance<A>) -> Option<BasicIdentification> {
+    pub fn basic<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
+    ) -> Option<BasicIdentification> {
         c.u64(BASIC_IDENTIFICATION.id)
             .map(BasicIdentification::from_raw)
     }
@@ -693,37 +694,31 @@ pub mod events_alerts {
     }
 
     /// Builds a server with no alerts.
-    pub fn server<const A: usize>() -> ClusterInstance<A> {
+    pub fn server<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
-        c.state = ClusterState::ApplianceAlerts(Alerts::default());
+        let _ = c.set_state(Alerts::default());
         c
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's current alerts.
-    pub fn alerts<const A: usize>(c: &ClusterInstance<A>) -> &[Alert] {
-        match &c.state {
-            ClusterState::ApplianceAlerts(a) => &a.list,
-            _ => &[],
-        }
+    pub fn alerts<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> &[Alert] {
+        c.state_ref::<Alerts>().map_or(&[], |a| &a.list)
     }
 
     /// Records an alert change: a present alert replaces (or adds) the
     /// entry with its id, a recovered one removes it. Fails when the
     /// list is full.
-    pub fn record<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    pub fn record<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         alert: Alert,
     ) -> Result<(), ZclStatus> {
-        if !matches!(c.state, ClusterState::ApplianceAlerts(_)) {
-            c.state = ClusterState::ApplianceAlerts(Alerts::default());
-        }
-        let ClusterState::ApplianceAlerts(a) = &mut c.state else {
-            return Err(ZclStatus::Failure);
+        let Some(a) = c.state_or_default::<Alerts>() else {
+            return Err(ZclStatus::InsufficientSpace);
         };
         a.list.retain(|x| x.id != alert.id);
         if alert.present {
@@ -745,8 +740,8 @@ pub mod events_alerts {
     }
 
     /// Handles a received command; a response is written to `out`.
-    pub fn handle<const A: usize>(
-        c: &ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
         cmd: CommandId,
         out: &mut [u8],
     ) -> Outcome {
@@ -909,7 +904,7 @@ pub mod statistics {
 
     /// Builds a server with `LogMaxSize` [`MAX_LOG`] and `LogQueueMaxSize`
     /// [`QUEUE`].
-    pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+    pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
         let mut c = ClusterInstance::new(DEF, Role::Server);
         c.add_attribute(
             LOG_MAX_SIZE,
@@ -925,33 +920,26 @@ pub mod statistics {
                 value: QUEUE as u64,
             },
         )?;
-        c.state = ClusterState::ApplianceLogs(LogQueue::default());
+        c.set_state(LogQueue::default())?;
         Ok(c)
     }
 
     /// Builds a client instance.
-    pub fn client<const A: usize>() -> ClusterInstance<A> {
+    pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
         ClusterInstance::new(DEF.mirrored(), Role::Client)
     }
 
     /// The server's log queue.
-    pub fn queue<const A: usize>(c: &ClusterInstance<A>) -> Option<&LogQueue> {
-        match &c.state {
-            ClusterState::ApplianceLogs(q) => Some(q),
-            _ => None,
-        }
+    pub fn queue<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&LogQueue> {
+        c.state_ref::<LogQueue>()
     }
 
-    /// The server's log queue, mutably (created when absent).
-    pub fn queue_mut<const A: usize>(c: &mut ClusterInstance<A>) -> &mut LogQueue {
-        if !matches!(c.state, ClusterState::ApplianceLogs(_)) {
-            c.state = ClusterState::ApplianceLogs(LogQueue::default());
-        }
-        match &mut c.state {
-            ClusterState::ApplianceLogs(q) => q,
-            // Just set above.
-            _ => unreachable!(),
-        }
+    /// The server's log queue, mutably (created when absent; `None`
+    /// when the profile cannot hold one).
+    pub fn queue_mut<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
+    ) -> Option<&mut LogQueue> {
+        c.state_or_default::<LogQueue>()
     }
 
     /// Result of a received command.
@@ -967,8 +955,8 @@ pub mod statistics {
     }
 
     /// Handles a received command; a response is written to `out`.
-    pub fn handle<const A: usize>(
-        c: &ClusterInstance<A>,
+    pub fn handle<const A: usize, P: ZclProfile>(
+        c: &ClusterInstance<A, P>,
         cmd: CommandId,
         payload: &[u8],
         out: &mut [u8],
@@ -1165,6 +1153,7 @@ mod tests {
         assert_eq!(c.u64(statistics::LOG_MAX_SIZE.id), Some(70));
         for i in 0..10u8 {
             statistics::queue_mut(&mut c)
+                .unwrap()
                 .push(statistics::NO_TIME, &[i, i, i])
                 .unwrap();
         }

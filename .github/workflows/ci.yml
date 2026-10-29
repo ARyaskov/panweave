@@ -96,6 +96,36 @@ jobs:
           cargo build --release --features small-tables,green-power,dlk,direct,smart-energy
           python3 ../../scripts/elf_size.py target/thumbv7em-none-eabihf/release/panweave-size-probe --components
 
+  lite-footprint:
+    name: Panweave Lite on Cortex-M33 (EFR32MG22 link, QEMU stack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          targets: thumbv8m.main-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/lite-probe
+      - name: QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: EFR32MG22 link build (32 KiB RAM)
+        working-directory: examples/lite-probe
+        run: |
+          cargo build --release --features dlk
+          cp target/thumbv8m.main-none-eabihf/release/panweave-lite-probe target/efr32-dlk.elf
+      - name: QEMU scenario and stack measurement
+        working-directory: examples/lite-probe
+        run: |
+          cargo build --release --features qemu,dlk
+          qemu-system-arm -M mps2-an505 -cpu cortex-m33 -nographic \
+            -semihosting-config enable=on,target=native \
+            -kernel target/thumbv8m.main-none-eabihf/release/panweave-lite-probe | tee target/qemu-dlk.log
+      - name: Footprint report and regression check
+        working-directory: examples/lite-probe
+        run: python3 ../../scripts/lite_footprint.py target/efr32-dlk.elf --qemu target/qemu-dlk.log --check footprint-baseline.json
+
   esp32c6:
     name: ESP32-C6 firmware
     runs-on: ubuntu-latest

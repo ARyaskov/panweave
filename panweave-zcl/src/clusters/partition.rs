@@ -18,6 +18,7 @@ use panweave_types::{ClusterId, CommandId, Duration, Instant};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -336,11 +337,11 @@ pub type ReadHandshakeParamResponse<'a> = WriteHandshakeParam<'a>;
 
 /// Builds a server with the Table 9-29 attributes at `params` and the
 /// transfer sizes `incoming` / `outgoing` (multiples of the block size).
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     params: &Params,
     incoming: u16,
     outgoing: u16,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     let u = |width: u8, value: u64| Value::Uint { width, value };
     c.add_attribute(MAXIMUM_INCOMING_TRANSFER_SIZE, &u(2, u64::from(incoming)))?;
@@ -372,12 +373,12 @@ pub fn server<const A: usize>(
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
 /// The parameters a server instance holds.
-pub fn params_of<const A: usize>(c: &ClusterInstance<A>) -> Params {
+pub fn params_of<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Params {
     let ms = |id, default: u64| Duration::from_millis(c.u64(id).unwrap_or(default));
     Params {
         block_size: c.u8(PARTITIONED_FRAME_SIZE.id).unwrap_or(0x50),

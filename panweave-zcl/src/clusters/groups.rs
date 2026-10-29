@@ -9,6 +9,7 @@ use panweave_types::{ClusterId, CommandId, Endpoint, GroupAddress};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -63,14 +64,14 @@ pub const DEF: ClusterDef = ClusterDef {
 };
 
 /// Builds a server instance (group names unsupported).
-pub fn server<const A: usize>() -> Result<ClusterInstance<A>, ZclStatus> {
+pub fn server<const A: usize, P: ZclProfile>() -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
     c.add_attribute(NAME_SUPPORT, &Value::Bits { width: 1, bits: 0 })?;
     Ok(c)
 }
 
 /// Builds a client instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
@@ -101,7 +102,7 @@ pub trait GroupStore {
     fn capacity(&self) -> u8;
 }
 
-impl<const N: usize> GroupStore for panweave_aps::tables::GroupTable<N> {
+impl<K: panweave_types::capacity::Capacity> GroupStore for panweave_aps::tables::GroupTable<K> {
     fn add(&mut self, group: GroupAddress, endpoint: Endpoint) -> Result<(), GroupError> {
         match panweave_aps::tables::GroupTable::add(self, group, endpoint) {
             Ok(()) => Ok(()),
@@ -127,7 +128,7 @@ impl<const N: usize> GroupStore for panweave_aps::tables::GroupTable<N> {
         }
     }
     fn capacity(&self) -> u8 {
-        u8::try_from(N.saturating_sub(self.len())).unwrap_or(0xfd)
+        u8::try_from(K::N.saturating_sub(self.len())).unwrap_or(0xfd)
     }
 }
 

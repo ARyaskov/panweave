@@ -896,6 +896,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "panweave-lite"
+version = "0.2.0"
+dependencies = [
+ "defmt",
+ "heapless",
+ "panweave-aps",
+ "panweave-bdb",
+ "panweave-hub",
+ "panweave-lite",
+ "panweave-mac",
+ "panweave-nwk",
+ "panweave-runtime",
+ "panweave-security",
+ "panweave-sim",
+ "panweave-storage",
+ "panweave-testkit",
+ "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
+]
+
+[[package]]
 name = "panweave-mac"
 version = "0.1.0"
 dependencies = [
@@ -1040,6 +1062,7 @@ name = "panweave-types"
 version = "0.1.0"
 dependencies = [
  "defmt",
+ "heapless",
  "proptest",
  "rand_core 0.10.1",
  "serde",

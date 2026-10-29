@@ -15,6 +15,7 @@ use panweave_types::{AttributeId, ClusterId};
 use crate::attribute::{Access, AttributeDef, AttributeTable, DefaultReporting};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// `ActiveText` (string ≤ 16, binary clusters).
@@ -237,7 +238,11 @@ const fn text_ok(v: &Value<'_>) -> bool {
 /// 1…`NumberOfStates` (which is at least 1); `Reliability` is a defined
 /// value; texts are at most 16 characters; analog values within the
 /// min / max range when both are given.
-fn guard<const A: usize>(t: &AttributeTable<A>, id: AttributeId, v: &Value<'_>) -> ZclStatus {
+fn guard<const A: usize, P: ZclProfile>(
+    t: &AttributeTable<A, P>,
+    id: AttributeId,
+    v: &Value<'_>,
+) -> ZclStatus {
     match id {
         i if i == PRESENT_VALUE => {
             // Inputs carry no RelinquishDefault: their PresentValue is
@@ -309,7 +314,7 @@ fn single(v: Value<'_>) -> Option<f32> {
 
 /// Refreshes `StatusFlags` from `Reliability` and `OutOfService`
 /// (§3.14.11.3), keeping the In Alarm and Overridden bits.
-pub fn refresh_status<const A: usize>(c: &mut ClusterInstance<A>) -> u8 {
+pub fn refresh_status<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> u8 {
     let kept =
         c.u8(STATUS_FLAGS.id).unwrap_or(0) & (status_flags::IN_ALARM | status_flags::OVERRIDDEN);
     let fault = c
@@ -329,7 +334,7 @@ pub fn refresh_status<const A: usize>(c: &mut ClusterInstance<A>) -> u8 {
     flags
 }
 
-fn after_write<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {
+fn after_write<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>, id: AttributeId) {
     if id == RELIABILITY.id || id == OUT_OF_SERVICE.id {
         refresh_status(c);
     }
@@ -342,12 +347,12 @@ fn after_write<const A: usize>(c: &mut ClusterInstance<A>, id: AttributeId) {
 /// inactive texts for binary clusters, `NumberOfStates` (`states`) for
 /// multistate clusters; output and value clusters get
 /// `RelinquishDefault`.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     kind: Kind,
     initial: PresentValue,
     units: u16,
     states: u16,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let matches = matches!(
         (kind.is_analog(), kind.is_binary(), initial),
         (true, false, PresentValue::Analog(_))
@@ -418,25 +423,28 @@ pub fn server<const A: usize>(
             },
         )?;
     }
-    c.write_guard = Some(guard::<A>);
-    c.after_write = Some(after_write::<A>);
+    c.write_guard = Some(guard::<A, P>);
+    c.after_write = Some(after_write::<A, P>);
     Ok(c)
 }
 
 /// Builds a client instance of `kind`.
-pub fn client<const A: usize>(kind: Kind) -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>(kind: Kind) -> ClusterInstance<A, P> {
     ClusterInstance::new(kind.def().mirrored(), Role::Client)
 }
 
 /// The kind of a server instance.
-pub fn kind_of<const A: usize>(c: &ClusterInstance<A>) -> Option<Kind> {
+pub fn kind_of<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<Kind> {
     Kind::of(c.def.id)
 }
 
 /// Sets `PresentValue` from the physical input / the application
 /// (§3.14.11.1: an input out of service keeps its value; returns
 /// `false` then, or on a type mismatch or an out-of-range multistate).
-pub fn set_present_value<const A: usize>(c: &mut ClusterInstance<A>, value: PresentValue) -> bool {
+pub fn set_present_value<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    value: PresentValue,
+) -> bool {
     let Some(kind) = kind_of(c) else {
         return false;
     };
@@ -456,7 +464,9 @@ pub fn set_present_value<const A: usize>(c: &mut ClusterInstance<A>, value: Pres
 }
 
 /// The `PresentValue`.
-pub fn present_value<const A: usize>(c: &ClusterInstance<A>) -> Option<PresentValue> {
+pub fn present_value<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+) -> Option<PresentValue> {
     match c.attributes.value(PRESENT_VALUE)? {
         Value::Single(x) => Some(PresentValue::Analog(x)),
         Value::Bool(Some(b)) => Some(PresentValue::Binary(b)),
@@ -466,13 +476,19 @@ pub fn present_value<const A: usize>(c: &ClusterInstance<A>) -> Option<PresentVa
 }
 
 /// Sets `Reliability` and refreshes the Fault flag.
-pub fn set_reliability<const A: usize>(c: &mut ClusterInstance<A>, reliability: u8) -> u8 {
+pub fn set_reliability<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    reliability: u8,
+) -> u8 {
     c.set(RELIABILITY.id, &Value::Enum8(reliability));
     refresh_status(c)
 }
 
 /// Sets the Overridden flag (a local override of the point).
-pub fn set_overridden<const A: usize>(c: &mut ClusterInstance<A>, overridden: bool) -> u8 {
+pub fn set_overridden<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    overridden: bool,
+) -> u8 {
     let mut flags = c.u8(STATUS_FLAGS.id).unwrap_or(0) & !status_flags::OVERRIDDEN;
     if overridden {
         flags |= status_flags::OVERRIDDEN;
@@ -488,8 +504,8 @@ pub fn set_overridden<const A: usize>(c: &mut ClusterInstance<A>, overridden: bo
 }
 
 /// Sets the analog range and resolution of an analog server.
-pub fn set_analog_range<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn set_analog_range<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     min: f32,
     max: f32,
     resolution: f32,
@@ -507,8 +523,8 @@ pub fn set_analog_range<const A: usize>(
 mod tests {
     use super::*;
 
-    fn write<const A: usize>(
-        c: &mut ClusterInstance<A>,
+    fn write<const A: usize, P: ZclProfile>(
+        c: &mut ClusterInstance<A, P>,
         id: AttributeId,
         v: &Value<'_>,
     ) -> ZclStatus {
@@ -527,7 +543,9 @@ mod tests {
     fn analog_input_is_writable_out_of_service_and_flags_follow() {
         let mut c: ClusterInstance<16> =
             server(Kind::AnalogInput, PresentValue::Analog(0.0), 62, 0).unwrap();
-        assert!(server::<16>(Kind::AnalogInput, PresentValue::Binary(true), 0, 0).is_err());
+        assert!(
+            server::<16, crate::Full>(Kind::AnalogInput, PresentValue::Binary(true), 0, 0).is_err()
+        );
         assert_eq!(c.def.id, ClusterId(0x000c));
         assert_eq!(c.u16(ENGINEERING_UNITS.id), Some(62));
         assert!(c.attributes.get(RELINQUISH_DEFAULT, None).is_none());
@@ -613,7 +631,10 @@ mod tests {
 
         let mut m: ClusterInstance<16> =
             server(Kind::MultistateValue, PresentValue::Multistate(1), 0, 3).unwrap();
-        assert!(server::<16>(Kind::MultistateValue, PresentValue::Multistate(4), 0, 3).is_err());
+        assert!(
+            server::<16, crate::Full>(Kind::MultistateValue, PresentValue::Multistate(4), 0, 3)
+                .is_err()
+        );
         assert_eq!(
             write(&mut m, PRESENT_VALUE, &Value::Uint { width: 2, value: 4 }),
             ZclStatus::InvalidValue

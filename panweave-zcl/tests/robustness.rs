@@ -81,7 +81,7 @@ fn drive_dispatcher(data: &[u8]) {
     ep.add_instance(poll_control::server(2, 4, 480).unwrap())
         .unwrap();
     zcl.add_endpoint(ep).unwrap();
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     groups.add(GroupAddress(1), Endpoint(1)).unwrap();
     let mut now = Instant::from_millis(1000);
     zcl.poll_timers(now);

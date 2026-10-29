@@ -15,10 +15,11 @@
 
 use heapless::Vec;
 use panweave_security::cipher::BlockCipher;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{Duration, ExtendedAddress, Instant, LogicalDeviceType, Rng, ShortAddress};
 
 use super::rx::CommandContext;
-use super::{Nwk, NwkAction, NwkEvent, TxKind};
+use super::{Nwk, NwkAction, NwkDims, NwkEvent, TxKind};
 use crate::command::{LinkPowerDelta, LinkPowerDeltaType, NwkCommand};
 use crate::frame::{FrameType, Header};
 
@@ -39,15 +40,7 @@ pub(crate) struct PendingRequest {
     pub polls_left: u8,
 }
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     /// Whether this device generates Link Power Delta commands right
     /// now: support enabled, joined, a non-zero rate, a started router
     /// or an end device whose parent supports the feature (§3.4.13.7,
@@ -177,7 +170,7 @@ impl<
         }
         // Router / coordinator: every active rx-on neighbor with a known
         // RSSI, as many one-hop broadcasts as needed.
-        let mut entries: Vec<(ShortAddress, i8), NEIGHBORS> = Vec::new();
+        let mut entries: VecOf<(ShortAddress, i8), D::Neighbors> = D::Neighbors::vec();
         for n in self.neighbors.iter() {
             if !n.rx_on_when_idle || !n.short.is_unicast() {
                 continue;

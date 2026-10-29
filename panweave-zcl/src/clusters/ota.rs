@@ -14,6 +14,7 @@ use panweave_types::{ClusterId, CommandId, ExtendedAddress};
 use crate::attribute::{Access, AttributeDef};
 use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -1376,7 +1377,7 @@ impl Client {
     }
 
     /// Mirrors the machine into a client cluster instance's attributes.
-    pub fn publish<const A: usize>(&self, c: &mut ClusterInstance<A>) {
+    pub fn publish<const A: usize, P: ZclProfile>(&self, c: &mut ClusterInstance<A, P>) {
         c.set(
             IMAGE_UPGRADE_STATUS.id,
             &Value::Enum8(self.upgrade_status()),
@@ -1405,10 +1406,10 @@ impl Client {
 
 /// Builds a client cluster instance with the mandatory and the
 /// download-tracking attributes for `config`.
-pub fn client<const A: usize>(
+pub fn client<const A: usize, P: ZclProfile>(
     config: &ClientConfig,
     server: ExtendedAddress,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(CLIENT_DEF, Role::Client);
     c.add_attribute(UPGRADE_SERVER_ID, &Value::Eui64(server.0))?;
     c.add_attribute(
@@ -1456,7 +1457,7 @@ pub fn client<const A: usize>(
 }
 
 /// Builds a server cluster instance (no attributes).
-pub fn server<const A: usize>() -> ClusterInstance<A> {
+pub fn server<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(SERVER_DEF, Role::Server)
 }
 

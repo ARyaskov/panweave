@@ -8,6 +8,7 @@ use panweave_mac::frame::{Beacon, MacAddress};
 use panweave_mac::ie::EnhancedBeaconRequest;
 use panweave_mac::service::{ScanKind, TxStatus};
 use panweave_security::cipher::BlockCipher;
+use panweave_types::capacity::{Capacity, VecOf};
 use panweave_types::{
     Channel, ChannelMask, ChannelPage, Duration, ExtendedAddress, Instant, Key128,
     KeySequenceNumber, LogicalDeviceType, MacCapability, MacStatus, NwkStatus, PanId, Rng,
@@ -16,8 +17,8 @@ use panweave_types::{
 
 use super::rx::CommandContext;
 use super::{
-    DISCOVERY_TABLE_SIZE, FormationState, MAX_JOINER_TLVS, Nwk, NwkAction, NwkError, NwkEvent,
-    ScanPurpose, ScanState, TxKind,
+    DISCOVERY_TABLE_SIZE, FormationState, MAX_JOINER_TLVS, Nwk, NwkAction, NwkDims, NwkError,
+    NwkEvent, ScanPurpose, ScanState, TxKind,
 };
 use crate::address_map::allocate_stochastic;
 
@@ -134,15 +135,7 @@ pub(crate) struct JoinState {
     used_commissioning: bool,
 }
 
-impl<
-    C: BlockCipher,
-    R: Rng,
-    const NEIGHBORS: usize,
-    const ROUTES: usize,
-    const RDT: usize,
-    const BTT: usize,
-> Nwk<C, R, NEIGHBORS, ROUTES, RDT, BTT>
-{
+impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
     // ------------------------------------------------------------------
     // Discovery (§3.6.1.5)
     // ------------------------------------------------------------------
@@ -845,7 +838,7 @@ impl<
         } else {
             self.nib.max_initial_join_parent_attempts
         };
-        let mut out: Vec<usize, DISCOVERY_TABLE_SIZE> = Vec::new();
+        let mut out: VecOf<usize, D::Discovery> = D::Discovery::vec();
         self.discovery.ranked(
             j.params.extended_pan_id,
             j.params.as_router,
@@ -857,7 +850,8 @@ impl<
             max_attempts,
             &mut out,
         );
-        j.candidates = out;
+        // At most `DISCOVERY_TABLE_SIZE` candidates are tried.
+        j.candidates = out.iter().copied().take(DISCOVERY_TABLE_SIZE).collect();
         j.next = 0;
     }
 

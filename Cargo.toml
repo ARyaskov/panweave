@@ -23,9 +23,10 @@ members = [
     "panweave-cli",
     "panweave-hub",
     "panweave-hub-cli",
+    "panweave-lite",
     "xtask",
 ]
-exclude = ["fuzz", "examples/esp32c6-super-mini", "examples/esp32c6-wifi-alerts", "examples/size-probe"]
+exclude = ["fuzz", "examples/esp32c6-super-mini", "examples/esp32c6-wifi-alerts", "examples/size-probe", "examples/lite-probe"]
 
 [workspace.package]
 version = "0.2.0"
@@ -58,6 +59,7 @@ panweave-sim = { path = "panweave-sim", version = "0.2.0", default-features = fa
 panweave-pcap = { path = "panweave-pcap", version = "0.2.0", default-features = false }
 panweave = { path = "panweave", version = "0.2.0", default-features = false }
 panweave-hub = { path = "panweave-hub", version = "0.3.0", default-features = false }
+panweave-lite = { path = "panweave-lite", version = "0.2.0", default-features = false }
 
 heapless = { version = "0.9.3", default-features = false }
 aes = { version = "0.9.3", default-features = false }

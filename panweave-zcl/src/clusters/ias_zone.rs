@@ -11,8 +11,9 @@ use panweave_types::time::{Duration, Instant};
 use panweave_types::{ClusterId, CommandId, Endpoint, ExtendedAddress, ShortAddress};
 
 use crate::attribute::{Access, AttributeDef};
-use crate::cluster::{ClusterDef, ClusterInstance, ClusterState, Role};
+use crate::cluster::{ClusterDef, ClusterInstance, Role};
 use crate::frame::ZclStatus;
+use crate::profile::ZclProfile;
 use crate::types::{DataType, Value};
 
 /// Cluster identifier.
@@ -179,13 +180,32 @@ pub struct State {
 /// Builds a server of `zone_type` enrolling per `enroll`;
 /// `manufacturer_code` is the node descriptor's, `sensitivity_levels`
 /// (≥ 2) adds the sensitivity attributes.
-pub fn server<const A: usize>(
+pub fn server<const A: usize, P: ZclProfile>(
     zone_type: u16,
     manufacturer_code: u16,
     enroll: EnrollMode,
     sensitivity_levels: Option<u8>,
-) -> Result<ClusterInstance<A>, ZclStatus> {
+) -> Result<ClusterInstance<A, P>, ZclStatus> {
     let mut c = ClusterInstance::new(DEF, Role::Server);
+    fill_server(
+        &mut c,
+        zone_type,
+        manufacturer_code,
+        enroll,
+        sensitivity_levels,
+    )?;
+    Ok(c)
+}
+
+/// [`server`] filled into an instance created with [`DEF`] (built in
+/// place by [`crate::layer::EndpointInstance::add_cluster`]).
+pub fn fill_server<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    zone_type: u16,
+    manufacturer_code: u16,
+    enroll: EnrollMode,
+    sensitivity_levels: Option<u8>,
+) -> Result<(), ZclStatus> {
     c.add_attribute(ZONE_STATE, &Value::Enum8(zone_state::NOT_ENROLLED))?;
     c.add_attribute(ZONE_TYPE, &Value::Enum16(zone_type))?;
     c.add_attribute(ZONE_STATUS, &Value::Bits { width: 2, bits: 0 })?;
@@ -213,7 +233,7 @@ pub fn server<const A: usize>(
             &Value::Uint { width: 1, value: 0 },
         )?;
     }
-    c.state = ClusterState::IasZone(State {
+    c.set_state(State {
         enroll,
         manufacturer_code,
         cie: None,
@@ -221,41 +241,38 @@ pub fn server<const A: usize>(
         enroll_request_due: false,
         notify_due: None,
         test_until: None,
-    });
-    Ok(c)
+    })
 }
 
 /// Builds a client (CIE) instance.
-pub fn client<const A: usize>() -> ClusterInstance<A> {
+pub fn client<const A: usize, P: ZclProfile>() -> ClusterInstance<A, P> {
     ClusterInstance::new(DEF.mirrored(), Role::Client)
 }
 
-fn state<const A: usize>(c: &mut ClusterInstance<A>) -> Option<&mut State> {
-    match &mut c.state {
-        ClusterState::IasZone(s) => Some(s),
-        _ => None,
-    }
+fn state<const A: usize, P: ZclProfile>(c: &mut ClusterInstance<A, P>) -> Option<&mut State> {
+    c.state_mut::<State>()
 }
 
 /// The server state.
-pub fn state_of<const A: usize>(c: &ClusterInstance<A>) -> Option<&State> {
-    match &c.state {
-        ClusterState::IasZone(s) => Some(s),
-        _ => None,
-    }
+pub fn state_of<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<&State> {
+    c.state_ref::<State>()
 }
 
 /// Whether the zone is enrolled.
-pub fn is_enrolled<const A: usize>(c: &ClusterInstance<A>) -> bool {
+pub fn is_enrolled<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> bool {
     c.u8(ZONE_STATE.id) == Some(zone_state::ENROLLED)
 }
 
 /// The current `ZoneStatus`.
-pub fn status<const A: usize>(c: &ClusterInstance<A>) -> u16 {
+pub fn status<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> u16 {
     c.u16(ZONE_STATUS.id).unwrap_or(0)
 }
 
-fn write_status<const A: usize>(c: &mut ClusterInstance<A>, status: u16, now: Instant) -> bool {
+fn write_status<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    status: u16,
+    now: Instant,
+) -> bool {
     let changed = c.set(
         ZONE_STATUS.id,
         &Value::Bits {
@@ -275,7 +292,11 @@ fn write_status<const A: usize>(c: &mut ClusterInstance<A>, status: u16, now: In
 /// while unenrolled under Trip-to-Pair also a Zone Enroll Request
 /// (§8.2.2.1.3 step 4). The Test bit is owned by the test mode commands
 /// and preserved. Returns whether the status changed.
-pub fn set_status<const A: usize>(c: &mut ClusterInstance<A>, status: u16, now: Instant) -> bool {
+pub fn set_status<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    status: u16,
+    now: Instant,
+) -> bool {
     let test = self::status(c) & zone_status::TEST;
     let changed = write_status(c, (status & !zone_status::TEST) | test, now);
     if changed
@@ -289,9 +310,109 @@ pub fn set_status<const A: usize>(c: &mut ClusterInstance<A>, status: u16, now: 
     changed
 }
 
+/// Schedules a Zone Status Change Notification of the current
+/// `ZoneStatus` (an application retrying a notification that was not
+/// delivered, or announcing its state after a rejoin); `false` without a
+/// CIE.
+pub fn renotify<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> bool {
+    match state(c) {
+        Some(s) if s.cie.is_some() => {
+            s.notify_due.get_or_insert(now);
+            c.tick = Some(now);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// What a server keeps of its enrolment across a reset: `IAS_CIE_Address`,
+/// the CIE's network address and endpoint, `ZoneState` and `ZoneID`
+/// (the CIE writes the address and enrols the zone once; a sensor that
+/// forgot them after a power loss could never report again).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Enrollment {
+    /// `IAS_CIE_Address`.
+    pub cie_address: ExtendedAddress,
+    /// The CIE's network address and endpoint.
+    pub cie: (ShortAddress, Endpoint),
+    /// Enrolled (`ZoneState` = enrolled) with this `ZoneID`.
+    pub zone_id: Option<u8>,
+}
+
+impl Enrollment {
+    /// Encoded length.
+    pub const LEN: usize = 8 + 2 + 1 + 1 + 1;
+
+    /// Encodes the record (`IAS_CIE_Address`, CIE short address, CIE
+    /// endpoint, enrolled flag, `ZoneID`).
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        let mut b = [0u8; Self::LEN];
+        b[..8].copy_from_slice(&self.cie_address.0.to_le_bytes());
+        b[8..10].copy_from_slice(&self.cie.0.0.to_le_bytes());
+        b[10] = self.cie.1.0;
+        b[11] = u8::from(self.zone_id.is_some());
+        b[12] = self.zone_id.unwrap_or(ZONE_ID_NONE);
+        b
+    }
+
+    /// Decodes a record written by [`Enrollment::encode`].
+    pub fn decode(b: &[u8]) -> Option<Enrollment> {
+        let b: &[u8; Self::LEN] = b.try_into().ok()?;
+        let mut addr = [0u8; 8];
+        addr.copy_from_slice(&b[..8]);
+        Some(Enrollment {
+            cie_address: ExtendedAddress(u64::from_le_bytes(addr)),
+            cie: (
+                ShortAddress(u16::from_le_bytes([b[8], b[9]])),
+                Endpoint(b[10]),
+            ),
+            zone_id: match b[11] {
+                0 => None,
+                1 => Some(b[12]),
+                _ => return None,
+            },
+        })
+    }
+}
+
+/// The server's enrolment, when a CIE configured it.
+pub fn enrollment<const A: usize, P: ZclProfile>(c: &ClusterInstance<A, P>) -> Option<Enrollment> {
+    let cie = state_of(c)?.cie?;
+    Some(Enrollment {
+        cie_address: cie_address(c)?,
+        cie,
+        zone_id: is_enrolled(c).then(|| c.u8(ZONE_ID.id).unwrap_or(ZONE_ID_NONE)),
+    })
+}
+
+/// Restores an enrolment saved with [`enrollment`] (after a reset): the
+/// server reports to that CIE again without re-enrolling.
+pub fn restore_enrollment<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    e: &Enrollment,
+) {
+    c.set(IAS_CIE_ADDRESS.id, &Value::Eui64(e.cie_address.0));
+    if let Some(zone_id) = e.zone_id {
+        c.set(ZONE_STATE.id, &Value::Enum8(zone_state::ENROLLED));
+        c.set_u8(ZONE_ID.id, zone_id);
+    }
+    if let Some(s) = state(c) {
+        s.cie_address = e.cie_address.0;
+        s.cie = Some(e.cie);
+        s.enroll_request_due = false;
+    }
+}
+
 /// Requests enrolment now (the manufacturer-defined Trip-to-Pair
 /// trigger, §8.2.2.1.3 step 4); ignored while enrolled or without a CIE.
-pub fn request_enrollment<const A: usize>(c: &mut ClusterInstance<A>, now: Instant) -> bool {
+pub fn request_enrollment<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
+    now: Instant,
+) -> bool {
     if is_enrolled(c) {
         return false;
     }
@@ -309,8 +430,8 @@ pub fn request_enrollment<const A: usize>(c: &mut ClusterInstance<A>, now: Insta
 /// `src_endpoint`: when `IAS_CIE_Address` changed, that node becomes
 /// the CIE and, under Auto-Enroll-Request, a Zone Enroll Request is
 /// scheduled.
-pub fn after_write<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn after_write<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     src: ShortAddress,
     src_endpoint: Endpoint,
     now: Instant,
@@ -336,7 +457,10 @@ pub fn after_write<const A: usize>(
 
 /// Whether a command from `src` may be acted upon (§8.2.2.2.1.2: only
 /// the CIE, once one is configured).
-pub fn accepts_from<const A: usize>(c: &ClusterInstance<A>, src: ShortAddress) -> bool {
+pub fn accepts_from<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+    src: ShortAddress,
+) -> bool {
     match state_of(c) {
         Some(s) => s.cie.is_none_or(|(a, _)| a == src),
         None => false,
@@ -344,7 +468,9 @@ pub fn accepts_from<const A: usize>(c: &ClusterInstance<A>, src: ShortAddress) -
 }
 
 /// The CIE's IEEE address (`IAS_CIE_Address`), when set.
-pub fn cie_address<const A: usize>(c: &ClusterInstance<A>) -> Option<ExtendedAddress> {
+pub fn cie_address<const A: usize, P: ZclProfile>(
+    c: &ClusterInstance<A, P>,
+) -> Option<ExtendedAddress> {
     match c.u64(IAS_CIE_ADDRESS.id) {
         Some(0) | None => None,
         Some(v) => Some(ExtendedAddress(v)),
@@ -371,8 +497,8 @@ pub enum Outcome {
 }
 
 /// Handles a received server command from `src`.
-pub fn handle<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn handle<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     src: ShortAddress,
     cmd: CommandId,
     payload: &[u8],
@@ -437,8 +563,8 @@ pub enum Send {
 
 /// Runs the server's timers: ends an expired test mode, then returns
 /// the next command due for the CIE (call until `None`).
-pub fn tick<const A: usize>(
-    c: &mut ClusterInstance<A>,
+pub fn tick<const A: usize, P: ZclProfile>(
+    c: &mut ClusterInstance<A, P>,
     now: Instant,
 ) -> Option<(Send, (ShortAddress, Endpoint))> {
     let expired = state_of(c)

@@ -80,7 +80,7 @@ fn command(zcl: &mut Node, cmd: CommandId, payload: &[u8]) -> Option<(Header, Ve
         Direction::ToServer,
     );
     let bytes = frame(&header, payload);
-    let mut groups = GroupTable::<4>::new();
+    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
     while zcl.next_action().is_some() {}
     let out = zcl.on_data(&ind(&bytes), &mut groups);
     assert!(out.is_none(), "executed by the layer");

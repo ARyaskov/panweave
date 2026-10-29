@@ -6,17 +6,26 @@
 //! of up to eight octets (every integer, enumeration, bitmap, float,
 //! time and identifier type) lives inline in its attribute entry with
 //! its factory default; strings, composites and keys draw the largest
-//! attribute value from a byte pool the cluster's attributes share. A
+//! attribute value from a byte pool the cluster's attributes share, and
+//! read-only strings given as `'static` data stay in program memory. A
 //! cluster of a few dozen small attributes therefore costs about as
-//! much as two full buffers, not one per attribute. Each entry carries
-//! its reporting configuration and state.
+//! much as two full buffers, not one per attribute.
+//!
+//! Reporting configurations and state live in reporting slots apart
+//! from the entries: an attribute holds a slot while it reports, has a
+//! timeout for received reports, or has a default reporting
+//! configuration. The table's [`ZclProfile`] sets the pool and the
+//! number of slots ([`Full`]: one per attribute).
 
 use heapless::Vec;
 use panweave_codec::{Reader, Writer};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{AttributeId, ManufacturerCode};
 
+use panweave_types::capacity::{Capacity, VecOf};
+
 use crate::frame::ZclStatus;
+use crate::profile::{Full, ZclProfile};
 use crate::types::{DataType, Value, semi_to_f32};
 
 /// Largest stored attribute value in octets (long strings and composites
@@ -244,36 +253,44 @@ fn change_reached(ty: DataType, last: u64, now: &Value<'_>, change: u64) -> bool
     }
 }
 
-/// An attribute's bookkeeping: its definition, its value and factory
-/// default (inline, or their place in the cluster's pool), and its
-/// reporting configuration, current and default.
+/// Where an attribute's value and factory default live.
+#[derive(Clone, Copy)]
+enum Slot {
+    /// In the entry: the value, and from `INLINE` on the default.
+    Inline {
+        bytes: [u8; 2 * INLINE],
+        len: u8,
+        default_len: u8,
+    },
+    /// In the cluster's pool: the value at `offset`, the default at
+    /// `offset + capacity`.
+    Pool {
+        offset: u16,
+        len: u8,
+        default_len: u8,
+    },
+    /// A read-only string in program memory (its content, without the
+    /// length octet): value and default at once, no RAM. An
+    /// application write moves it to the pool.
+    Static(&'static [u8]),
+}
+
+/// An attribute's bookkeeping: its definition and where its value and
+/// factory default live. Its reporting configuration, when it has one,
+/// is in the table's reporting slots.
 #[derive(Clone, Copy)]
 pub struct Attribute {
     /// Definition.
     pub def: AttributeDef,
-    reporting: ReportState,
-    /// The value and, from `INLINE` on, the default of an inline
-    /// attribute.
-    inline: [u8; 2 * INLINE],
-    // The default reporting configuration, flattened (a nested struct
-    // would pad the entry to the next multiple of eight).
-    default_change: u64,
-    default_min: u16,
-    default_max: u16,
-    /// Offset of a wide value in the pool; the default follows at
-    /// `offset + capacity()`.
-    offset: u16,
-    len: u8,
-    default_len: u8,
+    slot: Slot,
 }
 
 impl core::fmt::Debug for Attribute {
-    /// The definition and reporting state; the value is
-    /// [`AttrRef`]'s to show (redacted when secret).
+    /// The definition; the value is [`AttrRef`]'s to show (redacted
+    /// when secret).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Attribute")
             .field("def", &self.def)
-            .field("reporting", &self.reporting)
             .finish_non_exhaustive()
     }
 }
@@ -283,14 +300,23 @@ impl Attribute {
     fn capacity(&self) -> usize {
         capacity_of(self.def.ty)
     }
+}
 
-    /// True when the value lives in the entry itself.
-    fn is_inline(&self) -> bool {
-        self.capacity() <= INLINE
-    }
+/// The reporting configuration and state of one attribute, and its
+/// default reporting configuration (BDB 3.1 §6.5).
+#[derive(Clone, Copy, Debug)]
+struct ReportSlot {
+    /// The attribute's index in the table.
+    attr: u8,
+    state: ReportState,
+    // The default configuration, flattened (`default_max` 0xffff: none).
+    default_change: u64,
+    default_min: u16,
+    default_max: u16,
+}
 
-    /// The default reporting configuration.
-    pub const fn default_reporting(&self) -> Option<DefaultReporting> {
+impl ReportSlot {
+    const fn default_reporting(&self) -> Option<DefaultReporting> {
         if self.default_max == 0xffff {
             None
         } else {
@@ -300,6 +326,12 @@ impl Attribute {
                 change: self.default_change,
             })
         }
+    }
+
+    /// Whether the slot still holds anything: a configuration or a
+    /// default.
+    const fn in_use(&self) -> bool {
+        self.state.configured() || self.default_max != 0xffff
     }
 }
 
@@ -311,6 +343,14 @@ fn capacity_of(ty: DataType) -> usize {
         .unwrap_or(MAX_ATTRIBUTE_BYTES)
 }
 
+/// A value as stored: its wire encoding, or the content of a static
+/// string.
+#[derive(Clone, Copy)]
+enum Stored<'a> {
+    Wire(&'a [u8]),
+    Str(&'static [u8]),
+}
+
 /// A read view of one attribute in its table.
 #[derive(Clone, Copy)]
 pub struct AttrRef<'a> {
@@ -318,8 +358,8 @@ pub struct AttrRef<'a> {
     pub def: AttributeDef,
     /// Reporting state when configured.
     pub reporting: Option<&'a ReportState>,
-    meta: &'a Attribute,
-    bytes: &'a [u8],
+    default: Option<DefaultReporting>,
+    stored: Stored<'a>,
 }
 
 impl core::fmt::Debug for AttrRef<'_> {
@@ -331,7 +371,7 @@ impl core::fmt::Debug for AttrRef<'_> {
         if secret {
             d.field("value", &"[REDACTED]");
         } else {
-            d.field("value", &self.bytes);
+            d.field("value", &self.raw());
         }
         d.field("reporting", &self.reporting)
             .finish_non_exhaustive()
@@ -339,20 +379,32 @@ impl core::fmt::Debug for AttrRef<'_> {
 }
 
 impl<'a> AttrRef<'a> {
-    /// The raw encoded value.
+    /// The stored value: its wire encoding, or for a read-only string
+    /// kept in program memory ([`AttributeTable::add_static_string`])
+    /// its content without the length octet.
     pub fn raw(&self) -> &'a [u8] {
-        self.bytes
+        match self.stored {
+            Stored::Wire(b) | Stored::Str(b) => b,
+        }
     }
 
     /// The decoded value.
     pub fn value(&self) -> Value<'a> {
-        let mut r = Reader::new(self.bytes);
-        Value::decode(&mut r, self.def.ty).unwrap_or(Value::NoData)
+        match self.stored {
+            Stored::Wire(b) => {
+                let mut r = Reader::new(b);
+                Value::decode(&mut r, self.def.ty).unwrap_or(Value::NoData)
+            }
+            Stored::Str(b) => Value::String {
+                ty: self.def.ty,
+                bytes: Some(b),
+            },
+        }
     }
 
     /// The default reporting configuration.
     pub const fn default_reporting(&self) -> Option<DefaultReporting> {
-        self.meta.default_reporting()
+        self.default
     }
 
     /// True when a report is due at `now` (§2.5.11.2.1–§2.5.11.2.3).
@@ -367,12 +419,12 @@ impl<'a> AttrRef<'a> {
 }
 
 /// A write handle to one attribute in its table.
-pub struct AttrMut<'a, const N: usize> {
-    table: &'a mut AttributeTable<N>,
+pub struct AttrMut<'a, const N: usize, P: ZclProfile = Full> {
+    table: &'a mut AttributeTable<N, P>,
     index: usize,
 }
 
-impl<const N: usize> AttrMut<'_, N> {
+impl<const N: usize, P: ZclProfile> AttrMut<'_, N, P> {
     /// Definition.
     pub fn def(&self) -> AttributeDef {
         self.table.attrs[self.index].def
@@ -395,15 +447,24 @@ impl<const N: usize> AttrMut<'_, N> {
     }
 
     /// Configures reporting (direction 0x00). `change` is the reportable
-    /// change magnitude for analog types.
-    pub fn configure_reporting(&mut self, min: u16, max: u16, change: u64, now: Instant) {
+    /// change magnitude for analog types. Fails with
+    /// `INSUFFICIENT_SPACE` when every reporting slot of the table is
+    /// taken by other attributes ([`ZclProfile::Reports`]).
+    pub fn configure_reporting(
+        &mut self,
+        min: u16,
+        max: u16,
+        change: u64,
+        now: Instant,
+    ) -> Result<(), ZclStatus> {
         self.table
-            .configure_reporting(self.index, min, max, change, now);
+            .configure_reporting(self.index, min, max, change, now)
     }
 
-    /// Sets the timeout for received reports (direction 0x01).
-    pub fn set_report_timeout(&mut self, timeout: u16) {
-        self.table.attrs[self.index].reporting.timeout = timeout;
+    /// Sets the timeout for received reports (direction 0x01); fails
+    /// like [`AttrMut::configure_reporting`].
+    pub fn set_report_timeout(&mut self, timeout: u16) -> Result<(), ZclStatus> {
+        self.table.set_report_timeout(self.index, timeout)
     }
 
     /// Marks the current value as reported at `now`.
@@ -419,48 +480,68 @@ impl<const N: usize> AttrMut<'_, N> {
 }
 
 /// Fixed-capacity attribute table of one cluster instance: up to `N`
-/// attributes, the wide ones over one [`ATTRIBUTE_POOL`]-octet pool.
-#[derive(Clone)]
-pub struct AttributeTable<const N: usize> {
+/// attributes, the wide ones over the profile's pool
+/// ([`ZclProfile::Pool`]), the reporting configurations in its
+/// reporting slots ([`ZclProfile::Reports`]).
+pub struct AttributeTable<const N: usize, P: ZclProfile = Full> {
     attrs: Vec<Attribute, N>,
-    pool: Vec<u8, ATTRIBUTE_POOL>,
+    pool: VecOf<u8, P::Pool>,
+    reports: VecOf<ReportSlot, P::Reports<N>>,
 }
 
-impl<const N: usize> core::fmt::Debug for AttributeTable<N> {
+impl<const N: usize, P: ZclProfile> Clone for AttributeTable<N, P> {
+    fn clone(&self) -> Self {
+        AttributeTable {
+            attrs: self.attrs.clone(),
+            pool: P::Pool::clone_vec(&self.pool),
+            reports: <P::Reports<N> as Capacity>::clone_vec(&self.reports),
+        }
+    }
+}
+
+impl<const N: usize, P: ZclProfile> core::fmt::Debug for AttributeTable<N, P> {
     /// Lists the attributes (each redacting a secret), never the pool.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<const N: usize> Default for AttributeTable<N> {
+impl<const N: usize, P: ZclProfile> Default for AttributeTable<N, P> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize> AttributeTable<N> {
+impl<const N: usize, P: ZclProfile> AttributeTable<N, P> {
     /// Empty table.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         AttributeTable {
             attrs: Vec::new(),
-            pool: Vec::new(),
+            pool: P::Pool::vec(),
+            reports: <P::Reports<N> as Capacity>::vec(),
         }
+    }
+
+    /// Checks a new attribute against the table.
+    fn admit(&self, def: AttributeDef, ty: DataType) -> Result<(), ZclStatus> {
+        if self.get(def.id, def.manufacturer).is_some() {
+            return Err(ZclStatus::DuplicateExists);
+        }
+        if ty != def.ty {
+            return Err(ZclStatus::InvalidDataType);
+        }
+        // Reporting slots name attributes by an octet.
+        if self.attrs.is_full() || self.attrs.len() > usize::from(u8::MAX) {
+            return Err(ZclStatus::InsufficientSpace);
+        }
+        Ok(())
     }
 
     /// Adds an attribute; fails with `InsufficientSpace` when the table
     /// or the pool is full, `DuplicateExists` for a known identifier and
     /// `InvalidDataType` when the initial value is of another type.
     pub fn add(&mut self, def: AttributeDef, initial: &Value<'_>) -> Result<(), ZclStatus> {
-        if self.get(def.id, def.manufacturer).is_some() {
-            return Err(ZclStatus::DuplicateExists);
-        }
-        if initial.data_type() != def.ty {
-            return Err(ZclStatus::InvalidDataType);
-        }
-        if self.attrs.is_full() {
-            return Err(ZclStatus::InsufficientSpace);
-        }
+        self.admit(def, initial.data_type())?;
         let capacity = capacity_of(def.ty);
         let mut buf = [0u8; MAX_ATTRIBUTE_BYTES];
         let mut w = Writer::new(&mut buf);
@@ -471,38 +552,73 @@ impl<const N: usize> AttributeTable<N> {
         if n > capacity {
             return Err(ZclStatus::InsufficientSpace);
         }
-        let mut inline = [0u8; 2 * INLINE];
-        let mut offset = 0;
-        if capacity <= INLINE {
-            inline[..n].copy_from_slice(&buf[..n]);
-            inline[INLINE..INLINE + n].copy_from_slice(&buf[..n]);
-        } else {
-            offset = self.pool.len();
-            if offset + 2 * capacity > ATTRIBUTE_POOL {
-                return Err(ZclStatus::InsufficientSpace);
+        #[allow(clippy::cast_possible_truncation)]
+        let slot = if capacity <= INLINE {
+            let mut bytes = [0u8; 2 * INLINE];
+            bytes[..n].copy_from_slice(&buf[..n]);
+            bytes[INLINE..INLINE + n].copy_from_slice(&buf[..n]);
+            Slot::Inline {
+                bytes,
+                len: n as u8,
+                default_len: n as u8,
             }
-            let _ = self.pool.resize_default(offset + 2 * capacity);
+        } else {
+            let offset = self.alloc(capacity)?;
             self.pool[offset..offset + n].copy_from_slice(&buf[..n]);
             self.pool[offset + capacity..offset + capacity + n].copy_from_slice(&buf[..n]);
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        let attr = Attribute {
-            def,
-            reporting: ReportState::UNSET,
-            inline,
-            default_change: 0,
-            default_min: 0,
-            default_max: 0xffff,
-            offset: offset as u16,
-            len: n as u8,
-            default_len: n as u8,
+            Slot::Pool {
+                offset: offset as u16,
+                len: n as u8,
+                default_len: n as u8,
+            }
         };
-        let _ = self.attrs.push(attr);
+        let _ = self.attrs.push(Attribute { def, slot });
         Ok(())
     }
 
+    /// Adds a character or octet string attribute whose value is
+    /// `content`, kept in program memory: no RAM besides the entry. The
+    /// value is also the factory default. An application-side
+    /// [`AttributeTable::set`] moves it into the pool (failing with
+    /// `INSUFFICIENT_SPACE` when the pool has no room); network writes
+    /// follow the access flags as for any attribute.
+    pub fn add_static_string(
+        &mut self,
+        def: AttributeDef,
+        content: &'static [u8],
+    ) -> Result<(), ZclStatus> {
+        if !matches!(def.ty, DataType::CharString | DataType::OctetString) {
+            return Err(ZclStatus::InvalidDataType);
+        }
+        self.admit(def, def.ty)?;
+        // The encoding (a length octet, then the content) must fit an
+        // attribute value.
+        if content.len() >= MAX_ATTRIBUTE_BYTES || content.len() >= usize::from(u8::MAX) {
+            return Err(ZclStatus::InsufficientSpace);
+        }
+        let _ = self.attrs.push(Attribute {
+            def,
+            slot: Slot::Static(content),
+        });
+        Ok(())
+    }
+
+    /// Reserves `capacity` octets twice (value, default) in the pool;
+    /// returns the offset.
+    fn alloc(&mut self, capacity: usize) -> Result<usize, ZclStatus> {
+        let offset = self.pool.len();
+        if offset + 2 * capacity > P::Pool::N || offset + 2 * capacity > usize::from(u16::MAX) {
+            return Err(ZclStatus::InsufficientSpace);
+        }
+        self.pool
+            .resize_default(offset + 2 * capacity)
+            .map_err(|_| ZclStatus::InsufficientSpace)?;
+        Ok(offset)
+    }
+
     /// Adds an attribute with a default reporting configuration (BDB 3.1
-    /// §6.5), active from `now`.
+    /// §6.5), active from `now`. Fails with `INSUFFICIENT_SPACE` when no
+    /// reporting slot is free.
     pub fn add_reported(
         &mut self,
         def: AttributeDef,
@@ -510,14 +626,17 @@ impl<const N: usize> AttributeTable<N> {
         cfg: DefaultReporting,
         now: Instant,
     ) -> Result<(), ZclStatus> {
+        if self.reports.is_full() {
+            return Err(ZclStatus::InsufficientSpace);
+        }
         self.add(def, initial)?;
         let index = self.attrs.len() - 1;
-        let a = &mut self.attrs[index];
-        a.default_change = cfg.change;
-        a.default_min = cfg.min;
-        a.default_max = cfg.max;
-        self.configure_reporting(index, cfg.min, cfg.max, cfg.change, now);
-        Ok(())
+        let r = self.report_slot(index)?;
+        let slot = &mut self.reports[r];
+        slot.default_change = cfg.change;
+        slot.default_min = cfg.min;
+        slot.default_max = cfg.max;
+        self.configure_reporting(index, cfg.min, cfg.max, cfg.change, now)
     }
 
     /// Restores every attribute's factory default (§3.2.2.3.1).
@@ -543,67 +662,116 @@ impl<const N: usize> AttributeTable<N> {
             .position(|a| a.def.id == id && a.def.manufacturer == manufacturer)
     }
 
-    fn value_bytes(&self, index: usize) -> &[u8] {
-        let a = &self.attrs[index];
-        let n = usize::from(a.len);
-        if a.is_inline() {
-            &a.inline[..n]
-        } else {
-            let start = usize::from(a.offset);
-            &self.pool[start..start + n]
-        }
-    }
-
-    /// The stored default of attribute `index`.
-    fn default_bytes(&self, index: usize) -> &[u8] {
-        let a = &self.attrs[index];
-        let n = usize::from(a.default_len);
-        if a.is_inline() {
-            &a.inline[INLINE..INLINE + n]
-        } else {
-            let start = usize::from(a.offset) + a.capacity();
-            &self.pool[start..start + n]
+    fn stored(&self, index: usize) -> Stored<'_> {
+        match self.attrs[index].slot {
+            Slot::Inline { ref bytes, len, .. } => Stored::Wire(&bytes[..usize::from(len)]),
+            Slot::Pool { offset, len, .. } => {
+                let start = usize::from(offset);
+                Stored::Wire(&self.pool[start..start + usize::from(len)])
+            }
+            Slot::Static(s) => Stored::Str(s),
         }
     }
 
     /// Overwrites the value (or, with `default`, the factory default) of
     /// attribute `index` with `bytes` (already checked against the
-    /// capacity).
+    /// capacity; the slot is inline or in the pool).
+    #[allow(clippy::cast_possible_truncation)]
     fn write_bytes(&mut self, index: usize, default: bool, bytes: &[u8]) {
-        let a = &mut self.attrs[index];
+        let capacity = self.attrs[index].capacity();
         let n = bytes.len();
-        #[allow(clippy::cast_possible_truncation)]
-        if default {
-            a.default_len = n as u8;
-        } else {
-            a.len = n as u8;
-        }
-        if a.is_inline() {
-            let start = if default { INLINE } else { 0 };
-            a.inline[start..start + n].copy_from_slice(bytes);
-        } else {
-            let start = usize::from(a.offset) + if default { a.capacity() } else { 0 };
-            self.pool[start..start + n].copy_from_slice(bytes);
+        match &mut self.attrs[index].slot {
+            Slot::Inline {
+                bytes: inline,
+                len,
+                default_len,
+            } => {
+                let start = if default { INLINE } else { 0 };
+                inline[start..start + n].copy_from_slice(bytes);
+                *(if default { default_len } else { len }) = n as u8;
+            }
+            Slot::Pool {
+                offset,
+                len,
+                default_len,
+            } => {
+                let start = usize::from(*offset) + if default { capacity } else { 0 };
+                *(if default { default_len } else { len }) = n as u8;
+                self.pool[start..start + n].copy_from_slice(bytes);
+            }
+            Slot::Static(_) => {}
         }
     }
 
-    fn report_state(&self, index: usize) -> Option<&ReportState> {
-        let r = &self.attrs[index].reporting;
-        r.configured().then_some(r)
+    /// Moves a static string into the pool, its content becoming the
+    /// stored default.
+    fn unpin(&mut self, index: usize) -> Result<(), ZclStatus> {
+        let Slot::Static(content) = self.attrs[index].slot else {
+            return Ok(());
+        };
+        let capacity = capacity_of(self.attrs[index].def.ty);
+        let offset = self.alloc(capacity)?;
+        let n = content.len() + 1;
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.pool[offset] = content.len() as u8;
+            self.pool[offset + 1..offset + n].copy_from_slice(content);
+            self.pool.copy_within(offset..offset + n, offset + capacity);
+            self.attrs[index].slot = Slot::Pool {
+                offset: offset as u16,
+                len: n as u8,
+                default_len: n as u8,
+            };
+        }
+        Ok(())
+    }
+
+    /// The reporting slot of attribute `index`.
+    fn slot_of(&self, index: usize) -> Option<usize> {
+        self.reports
+            .iter()
+            .position(|r| usize::from(r.attr) == index)
+    }
+
+    /// The reporting slot of attribute `index`, taking a free one when it
+    /// has none.
+    fn report_slot(&mut self, index: usize) -> Result<usize, ZclStatus> {
+        if let Some(r) = self.slot_of(index) {
+            return Ok(r);
+        }
+        let attr = u8::try_from(index).map_err(|_| ZclStatus::InsufficientSpace)?;
+        self.reports
+            .push(ReportSlot {
+                attr,
+                state: ReportState::UNSET,
+                default_change: 0,
+                default_min: 0,
+                default_max: 0xffff,
+            })
+            .map_err(|_| ZclStatus::InsufficientSpace)?;
+        Ok(self.reports.len() - 1)
+    }
+
+    /// Frees the reporting slot `r` when it holds nothing any more.
+    fn release(&mut self, r: usize) {
+        if !self.reports[r].in_use() {
+            self.reports.swap_remove(r);
+        }
     }
 
     /// The attribute at `index` (insertion order).
     pub fn at(&self, index: usize) -> AttrRef<'_> {
+        let slot = self.slot_of(index).map(|r| &self.reports[r]);
         AttrRef {
             def: self.attrs[index].def,
-            reporting: self.report_state(index),
-            meta: &self.attrs[index],
-            bytes: self.value_bytes(index),
+            reporting: slot.map(|r| &r.state).filter(|r| r.configured()),
+            default: slot.and_then(ReportSlot::default_reporting),
+            stored: self.stored(index),
         }
     }
 
     /// The attribute at `index`, mutably.
-    pub fn at_mut(&mut self, index: usize) -> AttrMut<'_, N> {
+    pub fn at_mut(&mut self, index: usize) -> AttrMut<'_, N, P> {
         AttrMut { table: self, index }
     }
 
@@ -627,7 +795,7 @@ impl<const N: usize> AttributeTable<N> {
         &mut self,
         id: AttributeId,
         manufacturer: Option<ManufacturerCode>,
-    ) -> Option<AttrMut<'_, N>> {
+    ) -> Option<AttrMut<'_, N, P>> {
         let index = self.index_of(id, manufacturer)?;
         Some(AttrMut { table: self, index })
     }
@@ -654,9 +822,9 @@ impl<const N: usize> AttributeTable<N> {
 
     /// Earliest scheduled report of any attribute.
     pub fn next_report(&self) -> Option<Instant> {
-        self.attrs
+        self.reports
             .iter()
-            .filter_map(|a| a.reporting.next())
+            .filter_map(|r| r.state.next())
             .min_by_key(|t| t.as_millis())
     }
 
@@ -674,7 +842,16 @@ impl<const N: usize> AttributeTable<N> {
         if n > a.capacity() {
             return Err(ZclStatus::InsufficientSpace);
         }
-        let changed = self.value_bytes(index) != &buf[..n];
+        let changed = match self.stored(index) {
+            Stored::Wire(b) => b != &buf[..n],
+            Stored::Str(_) => self.at(index).value() != *v,
+        };
+        if matches!(a.slot, Slot::Static(_)) {
+            if !changed && !as_default {
+                return Ok(false);
+            }
+            self.unpin(index)?;
+        }
         self.write_bytes(index, false, &buf[..n]);
         if as_default {
             self.write_bytes(index, true, &buf[..n]);
@@ -687,28 +864,43 @@ impl<const N: usize> AttributeTable<N> {
 
     /// Records a change for reporting purposes (§2.5.11.2.2, §2.5.11.2.3).
     fn note_change(&mut self, index: usize) {
+        let Some(r) = self.slot_of(index) else {
+            return;
+        };
         let ty = self.attrs[index].def.ty;
         let current = self.at(index).value();
-        let r = &self.attrs[index].reporting;
-        if !r.active() {
+        let s = &self.reports[r].state;
+        if !s.active() {
             return;
         }
-        if !ty.is_analog() || change_reached(ty, r.last_reported, &current, r.change) {
-            self.attrs[index].reporting.pending = true;
+        if !ty.is_analog() || change_reached(ty, s.last_reported, &current, s.change) {
+            self.reports[r].state.pending = true;
         }
     }
 
-    fn configure_reporting(&mut self, index: usize, min: u16, max: u16, change: u64, now: Instant) {
-        let r = &mut self.attrs[index].reporting;
+    fn configure_reporting(
+        &mut self,
+        index: usize,
+        min: u16,
+        max: u16,
+        change: u64,
+        now: Instant,
+    ) -> Result<(), ZclStatus> {
         if max == 0xffff {
-            // Reporting off; a timeout for received reports stays.
-            r.max = 0xffff;
-            r.pending = false;
-            return;
+            // Reporting off; a timeout for received reports and the
+            // default configuration stay.
+            if let Some(r) = self.slot_of(index) {
+                let s = &mut self.reports[r].state;
+                s.max = 0xffff;
+                s.pending = false;
+                self.release(r);
+            }
+            return Ok(());
         }
-        let timeout = r.timeout;
+        let r = self.report_slot(index)?;
         let last_reported = analog_key(&self.at(index).value());
-        self.attrs[index].reporting = ReportState {
+        let timeout = self.reports[r].state.timeout;
+        self.reports[r].state = ReportState {
             change,
             last_reported,
             last_report: now.as_millis(),
@@ -717,26 +909,64 @@ impl<const N: usize> AttributeTable<N> {
             timeout,
             pending: false,
         };
+        Ok(())
+    }
+
+    fn set_report_timeout(&mut self, index: usize, timeout: u16) -> Result<(), ZclStatus> {
+        if timeout == 0 && self.slot_of(index).is_none() {
+            return Ok(());
+        }
+        let r = self.report_slot(index)?;
+        self.reports[r].state.timeout = timeout;
+        self.release(r);
+        Ok(())
     }
 
     fn mark_reported(&mut self, index: usize, now: Instant) {
+        let Some(r) = self.slot_of(index) else {
+            return;
+        };
         let key = analog_key(&self.at(index).value());
-        let r = &mut self.attrs[index].reporting;
-        r.last_report = now.as_millis();
-        r.pending = false;
-        r.last_reported = key;
+        let s = &mut self.reports[r].state;
+        s.last_report = now.as_millis();
+        s.pending = false;
+        s.last_reported = key;
     }
 
     fn reset_one(&mut self, index: usize, now: Instant) {
-        let a = self.attrs[index];
         let mut buf = [0u8; MAX_ATTRIBUTE_BYTES];
-        let n = usize::from(a.default_len);
-        buf[..n].copy_from_slice(self.default_bytes(index));
-        self.write_bytes(index, false, &buf[..n]);
-        match a.default_reporting() {
+        let n = match self.attrs[index].slot {
+            Slot::Inline {
+                bytes, default_len, ..
+            } => {
+                let n = usize::from(default_len);
+                buf[..n].copy_from_slice(&bytes[INLINE..INLINE + n]);
+                Some(n)
+            }
+            Slot::Pool {
+                offset,
+                default_len,
+                ..
+            } => {
+                let start = usize::from(offset) + self.attrs[index].capacity();
+                let n = usize::from(default_len);
+                buf[..n].copy_from_slice(&self.pool[start..start + n]);
+                Some(n)
+            }
+            Slot::Static(_) => None,
+        };
+        if let Some(n) = n {
+            self.write_bytes(index, false, &buf[..n]);
+        }
+        let default = self
+            .slot_of(index)
+            .and_then(|r| self.reports[r].default_reporting());
+        // A configuration within the slots' capacity: the slot is the
+        // attribute's own.
+        let _ = match default {
             Some(cfg) => self.configure_reporting(index, cfg.min, cfg.max, cfg.change, now),
             None => self.configure_reporting(index, 0, 0xffff, 0, now),
-        }
+        };
     }
 
     /// Attributes with identifier ≥ `start` (for discovery), sorted by
@@ -883,7 +1113,8 @@ mod tests {
         assert!(!t.get(id, None).unwrap().report_due(t0));
         t.get_mut(id, None)
             .unwrap()
-            .configure_reporting(5, 60, 3, t0);
+            .configure_reporting(5, 60, 3, t0)
+            .unwrap();
         assert!(!t.get(id, None).unwrap().report_due(t0));
         // Small change: below the reportable change.
         t.set(
@@ -940,7 +1171,10 @@ mod tests {
         assert_eq!(t.next_report(), Some(Instant::from_millis(65_000)));
         // Discrete attribute: any change.
         let b = AttributeId(1);
-        t.get_mut(b, None).unwrap().configure_reporting(0, 0, 0, t0);
+        t.get_mut(b, None)
+            .unwrap()
+            .configure_reporting(0, 0, 0, t0)
+            .unwrap();
         t.set(b, &Value::Bool(Some(true))).unwrap();
         assert!(t.get(b, None).unwrap().report_due(t0));
         t.get_mut(b, None).unwrap().mark_reported(t0);
@@ -952,16 +1186,21 @@ mod tests {
         );
         t.get_mut(b, None)
             .unwrap()
-            .configure_reporting(0, 0xffff, 0, t0);
+            .configure_reporting(0, 0xffff, 0, t0)
+            .unwrap();
         t.set(b, &Value::Bool(Some(false))).unwrap();
         assert!(!t.get(b, None).unwrap().report_due(t0), "reporting off");
         assert!(t.get(b, None).unwrap().reporting.is_none(), "slot released");
         // A receive timeout survives reporting being switched off.
-        t.get_mut(b, None).unwrap().set_report_timeout(30);
-        t.get_mut(b, None).unwrap().configure_reporting(1, 2, 0, t0);
+        t.get_mut(b, None).unwrap().set_report_timeout(30).unwrap();
         t.get_mut(b, None)
             .unwrap()
-            .configure_reporting(0, 0xffff, 0, t0);
+            .configure_reporting(1, 2, 0, t0)
+            .unwrap();
+        t.get_mut(b, None)
+            .unwrap()
+            .configure_reporting(0, 0xffff, 0, t0)
+            .unwrap();
         assert_eq!(
             t.get(b, None).unwrap().reporting.map(|r| r.timeout),
             Some(30)
@@ -983,7 +1222,8 @@ mod tests {
         .unwrap();
         s.get_mut(AttributeId(0), None)
             .unwrap()
-            .configure_reporting(0, 0, 4, t0);
+            .configure_reporting(0, 0, 4, t0)
+            .unwrap();
         s.set(
             AttributeId(0),
             &Value::Int {
@@ -998,7 +1238,8 @@ mod tests {
         assert!(s.get(AttributeId(0), None).unwrap().report_due(t0));
         s.get_mut(AttributeId(1), None)
             .unwrap()
-            .configure_reporting(0, 0, float_change(0.5), t0);
+            .configure_reporting(0, 0, float_change(0.5), t0)
+            .unwrap();
         s.set(AttributeId(1), &Value::Single(1.25)).unwrap();
         assert!(!s.get(AttributeId(1), None).unwrap().report_due(t0));
         s.set(AttributeId(1), &Value::Single(1.75)).unwrap();
@@ -1035,7 +1276,7 @@ mod tests {
         assert!(!s.contains("90, 90"), "{s}");
         assert!(!s.contains("112, 105, 110"), "{s}");
         assert!(s.contains("[REDACTED]") && s.contains("119"), "{s}");
-        let s = std::format!("{:?}", t.at(0).meta);
+        let s = std::format!("{:?}", t.attrs[0]);
         assert!(!s.contains("90, 90"), "{s}");
     }
 
@@ -1051,14 +1292,15 @@ mod tests {
             .unwrap();
             t.get_mut(AttributeId(i), None)
                 .unwrap()
-                .configure_reporting(0, 10, 1, t0);
+                .configure_reporting(0, 10, 1, t0)
+                .unwrap();
         }
         assert!(t.iter().all(|a| a.reporting.is_some()));
         // A timeout for received reports is a configuration of its own
         // and survives reporting being switched off.
         let mut a = t.get_mut(AttributeId(3), None).unwrap();
-        a.set_report_timeout(5);
-        a.configure_reporting(0, 0xffff, 0, t0);
+        a.set_report_timeout(5).unwrap();
+        a.configure_reporting(0, 0xffff, 0, t0).unwrap();
         let a = t.get(AttributeId(3), None).unwrap();
         assert_eq!(a.reporting.map(|r| (r.max, r.timeout)), Some((0xffff, 5)));
         assert!(a.next_report().is_none());
