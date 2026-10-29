@@ -19,9 +19,13 @@
 //! | `<base>/bridge/request/permit_join` | in | seconds, `ON` (254 s) or `OFF` |
 //! | `<base>/bridge/request/remove` | in | device id; `{"id", "force"}` |
 //! | `<base>/bridge/request/interview` | in | device id |
+//! | `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
+//! | `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}` |
+//! | `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |
+//! | `<base>/group/<n>/set` | in | as `<base>/<id>/set`, to group `n` |
 //! | `<base>/<id>` | out, retained | state object (below) |
 //! | `<base>/<id>/availability` | out, retained | `online` / `offline` |
-//! | `<base>/<id>/set` | in | `{"state", "brightness", "transition"}` or `ON` / `OFF` / `TOGGLE` |
+//! | `<base>/<id>/set` | in | `{"state", "brightness", "color_temp", "color", "transition"}` or `ON` / `OFF` / `TOGGLE` |
 //! | `<base>/<id>/event` | out | `{"event"}`: a sensor event |
 //! | `<base>/<id>/attribute` | out | an attribute report outside the state model |
 //! | `<discovery>/status` | in | `online`: Home Assistant restarted |
@@ -30,13 +34,14 @@
 //! `state` (`ON`/`OFF`), `brightness` (percent), `open`, `water_leak`,
 //! `occupancy`, `tamper`, `battery_low`, `trouble` (booleans), `battery`
 //! (percent), `voltage` (mV), `temperature` (°C), `humidity` (%),
-//! `zone_status`.
+//! `zone_status`; colour lights add `color_mode` (`xy`, `hs`,
+//! `color_temp`), `color_temp` (mireds) and `color` (`x`, `y`, `h`, `s`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use panweave_hub::model::{
-    Capabilities, ContactState, DeviceCategory, DeviceState, Flag, LeakState, PowerSource,
-    level_to_brightness,
+    Capabilities, ColorMode, ColorState, ContactState, DeviceCategory, DeviceState, Flag,
+    LeakState, PowerSource, level_to_brightness,
 };
 use panweave_hub::protocol::{
     DeviceInfo, ErrorCode, Event, LightCommand, MAX_PERMIT_JOIN_SECONDS, Request, Response,
@@ -63,6 +68,10 @@ pub struct Config {
     /// Seconds of silence after which a battery device is marked
     /// offline.
     pub battery_timeout_s: u64,
+    /// Groups offered to Home Assistant as lights: group address and
+    /// name. Group commands are not confirmed (the lights are
+    /// optimistic).
+    pub groups: Vec<(u16, String)>,
 }
 
 impl Default for Config {
@@ -73,6 +82,7 @@ impl Default for Config {
             admin: true,
             mains_check_s: 10 * 60,
             battery_timeout_s: 25 * 3600,
+            groups: Vec::new(),
         }
     }
 }
@@ -112,6 +122,7 @@ struct Entity {
 enum Kind {
     Light {
         brightness: bool,
+        color: bool,
     },
     Switch,
     Binary {
@@ -142,6 +153,7 @@ fn entities(info: &DeviceInfo) -> Vec<Entity> {
             object: "light",
             kind: Kind::Light {
                 brightness: caps.contains(Capabilities::LEVEL),
+                color: caps.contains(Capabilities::COLOR),
             },
         });
     } else if caps.contains(Capabilities::ON_OFF) && category != DeviceCategory::Controller {
@@ -202,6 +214,84 @@ fn entities(info: &DeviceInfo) -> Vec<Entity> {
         out.push(sensor("voltage", "voltage", "voltage", "mV", true));
     }
     out
+}
+
+/// Home Assistant colour modes of a colour light: xy (else hs) and
+/// colour temperature as supported; both when the capabilities are not
+/// known yet.
+fn color_modes(color: Option<&ColorState>) -> Vec<&'static str> {
+    let Some(c) = color.filter(|c| c.capabilities.is_some()) else {
+        return vec!["color_temp", "xy"];
+    };
+    let mut m = Vec::new();
+    if c.supports(ColorState::TEMPERATURE) {
+        m.push("color_temp");
+    }
+    if c.supports(ColorState::XY) {
+        m.push("xy");
+    } else if c.supports(ColorState::HUE_SATURATION) {
+        m.push("hs");
+    }
+    if m.is_empty() {
+        m.push("brightness");
+    }
+    m
+}
+
+/// The colour fields of the state object.
+fn color_json(c: &ColorState, modes: &[&str], out: &mut Value) {
+    let xy =
+        c.x.zip(c.y)
+            .map(|(x, y)| (f64::from(x) / 65536.0, f64::from(y) / 65536.0));
+    let hs = c
+        .hue
+        .zip(c.saturation)
+        .map(|(h, s)| (f64::from(h) * 360.0 / 254.0, f64::from(s) * 100.0 / 254.0));
+    let round = |v: f64, d: f64| (v * d).round() / d;
+    let mut color = serde_json::Map::new();
+    if let Some((x, y)) = xy {
+        color.insert("x".into(), json!(round(x, 10_000.0)));
+        color.insert("y".into(), json!(round(y, 10_000.0)));
+    }
+    if let Some((h, s)) = hs {
+        color.insert("h".into(), json!(round(h, 10.0)));
+        color.insert("s".into(), json!(round(s, 10.0)));
+    }
+    // The mode as Home Assistant knows it: a light in hue/saturation mode
+    // that was offered as xy reports its xy.
+    let mode = match c.mode {
+        Some(ColorMode::Temperature) => Some("color_temp"),
+        Some(ColorMode::Xy) => Some("xy"),
+        Some(ColorMode::HueSaturation) if modes.contains(&"hs") => Some("hs"),
+        Some(ColorMode::HueSaturation) => Some("xy"),
+        None => None,
+    }
+    .filter(|m| modes.contains(m));
+    out["color_mode"] = json!(mode);
+    out["color_temp"] = json!(c.mireds);
+    out["color"] = if color.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(color)
+    };
+}
+
+/// Seconds as tenths of a second, 0 for anything unusable.
+fn tenths(seconds: f64) -> u16 {
+    if seconds.is_finite() && seconds > 0.0 {
+        scale(seconds, 10.0, u16::MAX)
+    } else {
+        0
+    }
+}
+
+/// `v × factor`, rounded and clamped to `0..=max`.
+fn scale(v: f64, factor: f64, max: u16) -> u16 {
+    let x = (v * factor).round().clamp(0.0, f64::from(max));
+    // Clamped to 0..=max above.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let x = x as u16;
+    x
 }
 
 /// `0x` and 16 hex digits.
@@ -266,6 +356,8 @@ fn text(bytes: &[u8]) -> String {
 struct Device {
     info: Option<DeviceInfo>,
     state: DeviceState,
+    /// Color Control state, for colour lights once read.
+    color: Option<ColorState>,
     /// Discovery topics published for it.
     configs: BTreeSet<String>,
     /// When it was last heard (bridge clock), if known.
@@ -284,6 +376,7 @@ impl Device {
         Device {
             info: None,
             state: DeviceState::default(),
+            color: None,
             configs: BTreeSet::new(),
             heard: None,
             online: None,
@@ -353,6 +446,9 @@ impl Bridge {
             format!("{}/+/set", self.cfg.base_topic),
             format!("{}/status", self.cfg.discovery_prefix),
         ];
+        if !self.cfg.groups.is_empty() {
+            v.push(format!("{}/group/+/set", self.cfg.base_topic));
+        }
         if self.cfg.admin {
             v.push(format!("{}/bridge/request/+", self.cfg.base_topic));
         }
@@ -472,6 +568,7 @@ impl Bridge {
         if let Some(on) = self.permit_join {
             self.publish_permit_join(on);
         }
+        self.publish_group_discovery();
     }
 
     fn publish_permit_join(&mut self, on: bool) {
@@ -479,7 +576,13 @@ impl Bridge {
         self.publish(topic, if on { "ON" } else { "OFF" }, true);
     }
 
-    fn entity_config(&self, ieee: u64, info: &DeviceInfo, e: Entity) -> Value {
+    fn entity_config(
+        &self,
+        ieee: u64,
+        info: &DeviceInfo,
+        color: Option<&ColorState>,
+        e: Entity,
+    ) -> Value {
         let base = &self.cfg.base_topic;
         let id = device_id(ieee);
         let state_topic = format!("{base}/{id}");
@@ -521,13 +624,26 @@ impl Bridge {
         });
         let command_topic = format!("{base}/{id}/set");
         match e.kind {
-            Kind::Light { brightness } => {
+            Kind::Light {
+                brightness,
+                color: has_color,
+            } => {
                 c["name"] = Value::Null;
                 c["schema"] = json!("json");
                 c["command_topic"] = json!(command_topic);
-                if brightness {
+                if brightness || has_color {
                     c["brightness"] = json!(true);
                     c["brightness_scale"] = json!(100);
+                }
+                if has_color {
+                    c["supported_color_modes"] = json!(color_modes(color));
+                    if let Some(min) = color.and_then(|c| c.mireds_min) {
+                        c["min_mireds"] = json!(min);
+                    }
+                    if let Some(max) = color.and_then(|c| c.mireds_max) {
+                        c["max_mireds"] = json!(max);
+                    }
+                } else if brightness {
                     c["supported_color_modes"] = json!(["brightness"]);
                 } else {
                     c["supported_color_modes"] = json!(["onoff"]);
@@ -598,14 +714,15 @@ impl Bridge {
                 let topic = self.config_topic(ieee, e);
                 pubs.push((
                     topic.clone(),
-                    self.entity_config(ieee, info, e).to_string().into_bytes(),
+                    self.entity_config(ieee, info, d.color.as_ref(), e)
+                        .to_string()
+                        .into_bytes(),
                 ));
                 configs.insert(topic);
             }
         }
         let stale: Vec<String> = d.configs.difference(&configs).cloned().collect();
         let online = d.online;
-        let state = d.state;
         for topic in stale {
             self.publish(topic, Vec::new(), true);
         }
@@ -618,12 +735,52 @@ impl Bridge {
         if let Some(online) = online {
             self.publish_availability(ieee, online);
         }
-        self.publish_state(ieee, &state);
+        self.publish_state(ieee);
     }
 
-    fn publish_state(&mut self, ieee: u64, s: &DeviceState) {
+    fn publish_state(&mut self, ieee: u64) {
+        let Some(d) = self.devices.get(&ieee) else {
+            return;
+        };
+        let mut body = state_json(&d.state);
+        let colour = d
+            .info
+            .as_ref()
+            .is_some_and(|i| i.summary.capabilities.contains(Capabilities::COLOR));
+        if colour {
+            let modes = color_modes(d.color.as_ref());
+            color_json(&d.color.unwrap_or_default(), &modes, &mut body);
+        }
         let topic = format!("{}/{}", self.cfg.base_topic, device_id(ieee));
-        self.publish(topic, state_json(s).to_string(), true);
+        self.publish(topic, body.to_string(), true);
+    }
+
+    fn publish_group_discovery(&mut self) {
+        let base = self.cfg.base_topic.clone();
+        let groups = self.cfg.groups.clone();
+        for (group, name) in groups {
+            let id = format!("panweave_group_{group}");
+            let mut config = json!({
+                "name": name,
+                "unique_id": id,
+                "object_id": id,
+                "schema": "json",
+                "optimistic": true,
+                "command_topic": format!("{base}/group/{group}/set"),
+                "availability_topic": format!("{base}/bridge/state"),
+                "brightness": true,
+                "brightness_scale": 100,
+                "supported_color_modes": ["color_temp", "xy"],
+            });
+            if self.hub_ieee.is_some() {
+                config["device"] = self.bridge_device();
+            }
+            let topic = format!(
+                "{}/light/panweave_group_{group}/light/config",
+                self.cfg.discovery_prefix
+            );
+            self.publish(topic, config.to_string(), true);
+        }
     }
 
     fn publish_availability(&mut self, ieee: u64, online: bool) {
@@ -715,6 +872,7 @@ impl Bridge {
                 let present = info.summary.present;
                 let d = self.devices.entry(ieee).or_insert_with(Device::new);
                 d.state = info.state;
+                let colour = info.summary.capabilities.contains(Capabilities::COLOR);
                 d.info = Some(info);
                 if d.heard.is_none() {
                     d.heard = heard;
@@ -734,6 +892,12 @@ impl Bridge {
                     );
                 }
                 self.publish_device(ieee);
+                if colour {
+                    self.request(Request::GetLightColor { ieee });
+                }
+            }
+            (Request::GetLightColor { .. }, Response::LightColor { ieee, color }) => {
+                self.color_changed(ieee, color);
             }
             (Request::RemoveDevice { ieee, .. }, Response::Done) => {
                 self.remove_device(*ieee);
@@ -767,6 +931,23 @@ impl Bridge {
             _ => {}
         }
         self.take()
+    }
+
+    /// A colour light's colour: new capabilities change its discovery
+    /// configuration, anything else only its state.
+    fn color_changed(&mut self, ieee: u64, color: ColorState) {
+        let Some(d) = self.devices.get_mut(&ieee) else {
+            return;
+        };
+        let before = d.color;
+        d.color = Some(color);
+        let identity =
+            |c: Option<ColorState>| c.map(|c| (c.capabilities, c.mireds_min, c.mireds_max));
+        if identity(before) != identity(Some(color)) {
+            self.publish_device(ieee);
+        } else {
+            self.publish_state(ieee);
+        }
     }
 
     /// Bridge time of a hub `last_seen_s` (seconds since the hub's boot).
@@ -805,7 +986,7 @@ impl Bridge {
                 if let Some(d) = self.devices.get_mut(&ieee) {
                     d.state = state;
                     self.heard(ieee);
-                    self.publish_state(ieee, &state);
+                    self.publish_state(ieee);
                 } else {
                     self.devices.insert(ieee, Device::new());
                     self.request(Request::GetDevice { ieee });
@@ -875,6 +1056,10 @@ impl Bridge {
             Event::HubError { error, detail } => {
                 self.log("error", format!("hub: {} ({detail})", error.name()));
             }
+            Event::LightColorChanged { ieee, color } => {
+                self.heard(ieee);
+                self.color_changed(ieee, color);
+            }
         }
         self.take()
     }
@@ -892,6 +1077,18 @@ impl Bridge {
         } else if let Some(name) = topic.strip_prefix(&format!("{base}/bridge/request/")) {
             if self.cfg.admin {
                 self.bridge_request(name, payload);
+            }
+        } else if let Some(n) = topic
+            .strip_prefix(&format!("{base}/group/"))
+            .and_then(|r| r.strip_suffix("/set"))
+        {
+            match n.parse::<u16>() {
+                Ok(group) if self.cfg.groups.iter().any(|(g, _)| *g == group) => {
+                    for command in self.light_commands(payload, None) {
+                        self.request(Request::GroupLight { group, command });
+                    }
+                }
+                _ => self.log("warning", format!("{topic}: unknown group")),
             }
         } else if let Some(rest) = topic.strip_prefix(&format!("{base}/"))
             && let Some(id) = rest.strip_suffix("/set")
@@ -945,48 +1142,129 @@ impl Bridge {
                     None => self.log("warning", format!("{name}: bad device id {id:?}")),
                 }
             }
+            "group_add" | "group_remove" | "scene_store" | "scene_recall" => {
+                let o = value.as_ref().and_then(Value::as_object);
+                let field = |k: &str| o.and_then(|o| o.get(k));
+                let id = field("id")
+                    .and_then(Value::as_str)
+                    .and_then(parse_device_id);
+                let group = field("group")
+                    .and_then(Value::as_u64)
+                    .and_then(|g| u16::try_from(g).ok());
+                let scene = field("scene")
+                    .and_then(Value::as_u64)
+                    .and_then(|s| u8::try_from(s).ok());
+                let transition_ds = field("transition")
+                    .and_then(Value::as_f64)
+                    .map_or(0, tenths);
+                let r = match (name, id, group, scene) {
+                    ("group_add", Some(ieee), Some(group), _) => Some(Request::AddGroup {
+                        ieee,
+                        endpoint: 0,
+                        group,
+                    }),
+                    ("group_remove", Some(ieee), Some(group), _) => Some(Request::RemoveGroup {
+                        ieee,
+                        endpoint: 0,
+                        group,
+                    }),
+                    ("scene_store", Some(ieee), Some(group), Some(scene)) => {
+                        Some(Request::StoreScene {
+                            ieee,
+                            endpoint: 0,
+                            group,
+                            scene,
+                        })
+                    }
+                    ("scene_recall", _, Some(group), Some(scene)) => Some(Request::RecallScene {
+                        group,
+                        scene,
+                        transition_ds,
+                    }),
+                    _ => None,
+                };
+                match r {
+                    Some(r) => self.request(r),
+                    None => self.log("warning", format!("{name}: bad payload {payload:?}")),
+                }
+            }
             other => self.log("warning", format!("unknown bridge request {other:?}")),
         }
     }
 
     /// A `<base>/<id>/set` command.
     fn set(&mut self, ieee: u64, payload: &str) {
-        let (state, brightness, transition) = match serde_json::from_str::<Value>(payload) {
-            Ok(Value::Object(o)) => (
-                o.get("state")
-                    .and_then(Value::as_str)
-                    .map(str::to_ascii_uppercase),
-                o.get("brightness").and_then(Value::as_u64),
-                o.get("transition").and_then(Value::as_f64),
-            ),
-            _ => (Some(payload.to_ascii_uppercase()), None, None),
-        };
-        // Clamped to 0..=u16::MAX before the conversion.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let transition_ds = transition
-            .filter(|t| t.is_finite() && *t > 0.0)
-            .map_or(0, |t| (t * 10.0).round().min(f64::from(u16::MAX)) as u16);
-        let command = match (state.as_deref(), brightness) {
-            (Some("OFF"), _) => Some(LightCommand::TurnOff),
-            (_, Some(b)) => Some(LightCommand::SetBrightness {
-                percent: u8::try_from(b.min(100)).unwrap_or(100),
-                transition_ds,
-            }),
-            (Some("ON"), None) => Some(LightCommand::TurnOn),
-            (Some("TOGGLE"), None) => Some(LightCommand::Toggle),
-            _ => None,
-        };
-        match command {
-            Some(command) => self.request(Request::Light {
+        let commands = self.light_commands(payload, Some(ieee));
+        for command in commands {
+            self.request(Request::Light {
                 ieee,
                 endpoint: 0,
                 command,
-            }),
-            None => self.log(
-                "warning",
-                format!("{}/set: unsupported payload {payload:?}", device_id(ieee)),
-            ),
+            });
         }
+    }
+
+    /// The light commands of a `set` payload: on/off or brightness first,
+    /// then the colour. Logs and returns nothing for an unusable payload.
+    fn light_commands(&mut self, payload: &str, ieee: Option<u64>) -> Vec<LightCommand> {
+        let mut out = Vec::new();
+        let (state, brightness, transition, mireds, color) =
+            match serde_json::from_str::<Value>(payload) {
+                Ok(Value::Object(o)) => (
+                    o.get("state")
+                        .and_then(Value::as_str)
+                        .map(str::to_ascii_uppercase),
+                    o.get("brightness").and_then(Value::as_u64),
+                    o.get("transition").and_then(Value::as_f64),
+                    o.get("color_temp").and_then(Value::as_u64),
+                    o.get("color").cloned(),
+                ),
+                _ => (Some(payload.to_ascii_uppercase()), None, None, None, None),
+            };
+        let transition_ds = transition.map_or(0, tenths);
+        match (state.as_deref(), brightness) {
+            (Some("OFF"), _) => out.push(LightCommand::TurnOff),
+            (_, Some(b)) => out.push(LightCommand::SetBrightness {
+                percent: u8::try_from(b.min(100)).unwrap_or(100),
+                transition_ds,
+            }),
+            (Some("ON"), None) => out.push(LightCommand::TurnOn),
+            (Some("TOGGLE"), None) => out.push(LightCommand::Toggle),
+            _ => {}
+        }
+        if state.as_deref() != Some("OFF") {
+            if let Some(m) = mireds {
+                out.push(LightCommand::SetColorTemperature {
+                    mireds: u16::try_from(m.clamp(1, 0xfeff)).unwrap_or(0xfeff),
+                    transition_ds,
+                });
+            }
+            if let Some(Value::Object(c)) = color {
+                let get = |k: &str| c.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+                if let (Some(x), Some(y)) = (get("x"), get("y")) {
+                    out.push(LightCommand::SetColorXy {
+                        x: scale(x, 65536.0, 0xfeff),
+                        y: scale(y, 65536.0, 0xfeff),
+                        transition_ds,
+                    });
+                } else if let (Some(h), Some(sat)) = (get("h"), get("s")) {
+                    out.push(LightCommand::SetHueSaturation {
+                        hue: u8::try_from(scale(h.rem_euclid(360.0), 254.0 / 360.0, 254))
+                            .unwrap_or(254),
+                        saturation: u8::try_from(scale(sat, 254.0 / 100.0, 254)).unwrap_or(254),
+                        transition_ds,
+                    });
+                }
+            }
+        }
+        if out.is_empty() {
+            let target = ieee.map_or_else(|| "group".to_string(), device_id);
+            self.log(
+                "warning",
+                format!("{target}/set: unsupported payload {payload:?}"),
+            );
+        }
+        out
     }
 
     /// Time passed: devices not heard for too long are checked or marked

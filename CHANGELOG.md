@@ -15,6 +15,21 @@ Keep a Changelog; versions follow SemVer.
   battery ones), light commands and network requests (permit join,
   remove, interview; off with `--no-admin`). Its own MQTT 3.1.1 packet
   codec; `docs/mqtt.md`.
+* Hub colour lights, groups and scenes: `LightSetColorTemperature`,
+  `LightSetColorXy`, `LightSetHueSaturation` (confirmed by read-back),
+  `GetLightColor` and the `LightColorChanged` event (capabilities, mired
+  range and colour from the interview, reports and the post-reboot sync),
+  `AddGroup` / `RemoveGroup`, group-addressed `GroupLight`, `StoreScene`
+  and `RecallScene`; CLI `light … color-temp|xy|hs|color`, `group`,
+  `scene`. The MQTT bridge offers colour modes and mired ranges, takes
+  `color_temp` / `color` commands, configured groups as lights
+  (`--group N=NAME`) and group / scene requests.
+
+### Changed
+
+* ZCL: a server's cluster-specific command to an endpoint without that
+  client cluster is handed up as a response (the endpoint sent the
+  request as a client) instead of being answered UNSUPPORTED_CLUSTER.
 
 ## [0.3.0] - 2026-10-29
 

@@ -31,7 +31,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use panweave_hub::model::{ContactState, DeviceState, Flag, Ieee, LeakState, level_to_brightness};
+use panweave_hub::model::{
+    ColorState, ContactState, DeviceState, Flag, Ieee, LeakState, level_to_brightness,
+};
 use panweave_hub::protocol::frame::{FrameDecoder, MAX_WIRE};
 use panweave_hub::protocol::{
     CommandStage, DeviceInfo, DeviceSummary, ErrorCode, Event, LightCommand, Message, Request,
@@ -57,6 +59,15 @@ commands:
   device <ieee> remove [--leave]          forget it (and make it leave)
   light <ieee> on|off|toggle [--endpoint N]
   light <ieee> brightness <0-100> [--transition TENTHS] [--endpoint N]
+  light <ieee> color-temp <mireds> | xy <x> <y> | hs <hue 0-254> <sat 0-254>
+      [--transition TENTHS] [--endpoint N]  colour (x, y: CIE 1931 × 65536)
+  light <ieee> color                      its colour capabilities and current colour
+  group add|remove <ieee> <group> [--endpoint N]
+                                          group membership (Groups cluster)
+  group light <group> on|off|toggle|brightness <0-100>|color-temp <mireds> [--transition TENTHS]
+                                          one group-addressed command (no confirmation)
+  scene store <ieee> <group> <scene> [--endpoint N]
+  scene recall <group> <scene> [--transition TENTHS]
   read <ieee> <endpoint> <cluster> <attribute>
   bind <ieee> <endpoint> <cluster>
   report <ieee> <endpoint> <cluster> <attribute> <type> <min> <max> <change>
@@ -583,7 +594,74 @@ fn describe_event(e: &Event) -> String {
         Event::EventsDropped { count } => {
             format!("{count} events were dropped while nobody was reading")
         }
+        Event::LightColorChanged { ieee, color } => {
+            format!("{} colour: {}", Ieee(*ieee), describe_color(color))
+        }
     }
+}
+
+/// A light command from its CLI words.
+fn light_command(args: &[String], action: &str, rest: &[&str]) -> Result<LightCommand, String> {
+    let transition_ds = flag_value(args, "--transition", 0u16)?;
+    Ok(match (action, rest) {
+        ("on", _) => LightCommand::TurnOn,
+        ("off", _) => LightCommand::TurnOff,
+        ("toggle", _) => LightCommand::Toggle,
+        ("brightness", [pct, ..]) => LightCommand::SetBrightness {
+            percent: number(pct)?,
+            transition_ds,
+        },
+        ("color-temp", [mireds, ..]) => LightCommand::SetColorTemperature {
+            mireds: number(mireds)?,
+            transition_ds,
+        },
+        ("xy", [x, y, ..]) => LightCommand::SetColorXy {
+            x: number(x)?,
+            y: number(y)?,
+            transition_ds,
+        },
+        ("hs", [hue, sat, ..]) => LightCommand::SetHueSaturation {
+            hue: number(hue)?,
+            saturation: number(sat)?,
+            transition_ds,
+        },
+        _ => return Err(USAGE.into()),
+    })
+}
+
+fn opt<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map_or_else(|| "?".into(), |v| v.to_string())
+}
+
+fn describe_color(c: &ColorState) -> String {
+    let mut caps = Vec::new();
+    for (bit, name) in [
+        (ColorState::HUE_SATURATION, "hs"),
+        (ColorState::ENHANCED_HUE, "enhanced-hue"),
+        (ColorState::COLOR_LOOP, "loop"),
+        (ColorState::XY, "xy"),
+        (ColorState::TEMPERATURE, "color-temp"),
+    ] {
+        if c.supports(bit) {
+            caps.push(name);
+        }
+    }
+    format!(
+        "capabilities {} (mireds {}–{}); mode {}; xy {}/{}; {} mireds; hue {} sat {}",
+        if c.capabilities.is_some() {
+            caps.join(",")
+        } else {
+            "?".into()
+        },
+        opt(c.mireds_min),
+        opt(c.mireds_max),
+        c.mode.map_or("?", |m| m.name()),
+        opt(c.x),
+        opt(c.y),
+        opt(c.mireds),
+        opt(c.hue),
+        opt(c.saturation),
+    )
 }
 
 fn print_summary(d: &DeviceSummary) {
@@ -870,18 +948,67 @@ fn run(o: &Options) -> Result<(), String> {
             );
             Ok(())
         }
+        ["light", id, "color"] => match hub.call(Request::GetLightColor { ieee: ieee(id)? })? {
+            Response::LightColor { color, .. } => {
+                println!("{}", describe_color(&color));
+                Ok(())
+            }
+            Response::Error(e) => Err(error_text(e)),
+            other => Err(format!("unexpected response {other:?}")),
+        },
+        ["group", op @ ("add" | "remove"), id, group] => {
+            let (ieee, endpoint, group) = (
+                ieee(id)?,
+                flag_value(&o.args, "--endpoint", 0u8)?,
+                number(group)?,
+            );
+            run_command(
+                &mut hub,
+                if *op == "add" {
+                    Request::AddGroup {
+                        ieee,
+                        endpoint,
+                        group,
+                    }
+                } else {
+                    Request::RemoveGroup {
+                        ieee,
+                        endpoint,
+                        group,
+                    }
+                },
+            )
+        }
+        ["group", "light", group, action, rest @ ..] => {
+            let command = light_command(&o.args, action, rest)?;
+            expect_done(hub.call(Request::GroupLight {
+                group: number(group)?,
+                command,
+            })?)?;
+            println!("sent to group {group}");
+            Ok(())
+        }
+        ["scene", "store", id, group, scene] => run_command(
+            &mut hub,
+            Request::StoreScene {
+                ieee: ieee(id)?,
+                endpoint: flag_value(&o.args, "--endpoint", 0u8)?,
+                group: number(group)?,
+                scene: number(scene)?,
+            },
+        ),
+        ["scene", "recall", group, scene] => {
+            expect_done(hub.call(Request::RecallScene {
+                group: number(group)?,
+                scene: number(scene)?,
+                transition_ds: flag_value(&o.args, "--transition", 0u16)?,
+            })?)?;
+            println!("recalled scene {scene} of group {group}");
+            Ok(())
+        }
         ["light", id, action, rest @ ..] => {
             let endpoint = flag_value(&o.args, "--endpoint", 0u8)?;
-            let command = match (*action, rest) {
-                ("on", _) => LightCommand::TurnOn,
-                ("off", _) => LightCommand::TurnOff,
-                ("toggle", _) => LightCommand::Toggle,
-                ("brightness", [pct, ..]) => LightCommand::SetBrightness {
-                    percent: number(pct)?,
-                    transition_ds: flag_value(&o.args, "--transition", 0u16)?,
-                },
-                _ => return Err(USAGE.into()),
-            };
+            let command = light_command(&o.args, action, rest)?;
             run_command(
                 &mut hub,
                 Request::Light {

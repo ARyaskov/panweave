@@ -4,7 +4,7 @@
 //! ```text
 //! panweave-mqtt [--port PORT] [--broker HOST:PORT] [--username NAME]
 //!               [--password-env VAR] [--client-id ID] [--base-topic T]
-//!               [--discovery-prefix P] [--no-admin] [--verbose]
+//!               [--discovery-prefix P] [--group N=NAME]… [--no-admin] [--verbose]
 //! ```
 //!
 //! The port defaults to `PANWEAVE_HUB_PORT`, else to the only Espressif
@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 const USAGE: &str = "usage: panweave-mqtt [--port PORT] [--broker HOST:PORT] [--username NAME]
                      [--password-env VAR] [--client-id ID] [--base-topic TOPIC]
-                     [--discovery-prefix PREFIX] [--no-admin] [--verbose]";
+                     [--discovery-prefix PREFIX] [--group N=NAME]... [--no-admin] [--verbose]";
 
 struct Options {
     port: Option<String>,
@@ -74,6 +74,20 @@ fn parse_options() -> Result<Options, String> {
             "--client-id" => o.client_id = value()?,
             "--base-topic" => o.config.base_topic = value()?,
             "--discovery-prefix" => o.config.discovery_prefix = value()?,
+            "--group" => {
+                let v = value()?;
+                let (n, name) = v
+                    .split_once('=')
+                    .ok_or_else(|| format!("--group {v}: expected N=NAME"))?;
+                let n = n.trim();
+                let group = n
+                    .strip_prefix("0x")
+                    .map_or_else(|| n.parse::<u16>(), |h| u16::from_str_radix(h, 16))
+                    .ok()
+                    .filter(|g| (1..=0xfff7).contains(g))
+                    .ok_or_else(|| format!("--group {v}: group 1–0xfff7 expected"))?;
+                o.config.groups.push((group, name.trim().to_string()));
+            }
             "--no-admin" => o.config.admin = false,
             "--verbose" => o.verbose = true,
             "--help" | "-h" => return Err(USAGE.into()),

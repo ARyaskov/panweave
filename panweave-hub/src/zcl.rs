@@ -5,7 +5,7 @@ use heapless::Vec;
 use panweave_codec::Writer;
 use panweave_zcl::Value;
 
-use crate::model::{Flag, PowerSource};
+use crate::model::{ColorMode, Flag, PowerSource};
 use crate::protocol::{AttributeData, MAX_ATTRIBUTE, Text};
 use crate::registry::{Device, cluster};
 
@@ -37,6 +37,28 @@ pub(crate) mod ias_cmd {
 }
 
 /// Power Configuration attributes.
+/// Color Control attributes (ZCL8 §5.2.2.2).
+pub(crate) mod color_attr {
+    /// `CurrentHue`.
+    pub const HUE: u16 = 0x0000;
+    /// `CurrentSaturation`.
+    pub const SATURATION: u16 = 0x0001;
+    /// `CurrentX`.
+    pub const X: u16 = 0x0003;
+    /// `CurrentY`.
+    pub const Y: u16 = 0x0004;
+    /// `ColorTemperatureMireds`.
+    pub const MIREDS: u16 = 0x0007;
+    /// `ColorMode`.
+    pub const MODE: u16 = 0x0008;
+    /// `ColorCapabilities`.
+    pub const CAPABILITIES: u16 = 0x400a;
+    /// `ColorTempPhysicalMinMireds`.
+    pub const MIREDS_MIN: u16 = 0x400b;
+    /// `ColorTempPhysicalMaxMireds`.
+    pub const MIREDS_MAX: u16 = 0x400c;
+}
+
 pub(crate) mod power_attr {
     /// BatteryVoltage (100 mV).
     pub const BATTERY_VOLTAGE: u16 = 0x0020;
@@ -122,9 +144,42 @@ pub(crate) fn reports_of(cluster_id: u16) -> &'static [Report] {
         max: 3600,
         change: None,
     }];
+    // Colour changes promptly, small drifts not at all (a transition
+    // would otherwise report every step).
+    const COLOR: &[Report] = &[
+        Report {
+            attribute: color_attr::MODE,
+            data_type: 0x30,
+            min: 1,
+            max: 3600,
+            change: None,
+        },
+        Report {
+            attribute: color_attr::X,
+            data_type: 0x21,
+            min: 1,
+            max: 3600,
+            change: Some(64),
+        },
+        Report {
+            attribute: color_attr::Y,
+            data_type: 0x21,
+            min: 1,
+            max: 3600,
+            change: Some(64),
+        },
+        Report {
+            attribute: color_attr::MIREDS,
+            data_type: 0x21,
+            min: 1,
+            max: 3600,
+            change: Some(2),
+        },
+    ];
     match cluster_id {
         cluster::ON_OFF => ON_OFF,
         cluster::LEVEL => LEVEL,
+        cluster::COLOR => COLOR,
         cluster::POWER_CONFIGURATION => POWER,
         cluster::TEMPERATURE => TEMPERATURE,
         cluster::HUMIDITY => HUMIDITY,
@@ -144,14 +199,26 @@ pub(crate) fn state_attributes(cluster_id: u16) -> &'static [u16] {
             power_attr::BATTERY_ALARM_STATE,
         ],
         cluster::IAS_ZONE => &[ias_attr::ZONE_STATE, ias_attr::ZONE_STATUS],
+        cluster::COLOR => &[
+            color_attr::CAPABILITIES,
+            color_attr::MIREDS_MIN,
+            color_attr::MIREDS_MAX,
+            color_attr::MODE,
+            color_attr::X,
+            color_attr::Y,
+            color_attr::MIREDS,
+            color_attr::HUE,
+            color_attr::SATURATION,
+        ],
         _ => &[],
     }
 }
 
 /// Clusters whose server state the hub tracks, in interview order.
-pub(crate) const TRACKED: [u16; 7] = [
+pub(crate) const TRACKED: [u16; 8] = [
     cluster::ON_OFF,
     cluster::LEVEL,
+    cluster::COLOR,
     cluster::POWER_CONFIGURATION,
     cluster::TEMPERATURE,
     cluster::HUMIDITY,
@@ -226,6 +293,8 @@ pub(crate) enum Applied {
     Unchanged,
     /// An IAS `ZoneStatus`: interpreted by the caller.
     ZoneStatus(u16),
+    /// The Color Control state changed.
+    Color,
     /// The model does not cover the attribute.
     Unmapped,
 }
@@ -361,6 +430,30 @@ pub(crate) fn apply(d: &mut Device, cluster_id: u16, attribute: u16, v: &Value<'
         (cluster::IAS_ZONE, ias_attr::CIE_ADDRESS) => {
             d.cie_address = v.as_u64();
             Applied::Unchanged
+        }
+        (cluster::COLOR, a) => {
+            let n = v.as_u64();
+            let u16v = n.and_then(|x| u16::try_from(x).ok());
+            let u8v = n.and_then(|x| u8::try_from(x).ok());
+            let c = &mut d.color;
+            let changed = match a {
+                color_attr::HUE => set(&mut c.hue, u8v.filter(|h| *h != 0xff)),
+                color_attr::SATURATION => set(&mut c.saturation, u8v.filter(|s| *s != 0xff)),
+                color_attr::X => set(&mut c.x, u16v),
+                color_attr::Y => set(&mut c.y, u16v),
+                // 0 is undefined, 0xffff invalid (§5.2.2.2.1.8).
+                color_attr::MIREDS => set(&mut c.mireds, u16v.filter(|m| *m != 0 && *m != 0xffff)),
+                color_attr::MODE => set(&mut c.mode, u8v.and_then(ColorMode::from_code)),
+                color_attr::CAPABILITIES => set(&mut c.capabilities, u16v),
+                color_attr::MIREDS_MIN => set(&mut c.mireds_min, u16v.filter(|m| *m != 0)),
+                color_attr::MIREDS_MAX => set(&mut c.mireds_max, u16v.filter(|m| *m != 0)),
+                _ => return Applied::Unmapped,
+            };
+            if changed {
+                Applied::Color
+            } else {
+                Applied::Unchanged
+            }
         }
         _ => Applied::Unmapped,
     }

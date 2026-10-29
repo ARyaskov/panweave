@@ -379,3 +379,134 @@ fn a_device_that_leaves_is_withdrawn() {
     assert_eq!(h.retained(&light), Some(&[][..]));
     assert!(!h.bridge.devices().any(|i| i == BULB));
 }
+
+const COLOR_BULB: u64 = 0x00AA_0000_0000_0010;
+
+fn color_host(cfg: Config) -> Host {
+    let (mut sim, c) = network();
+    join(&mut sim, c, "color", color_bulb(COLOR_BULB, 10), COLOR_BULB);
+    sim.run_for(Duration::from_secs(5));
+    let mut h = Host::new(sim, c, cfg);
+    h.start();
+    h
+}
+
+#[test]
+fn a_colour_light_offers_its_colour_modes_and_takes_colour_commands() {
+    let mut h = color_host(Config::default());
+    let light = h.json(&config_topic("light", COLOR_BULB, "light"));
+    assert_eq!(
+        light["supported_color_modes"],
+        serde_json::json!(["color_temp", "xy"])
+    );
+    assert_eq!(light["min_mireds"], 153);
+    assert_eq!(light["max_mireds"], 500);
+
+    let set = format!("panweave/{}/set", device_id(COLOR_BULB));
+    h.mqtt(&set, r#"{"state":"ON","color_temp":300}"#);
+    assert!(h.requests.contains(&Request::Light {
+        ieee: COLOR_BULB,
+        endpoint: 0,
+        command: LightCommand::TurnOn
+    }));
+    assert!(h.requests.contains(&Request::Light {
+        ieee: COLOR_BULB,
+        endpoint: 0,
+        command: LightCommand::SetColorTemperature {
+            mireds: 300,
+            transition_ds: 0
+        }
+    }));
+    h.sim_for(10);
+    let state = h.json(&format!("panweave/{}", device_id(COLOR_BULB)));
+    assert_eq!(state["state"], "ON", "{state}");
+    assert_eq!(state["color_mode"], "color_temp", "{state}");
+    assert_eq!(state["color_temp"], 300, "{state}");
+
+    h.mqtt(&set, r#"{"color":{"x":0.25,"y":0.1875},"transition":1}"#);
+    assert!(h.requests.contains(&Request::Light {
+        ieee: COLOR_BULB,
+        endpoint: 0,
+        command: LightCommand::SetColorXy {
+            x: 16384,
+            y: 12288,
+            transition_ds: 10
+        }
+    }));
+    h.sim_for(10);
+    let state = h.json(&format!("panweave/{}", device_id(COLOR_BULB)));
+    assert_eq!(state["color_mode"], "xy", "{state}");
+    assert_eq!(state["color"]["x"], 0.25, "{state}");
+    assert_eq!(state["color"]["y"], 0.1875, "{state}");
+}
+
+#[test]
+fn configured_groups_are_lights_and_scenes_are_requests() {
+    let mut h = color_host(Config {
+        groups: vec![(0x0102, "Living room".into())],
+        ..Config::default()
+    });
+    assert!(
+        h.bridge
+            .subscriptions()
+            .contains(&"panweave/group/+/set".to_string())
+    );
+    let group = h.json("homeassistant/light/panweave_group_258/light/config");
+    assert_eq!(group["name"], "Living room");
+    assert_eq!(group["optimistic"], true);
+    assert_eq!(group["command_topic"], "panweave/group/258/set");
+
+    h.mqtt(
+        "panweave/bridge/request/group_add",
+        &format!(r#"{{"id":"{}","group":258}}"#, device_id(COLOR_BULB)),
+    );
+    assert!(h.requests.contains(&Request::AddGroup {
+        ieee: COLOR_BULB,
+        endpoint: 0,
+        group: 258
+    }));
+    h.sim_for(10);
+    h.mqtt("panweave/group/258/set", r#"{"state":"OFF"}"#);
+    h.sim_for(10);
+    assert_eq!(
+        h.json(&format!("panweave/{}", device_id(COLOR_BULB)))["state"],
+        "OFF"
+    );
+    h.mqtt("panweave/group/258/set", r#"{"state":"ON"}"#);
+    assert!(h.requests.contains(&Request::GroupLight {
+        group: 258,
+        command: LightCommand::TurnOn
+    }));
+    h.sim_for(10);
+    assert_eq!(
+        h.json(&format!("panweave/{}", device_id(COLOR_BULB)))["state"],
+        "ON"
+    );
+    // A group that is not configured is not commanded.
+    let before = h.requests.len();
+    h.mqtt("panweave/group/9/set", "ON");
+    assert_eq!(h.requests.len(), before);
+
+    h.mqtt(
+        "panweave/bridge/request/scene_store",
+        &format!(
+            r#"{{"id":"{}","group":258,"scene":2}}"#,
+            device_id(COLOR_BULB)
+        ),
+    );
+    h.mqtt(
+        "panweave/bridge/request/scene_recall",
+        r#"{"group":258,"scene":2,"transition":0.5}"#,
+    );
+    assert!(h.requests.contains(&Request::StoreScene {
+        ieee: COLOR_BULB,
+        endpoint: 0,
+        group: 258,
+        scene: 2
+    }));
+    assert!(h.requests.contains(&Request::RecallScene {
+        group: 258,
+        scene: 2,
+        transition_ds: 5
+    }));
+}

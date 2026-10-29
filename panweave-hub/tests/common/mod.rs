@@ -23,7 +23,9 @@ use panweave_types::{
     ClusterId, DeviceId, Endpoint, ExtendedAddress, LogicalDeviceType, ProfileId,
 };
 use panweave_zcl::clusters::ias_zone::{self, EnrollMode};
-use panweave_zcl::clusters::{identify, level, on_off, power_configuration};
+use panweave_zcl::clusters::{
+    color_control, groups, identify, level, on_off, power_configuration, scenes,
+};
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zdo::descriptor::SimpleDescriptor;
 
@@ -244,6 +246,51 @@ pub fn bulb() -> SimStack {
         DeviceId(0x0101),
         1,
         &[ClusterId(0), identify::ID, on_off::ID, level::ID],
+        &[],
+    )
+    .unwrap();
+    s.add_endpoint(desc, ep).unwrap();
+    s
+}
+
+/// An extended colour light (router): xy and colour temperature
+/// 153–500 mireds, with Groups and Scenes servers.
+pub fn color_bulb(ieee: u64, seed: u64) -> SimStack {
+    let mut s = device_stack(
+        ieee,
+        LogicalDeviceType::Router,
+        false,
+        b"color-bulb-sim",
+        seed,
+    );
+    let mut ep = EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION);
+    ep.add_instance(identify::server().unwrap()).unwrap();
+    ep.add_instance(groups::server().unwrap()).unwrap();
+    ep.add_instance(scenes::server().unwrap()).unwrap();
+    ep.add_instance(on_off::server().unwrap()).unwrap();
+    ep.add_instance(level::server(1, 254).unwrap()).unwrap();
+    ep.add_instance(
+        color_control::server(
+            color_control::capability::XY | color_control::capability::COLOR_TEMPERATURE,
+            (153, 500),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let desc = SimpleDescriptor::new(
+        Endpoint(1),
+        ProfileId::HOME_AUTOMATION,
+        DeviceId(0x010d),
+        1,
+        &[
+            ClusterId(0),
+            identify::ID,
+            groups::ID,
+            scenes::ID,
+            on_off::ID,
+            level::ID,
+            color_control::ID,
+        ],
         &[],
     )
     .unwrap();

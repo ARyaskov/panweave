@@ -12,8 +12,8 @@ use heapless::Vec;
 use panweave_types::time::Instant;
 
 use crate::model::{
-    Capabilities, DeviceCategory, DeviceState, InterviewStage, InterviewStatus, LogicalType,
-    PowerSource,
+    Capabilities, ColorState, DeviceCategory, DeviceState, InterviewStage, InterviewStatus,
+    LogicalType, PowerSource,
 };
 use crate::protocol::{
     DeviceInfo, DeviceSummary, EndpointDescriptor, MAX_BUILD, MAX_ENDPOINTS, MAX_NAME, Text,
@@ -34,6 +34,10 @@ pub mod cluster {
     pub const POWER_CONFIGURATION: u16 = 0x0001;
     /// Identify.
     pub const IDENTIFY: u16 = 0x0003;
+    /// Groups.
+    pub const GROUPS: u16 = 0x0004;
+    /// Scenes.
+    pub const SCENES: u16 = 0x0005;
     /// On/Off.
     pub const ON_OFF: u16 = 0x0006;
     /// Level Control.
@@ -124,6 +128,9 @@ pub struct Device {
     /// Normalized state (not persisted: unknown after a reboot until the
     /// device reports or answers).
     pub state: DeviceState,
+    /// Color Control server (not persisted: read again by the state
+    /// synchronization after a reboot).
+    pub color: ColorState,
     /// Interview bookkeeping.
     pub interview: Interview,
     /// When the device was last heard.
@@ -175,6 +182,7 @@ impl Device {
             capabilities: Capabilities::default(),
             zone: None,
             state: DeviceState::default(),
+            color: ColorState::default(),
             interview: Interview::default(),
             last_seen: None,
             lqi: None,

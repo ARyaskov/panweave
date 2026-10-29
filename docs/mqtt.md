@@ -26,6 +26,7 @@ cargo run --release -p panweave-mqtt -- --broker 127.0.0.1:1883
 | `--client-id ID` | `panweave-mqtt` | MQTT client identifier |
 | `--base-topic T` | `panweave` | prefix of the bridge's topics |
 | `--discovery-prefix P` | `homeassistant` | Home Assistant's discovery prefix |
+| `--group N=NAME` | none | offer group `N` (1–0xfff7, decimal or `0x` hex) as a light; repeatable |
 | `--no-admin` | admin on | ignore the network requests (`bridge/request/…`) |
 | `--verbose` | off | log every publication |
 
@@ -44,6 +45,7 @@ interview's category and capabilities:
 | Capability | Entity |
 |---|---|
 | lights (On/Off, Level) | `light`, JSON schema, brightness in percent |
+| colour lights (Color Control) | the same `light` with the colour modes the light reports (`color_temp`, `xy`, else `hs`) and its mired range |
 | other On/Off outputs | `switch` |
 | contact | `binary_sensor`, class `door` |
 | water leak | `binary_sensor`, class `moisture` |
@@ -52,8 +54,9 @@ interview's category and capabilities:
 | temperature, humidity | `sensor` (°C, %) |
 | battery percentage, voltage | `sensor` (%, mV; diagnostic) |
 
-Colour, groups and scenes are not offered yet (the hub does not send
-Color Control commands).
+Each `--group` is a further `light` on the hub's device. A group command
+is one group-addressed frame: nothing confirms it, so the group light is
+optimistic; the members' own entities show what they did.
 
 ## Topics
 
@@ -68,9 +71,13 @@ Color Control commands).
 | `<base>/bridge/request/permit_join` | in | seconds (0 closes), `ON` (254 s), `OFF`, or `{"time"}` |
 | `<base>/bridge/request/remove` | in | device id, or `{"id", "force"}` (`force`: registry only, no Leave) |
 | `<base>/bridge/request/interview` | in | device id |
+| `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
+| `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}`: the device's current state becomes the scene |
+| `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |
+| `<base>/group/<n>/set` | in | as `<base>/<id>/set`, to the members of group `n` (configured with `--group`) |
 | `<base>/<id>` | out, retained | the state object |
 | `<base>/<id>/availability` | out, retained | `online` / `offline` |
-| `<base>/<id>/set` | in | `{"state": "ON"/"OFF"/"TOGGLE", "brightness": 0–100, "transition": seconds}`, or `ON` / `OFF` / `TOGGLE` |
+| `<base>/<id>/set` | in | `{"state": "ON"/"OFF"/"TOGGLE", "brightness": 0–100, "color_temp": mireds, "color": {"x", "y"} or {"h", "s"}, "transition": seconds}`, or `ON` / `OFF` / `TOGGLE` |
 | `<base>/<id>/event` | out | `{"event"}`: `contact-opened`, `water-leak-detected`, `battery-low`, … |
 | `<base>/<id>/attribute` | out | an attribute report the state model does not cover |
 | `<discovery>/status` | in | `online`: Home Assistant restarted; everything is republished |
@@ -83,6 +90,10 @@ The state object always carries every field, `null` when unknown:
  "battery": null, "voltage": null, "temperature": null, "humidity": null,
  "zone_status": null}
 ```
+
+A colour light adds `color_mode` (`color_temp`, `xy` or `hs`),
+`color_temp` (mireds) and `color` (`x`, `y` in 0–1; `h` in degrees, `s`
+in percent, when the light reports hue and saturation).
 
 ## Availability
 

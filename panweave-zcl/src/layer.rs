@@ -960,9 +960,16 @@ impl<const E: usize, const C: usize, const A: usize, P: ZclProfile> Zcl<E, C, A,
             }
             if !has_cluster {
                 // Responses may still target a client instance that only
-                // sent the request; hand them up regardless.
-                if frame.header.control.frame_type == FrameType::Global
-                    && is_global_response(frame.header.command)
+                // sent the request; hand them up regardless. A server's
+                // cluster-specific command to a client is such a response
+                // (Add Group Response, Store Scene Response, …): the
+                // application that sent the request matches it by TSN.
+                let server_to_client = frame.header.control.frame_type
+                    == FrameType::ClusterSpecific
+                    && frame.header.control.direction == Direction::ToClient;
+                if server_to_client
+                    || (frame.header.control.frame_type == FrameType::Global
+                        && is_global_response(frame.header.command))
                 {
                     result.get_or_insert(ZclIndication::Response {
                         origin,

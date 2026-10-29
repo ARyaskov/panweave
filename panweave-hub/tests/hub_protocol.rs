@@ -372,6 +372,14 @@ fn diagnostic_responses() -> Vec<Response> {
         Response::WifiScan(Some(largest_wifi_scan())),
         Response::WifiScan(Some(panweave_hub::protocol::WifiScan::default())),
         Response::WifiScan(None),
+        Response::LightColor {
+            ieee: 0x0011_2233_4455_6677,
+            color: panweave_hub::model::ColorState::default(),
+        },
+        Response::LightColor {
+            ieee: 1,
+            color: full_color(),
+        },
         Response::CapturePage(CapturePage {
             active: false,
             mode: CaptureMode::Metadata,
@@ -547,6 +555,65 @@ fn every_message() -> Vec<Message> {
                 transition_ds: 10,
             },
         },
+        Request::Light {
+            ieee,
+            endpoint: 1,
+            command: LightCommand::SetColorTemperature {
+                mireds: 370,
+                transition_ds: 4,
+            },
+        },
+        Request::Light {
+            ieee,
+            endpoint: 1,
+            command: LightCommand::SetColorXy {
+                x: 0x4ccc,
+                y: 0xfeff,
+                transition_ds: 0,
+            },
+        },
+        Request::Light {
+            ieee,
+            endpoint: 1,
+            command: LightCommand::SetHueSaturation {
+                hue: 0xfe,
+                saturation: 1,
+                transition_ds: 0xffff,
+            },
+        },
+        Request::GetLightColor { ieee },
+        Request::AddGroup {
+            ieee,
+            endpoint: 0,
+            group: 0x1234,
+        },
+        Request::RemoveGroup {
+            ieee,
+            endpoint: 2,
+            group: 0xfff7,
+        },
+        Request::GroupLight {
+            group: 7,
+            command: LightCommand::SetBrightness {
+                percent: 30,
+                transition_ds: 15,
+            },
+        },
+        Request::GroupLight {
+            group: 7,
+            command: LightCommand::Toggle,
+        },
+        Request::StoreScene {
+            ieee,
+            endpoint: 1,
+            group: 7,
+            scene: 3,
+        },
+        Request::RecallScene {
+            group: 7,
+            scene: 3,
+            transition_ds: 0,
+        },
         Request::RemoveDevice { ieee, leave: true },
         Request::GetDiagnostics,
         Request::GetBootReport,
@@ -713,6 +780,10 @@ fn every_message() -> Vec<Message> {
             detail: 3,
         },
         Event::EventsDropped { count: 500 },
+        Event::LightColorChanged {
+            ieee: 2,
+            color: full_color(),
+        },
     ];
     for e in [
         SensorEvent::WaterLeakDetected,
@@ -750,6 +821,20 @@ fn every_message() -> Vec<Message> {
         });
     }
     out
+}
+
+fn full_color() -> panweave_hub::model::ColorState {
+    panweave_hub::model::ColorState {
+        capabilities: Some(0x1f),
+        mireds_min: Some(153),
+        mireds_max: Some(500),
+        mode: Some(panweave_hub::model::ColorMode::Xy),
+        x: Some(0x616b),
+        y: Some(0x607d),
+        mireds: Some(250),
+        hue: Some(0),
+        saturation: Some(254),
+    }
 }
 
 #[test]

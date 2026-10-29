@@ -48,8 +48,8 @@ use heapless::Vec;
 use panweave_codec::{CodecError, Reader, Writer};
 
 use crate::model::{
-    Capabilities, ContactState, DeviceCategory, DeviceState, Flag, Ieee, InterviewStage,
-    InterviewStatus, LeakState, LogicalType, PowerSource,
+    Capabilities, ColorMode, ColorState, ContactState, DeviceCategory, DeviceState, Flag, Ieee,
+    InterviewStage, InterviewStatus, LeakState, LogicalType, PowerSource,
 };
 
 /// The protocol version this crate speaks.
@@ -263,6 +263,126 @@ pub enum LightCommand {
         /// Transition time in tenths of a second.
         transition_ds: u16,
     },
+    /// Color Control Move to Color Temperature (0.4).
+    SetColorTemperature {
+        /// Mireds (1 000 000 / kelvin).
+        mireds: u16,
+        /// Transition time in tenths of a second.
+        transition_ds: u16,
+    },
+    /// Color Control Move to Color: CIE 1931 x and y × 65536 (0.4).
+    SetColorXy {
+        /// x.
+        x: u16,
+        /// y.
+        y: u16,
+        /// Transition time in tenths of a second.
+        transition_ds: u16,
+    },
+    /// Color Control Move to Hue and Saturation (0.4).
+    SetHueSaturation {
+        /// Hue, 0–254 for 0–360°.
+        hue: u8,
+        /// Saturation, 0–254.
+        saturation: u8,
+        /// Transition time in tenths of a second.
+        transition_ds: u16,
+    },
+}
+
+impl LightCommand {
+    /// The wire code (the request tag of [`Request::Light`]).
+    const fn code(self) -> u8 {
+        match self {
+            LightCommand::TurnOn => 0x0c,
+            LightCommand::TurnOff => 0x0d,
+            LightCommand::Toggle => 0x0e,
+            LightCommand::SetBrightness { .. } => 0x0f,
+            LightCommand::SetColorTemperature { .. } => 0x24,
+            LightCommand::SetColorXy { .. } => 0x25,
+            LightCommand::SetHueSaturation { .. } => 0x26,
+        }
+    }
+
+    const fn is_code(code: u8) -> bool {
+        matches!(code, 0x0c..=0x0f | 0x24..=0x26)
+    }
+
+    /// The ZCL cluster that carries the command.
+    pub const fn cluster(self) -> u16 {
+        match self {
+            LightCommand::TurnOn | LightCommand::TurnOff | LightCommand::Toggle => 0x0006,
+            LightCommand::SetBrightness { .. } => 0x0008,
+            LightCommand::SetColorTemperature { .. }
+            | LightCommand::SetColorXy { .. }
+            | LightCommand::SetHueSaturation { .. } => 0x0300,
+        }
+    }
+
+    fn write_params(self, w: &mut Writer<'_>) -> Result<(), CodecError> {
+        match self {
+            LightCommand::TurnOn | LightCommand::TurnOff | LightCommand::Toggle => Ok(()),
+            LightCommand::SetBrightness {
+                percent,
+                transition_ds,
+            } => {
+                w.u8(percent)?;
+                w.u16_le(transition_ds)
+            }
+            LightCommand::SetColorTemperature {
+                mireds,
+                transition_ds,
+            } => {
+                w.u16_le(mireds)?;
+                w.u16_le(transition_ds)
+            }
+            LightCommand::SetColorXy {
+                x,
+                y,
+                transition_ds,
+            } => {
+                w.u16_le(x)?;
+                w.u16_le(y)?;
+                w.u16_le(transition_ds)
+            }
+            LightCommand::SetHueSaturation {
+                hue,
+                saturation,
+                transition_ds,
+            } => {
+                w.u8(hue)?;
+                w.u8(saturation)?;
+                w.u16_le(transition_ds)
+            }
+        }
+    }
+
+    fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, ProtocolError> {
+        Ok(match code {
+            0x0c => LightCommand::TurnOn,
+            0x0d => LightCommand::TurnOff,
+            0x0e => LightCommand::Toggle,
+            0x0f => LightCommand::SetBrightness {
+                percent: r.u8()?,
+                transition_ds: r.u16_le()?,
+            },
+            0x24 => LightCommand::SetColorTemperature {
+                mireds: r.u16_le()?,
+                transition_ds: r.u16_le()?,
+            },
+            0x25 => LightCommand::SetColorXy {
+                x: r.u16_le()?,
+                y: r.u16_le()?,
+                transition_ds: r.u16_le()?,
+            },
+            0x26 => LightCommand::SetHueSaturation {
+                hue: r.u8()?,
+                saturation: r.u8()?,
+                transition_ds: r.u16_le()?,
+            },
+            t => return Err(ProtocolError::UnknownTag(t)),
+        })
+    }
 }
 
 /// Requests (host → hub).
@@ -435,6 +555,60 @@ pub enum Request {
     /// What the last radio-switch experiment heard: access points in
     /// range, the strongest ones, the configured SSID (0.3.x).
     GetWifiScan,
+    /// A colour light's capabilities and colour (0.4).
+    GetLightColor {
+        /// The device.
+        ieee: u64,
+    },
+    /// Adds a device's endpoint to a group (Groups Add Group; 0.4).
+    AddGroup {
+        /// The device.
+        ieee: u64,
+        /// Its endpoint, 0 for the first with a Groups server.
+        endpoint: u8,
+        /// The group (0x0001–0xfff7).
+        group: u16,
+    },
+    /// Removes a device's endpoint from a group (0.4).
+    RemoveGroup {
+        /// The device.
+        ieee: u64,
+        /// Its endpoint, 0 for the first with a Groups server.
+        endpoint: u8,
+        /// The group.
+        group: u16,
+    },
+    /// A light command to every member of a group, in one group-addressed
+    /// frame: answered [`Response::Done`] once sent; nothing confirms it
+    /// (0.4).
+    GroupLight {
+        /// The group.
+        group: u16,
+        /// The command.
+        command: LightCommand,
+    },
+    /// Stores a device's current state as scene `scene` of `group`
+    /// (Scenes Store Scene; 0.4).
+    StoreScene {
+        /// The device.
+        ieee: u64,
+        /// Its endpoint, 0 for the first with a Scenes server.
+        endpoint: u8,
+        /// The group the scene belongs to (0: no group).
+        group: u16,
+        /// The scene.
+        scene: u8,
+    },
+    /// Recalls scene `scene` on every member of `group` (one
+    /// group-addressed frame; [`Response::Done`] once sent; 0.4).
+    RecallScene {
+        /// The group.
+        group: u16,
+        /// The scene.
+        scene: u8,
+        /// Transition time in tenths of a second (0: the scene's own).
+        transition_ds: u16,
+    },
 }
 
 impl Request {
@@ -454,11 +628,17 @@ impl Request {
             | Request::GetStorageDiagnostics
             | Request::GetRuntimeDiagnostics
             | Request::GetTraceConfiguration
+            | Request::GetLightColor { .. }
             | Request::ReadTrace { .. } => Access::Monitor,
             Request::InterviewDevice { .. }
             | Request::ReadAttribute { .. }
             | Request::ConfigureReporting { .. }
             | Request::Bind { .. }
+            | Request::AddGroup { .. }
+            | Request::RemoveGroup { .. }
+            | Request::GroupLight { .. }
+            | Request::StoreScene { .. }
+            | Request::RecallScene { .. }
             | Request::Light { .. } => Access::Control,
             Request::PermitJoin { .. }
             | Request::CloseNetwork
@@ -489,12 +669,7 @@ impl Request {
             Request::ReadAttribute { .. } => 0x09,
             Request::ConfigureReporting { .. } => 0x0a,
             Request::Bind { .. } => 0x0b,
-            Request::Light { command, .. } => match command {
-                LightCommand::TurnOn => 0x0c,
-                LightCommand::TurnOff => 0x0d,
-                LightCommand::Toggle => 0x0e,
-                LightCommand::SetBrightness { .. } => 0x0f,
-            },
+            Request::Light { command, .. } => command.code(),
             Request::RemoveDevice { .. } => 0x10,
             Request::GetDiagnostics => 0x11,
             Request::GetBootReport => 0x12,
@@ -515,6 +690,12 @@ impl Request {
             Request::QueueTestAlert => 0x21,
             Request::RunRadioProbe => 0x22,
             Request::GetWifiScan => 0x23,
+            Request::GetLightColor { .. } => 0x27,
+            Request::AddGroup { .. } => 0x28,
+            Request::RemoveGroup { .. } => 0x29,
+            Request::GroupLight { .. } => 0x2a,
+            Request::StoreScene { .. } => 0x2b,
+            Request::RecallScene { .. } => 0x2c,
         }
     }
 
@@ -569,7 +750,47 @@ impl Request {
             Request::ListDevices { start } => w.u8(*start),
             Request::GetDevice { ieee }
             | Request::InterviewDevice { ieee }
+            | Request::GetLightColor { ieee }
             | Request::GetDeviceState { ieee } => w.u64_le(*ieee),
+            Request::AddGroup {
+                ieee,
+                endpoint,
+                group,
+            }
+            | Request::RemoveGroup {
+                ieee,
+                endpoint,
+                group,
+            } => {
+                w.u64_le(*ieee)?;
+                w.u8(*endpoint)?;
+                w.u16_le(*group)
+            }
+            Request::GroupLight { group, command } => {
+                w.u16_le(*group)?;
+                w.u8(command.code())?;
+                command.write_params(w)
+            }
+            Request::StoreScene {
+                ieee,
+                endpoint,
+                group,
+                scene,
+            } => {
+                w.u64_le(*ieee)?;
+                w.u8(*endpoint)?;
+                w.u16_le(*group)?;
+                w.u8(*scene)
+            }
+            Request::RecallScene {
+                group,
+                scene,
+                transition_ds,
+            } => {
+                w.u16_le(*group)?;
+                w.u8(*scene)?;
+                w.u16_le(*transition_ds)
+            }
             Request::ReadAttribute {
                 ieee,
                 endpoint,
@@ -616,15 +837,7 @@ impl Request {
             } => {
                 w.u64_le(*ieee)?;
                 w.u8(*endpoint)?;
-                if let LightCommand::SetBrightness {
-                    percent,
-                    transition_ds,
-                } = command
-                {
-                    w.u8(*percent)?;
-                    w.u16_le(*transition_ds)?;
-                }
-                Ok(())
+                command.write_params(w)
             }
             Request::RemoveDevice { ieee, leave } => {
                 w.u64_le(*ieee)?;
@@ -665,18 +878,10 @@ impl Request {
                 endpoint: r.u8()?,
                 cluster: r.u16_le()?,
             },
-            0x0c..=0x0f => {
+            t if LightCommand::is_code(t) => {
                 let ieee = r.u64_le()?;
                 let endpoint = r.u8()?;
-                let command = match tag {
-                    0x0c => LightCommand::TurnOn,
-                    0x0d => LightCommand::TurnOff,
-                    0x0e => LightCommand::Toggle,
-                    _ => LightCommand::SetBrightness {
-                        percent: r.u8()?,
-                        transition_ds: r.u16_le()?,
-                    },
-                };
+                let command = LightCommand::read(t, r)?;
                 Request::Light {
                     ieee,
                     endpoint,
@@ -723,6 +928,39 @@ impl Request {
             0x21 => Request::QueueTestAlert,
             0x22 => Request::RunRadioProbe,
             0x23 => Request::GetWifiScan,
+            0x27 => Request::GetLightColor { ieee: r.u64_le()? },
+            0x28 => Request::AddGroup {
+                ieee: r.u64_le()?,
+                endpoint: r.u8()?,
+                group: r.u16_le()?,
+            },
+            0x29 => Request::RemoveGroup {
+                ieee: r.u64_le()?,
+                endpoint: r.u8()?,
+                group: r.u16_le()?,
+            },
+            0x2a => {
+                let group = r.u16_le()?;
+                let code = r.u8()?;
+                if !LightCommand::is_code(code) {
+                    return Err(ProtocolError::Malformed);
+                }
+                Request::GroupLight {
+                    group,
+                    command: LightCommand::read(code, r)?,
+                }
+            }
+            0x2b => Request::StoreScene {
+                ieee: r.u64_le()?,
+                endpoint: r.u8()?,
+                group: r.u16_le()?,
+                scene: r.u8()?,
+            },
+            0x2c => Request::RecallScene {
+                group: r.u16_le()?,
+                scene: r.u8()?,
+                transition_ds: r.u16_le()?,
+            },
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -1000,6 +1238,13 @@ pub enum Response {
     /// To [`Request::GetWifiScan`] (`None`: no experiment has scanned
     /// since boot).
     WifiScan(Option<WifiScan>),
+    /// To [`Request::GetLightColor`].
+    LightColor {
+        /// The device.
+        ieee: u64,
+        /// Its Color Control server.
+        color: ColorState,
+    },
     /// The request failed.
     Error(ErrorCode),
 }
@@ -1314,6 +1559,13 @@ pub enum Event {
         /// How many.
         count: u16,
     },
+    /// A colour light's Color Control state changed (0.4).
+    LightColorChanged {
+        /// The device.
+        ieee: u64,
+        /// Its Color Control server.
+        color: ColorState,
+    },
 }
 
 impl Event {
@@ -1333,6 +1585,7 @@ impl Event {
             Event::CommandFailed { .. } => 0x13,
             Event::HubError { .. } => 0x14,
             Event::EventsDropped { .. } => 0x15,
+            Event::LightColorChanged { .. } => 0x16,
         }
     }
 
@@ -1419,6 +1672,10 @@ impl Event {
                 w.u16_le(*detail)
             }
             Event::EventsDropped { count } => w.u16_le(*count),
+            Event::LightColorChanged { ieee, color } => {
+                w.u64_le(*ieee)?;
+                write_color(w, color)
+            }
         }
     }
 
@@ -1484,6 +1741,10 @@ impl Event {
                 detail: r.u16_le()?,
             },
             0x15 => Event::EventsDropped { count: r.u16_le()? },
+            0x16 => Event::LightColorChanged {
+                ieee: r.u64_le()?,
+                color: read_color(r)?,
+            },
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -1510,6 +1771,7 @@ impl Response {
             Response::SecurityStatus(_) => 0x10,
             Response::AlertStatus(_) => 0x11,
             Response::WifiScan(_) => 0x12,
+            Response::LightColor { .. } => 0x13,
             Response::Error(_) => 0x7f,
         }
     }
@@ -1553,6 +1815,10 @@ impl Response {
                 write_opt_u32(w, *last_seen_s)
             }
             Response::Accepted { command } => w.u16_le(*command),
+            Response::LightColor { ieee, color } => {
+                w.u64_le(*ieee)?;
+                write_color(w, color)
+            }
             Response::Diagnostics(d) => write_diagnostics(w, d),
             Response::BootReport(b) => diagnostics::write_boot_report(w, b),
             Response::RadioDiagnostics(d) => diagnostics::write_radio(w, d),
@@ -1622,6 +1888,10 @@ impl Response {
             0x10 => Response::SecurityStatus(security::read_security(r)?),
             0x11 => Response::AlertStatus(alerts::read_status(r)?),
             0x12 => Response::WifiScan(alerts::read_scan(r)?),
+            0x13 => Response::LightColor {
+                ieee: r.u64_le()?,
+                color: read_color(r)?,
+            },
             0x7f => Response::Error(ErrorCode::from_code(r.u8()?)),
             t => return Err(ProtocolError::UnknownTag(t)),
         })
@@ -1858,6 +2128,32 @@ fn read_attribute(r: &mut Reader<'_>) -> Result<AttributeData, ProtocolError> {
     Ok(AttributeData {
         data_type: r.u8()?,
         raw: read_text(r)?,
+    })
+}
+
+fn write_color(w: &mut Writer<'_>, c: &ColorState) -> Result<(), CodecError> {
+    write_opt_u16(w, c.capabilities)?;
+    write_opt_u16(w, c.mireds_min)?;
+    write_opt_u16(w, c.mireds_max)?;
+    w.u8(c.mode.map_or(0xff, ColorMode::code))?;
+    write_opt_u16(w, c.x)?;
+    write_opt_u16(w, c.y)?;
+    write_opt_u16(w, c.mireds)?;
+    write_opt_u8(w, c.hue)?;
+    write_opt_u8(w, c.saturation)
+}
+
+fn read_color(r: &mut Reader<'_>) -> Result<ColorState, ProtocolError> {
+    Ok(ColorState {
+        capabilities: read_opt_u16(r)?,
+        mireds_min: read_opt_u16(r)?,
+        mireds_max: read_opt_u16(r)?,
+        mode: ColorMode::from_code(r.u8()?),
+        x: read_opt_u16(r)?,
+        y: read_opt_u16(r)?,
+        mireds: read_opt_u16(r)?,
+        hue: read_opt_u8(r)?,
+        saturation: read_opt_u8(r)?,
     })
 }
 

@@ -238,6 +238,32 @@ fn read_write_and_discover_attributes() {
 }
 
 #[test]
+fn a_server_response_to_a_client_without_an_instance_is_handed_up() {
+    // The endpoint sent Add Group as a client without a Groups client
+    // instance: the Add Group Response comes up for the application to
+    // match, without a Default Response UNSUPPORTED_CLUSTER.
+    let mut zcl = server();
+    let header = Header::cluster_specific(
+        panweave_types::TransactionSequence(8),
+        CommandId(0),
+        Direction::ToClient,
+    );
+    let bytes = frame(&header, &[0x00, 0x02, 0x01]);
+    let out = zcl.on_data(
+        &ind(ClusterId(0x0004), &bytes, false),
+        &mut GroupTable::<panweave_types::capacity::Cap<4>>::new(),
+    );
+    match out {
+        Some(ZclIndication::Response { origin, payload }) => {
+            assert_eq!(origin.cluster, ClusterId(0x0004));
+            assert_eq!(payload, &[0x00, 0x02, 0x01]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(zcl.next_action().is_none());
+}
+
+#[test]
 fn default_responses_and_cluster_specific_commands() {
     let mut zcl = server();
     // Unknown cluster: Default Response UNSUPPORTED_CLUSTER.

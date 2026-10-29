@@ -558,6 +558,93 @@ pub struct DeviceState {
     pub zone_status: Option<u16>,
 }
 
+/// Color Control `ColorMode` (ZCL8 §5.2.2.2.1.9): which attributes set
+/// the light's colour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ColorMode {
+    /// `CurrentHue` and `CurrentSaturation`.
+    HueSaturation,
+    /// `CurrentX` and `CurrentY`.
+    Xy,
+    /// `ColorTemperatureMireds`.
+    Temperature,
+}
+
+impl ColorMode {
+    /// The attribute value.
+    pub const fn code(self) -> u8 {
+        match self {
+            ColorMode::HueSaturation => 0,
+            ColorMode::Xy => 1,
+            ColorMode::Temperature => 2,
+        }
+    }
+
+    /// The mode of an attribute value.
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(ColorMode::HueSaturation),
+            1 => Some(ColorMode::Xy),
+            2 => Some(ColorMode::Temperature),
+            _ => None,
+        }
+    }
+
+    /// A short name for displays.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ColorMode::HueSaturation => "hs",
+            ColorMode::Xy => "xy",
+            ColorMode::Temperature => "color-temperature",
+        }
+    }
+}
+
+/// A colour light's Color Control server: what it supports and its
+/// current colour, as read or reported. `None`: not known (yet).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ColorState {
+    /// `ColorCapabilities` (bits [`ColorState::HUE_SATURATION`] …).
+    pub capabilities: Option<u16>,
+    /// `ColorTempPhysicalMinMireds`.
+    pub mireds_min: Option<u16>,
+    /// `ColorTempPhysicalMaxMireds`.
+    pub mireds_max: Option<u16>,
+    /// `ColorMode`.
+    pub mode: Option<ColorMode>,
+    /// `CurrentX` (CIE 1931 x × 65536).
+    pub x: Option<u16>,
+    /// `CurrentY`.
+    pub y: Option<u16>,
+    /// `ColorTemperatureMireds`.
+    pub mireds: Option<u16>,
+    /// `CurrentHue` (0–254 for 0–360°).
+    pub hue: Option<u8>,
+    /// `CurrentSaturation` (0–254).
+    pub saturation: Option<u8>,
+}
+
+impl ColorState {
+    /// Capability: hue and saturation.
+    pub const HUE_SATURATION: u16 = 1 << 0;
+    /// Capability: enhanced hue.
+    pub const ENHANCED_HUE: u16 = 1 << 1;
+    /// Capability: colour loop.
+    pub const COLOR_LOOP: u16 = 1 << 2;
+    /// Capability: CIE xy.
+    pub const XY: u16 = 1 << 3;
+    /// Capability: colour temperature.
+    pub const TEMPERATURE: u16 = 1 << 4;
+
+    /// Whether the light is known to support all of `capabilities`.
+    pub const fn supports(&self, capabilities: u16) -> bool {
+        match self.capabilities {
+            Some(c) => c & capabilities == capabilities,
+            None => false,
+        }
+    }
+}
+
 /// Highest application brightness.
 pub const BRIGHTNESS_MAX: u8 = 100;
 

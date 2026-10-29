@@ -349,11 +349,40 @@ then) and right away for mains-powered devices.
 |---|---|
 | `LightOn` / `LightOff` / `LightToggle` | On/Off On / Off / Toggle |
 | `LightSetBrightness { percent, transition }` | Level Control Move to Level (with On/Off), OptionsMask = OptionsOverride = 0 |
+| `LightSetColorTemperature { mireds, transition }` | Color Control Move to Color Temperature |
+| `LightSetColorXy { x, y, transition }` | Color Control Move to Color (CIE 1931 x, y × 65536, at most 0xFEFF) |
+| `LightSetHueSaturation { hue, saturation, transition }` | Color Control Move to Hue and Saturation (0–254 each) |
 
 The endpoint is the first one serving the needed cluster unless the
-request names one. Brightness requires a Level Control server: the hub
-never assumes dimming or color support before the interview found the
-clusters.
+request names one. Brightness requires a Level Control server and colour
+a Color Control server: the hub never assumes dimming or color support
+before the interview found the clusters. Colour commands set
+OptionsMask = OptionsOverride = 1 (ExecuteIfOff), so a colour chosen while
+the light is off is kept for when it turns on; they are confirmed by
+reading the colour attributes back.
+
+**Colour state.** The interview binds Color Control, configures reports of
+`ColorMode`, `CurrentX`/`CurrentY` (change 64) and `ColorTemperatureMireds`
+(change 2), and reads `ColorCapabilities`, the physical mired range and the
+current colour. `GetLightColor` returns them; `LightColorChanged` reports
+every change. Like the rest of the state, the colour is not persisted: the
+synchronization after a reboot reads it again.
+
+## Groups and scenes
+
+| Request | Zigbee | Outcome |
+|---|---|---|
+| `AddGroup { ieee, endpoint, group }` | Groups Add Group (empty name), unicast | `Accepted` → `responded`; already a member counts as success |
+| `RemoveGroup { ieee, endpoint, group }` | Groups Remove Group | `Accepted` → `responded`; not a member counts as success |
+| `GroupLight { group, command }` | the light command to the group, one group-addressed frame | `Done` once sent |
+| `StoreScene { ieee, endpoint, group, scene }` | Scenes Store Scene (the device's current state) | `Accepted` → `responded` |
+| `RecallScene { group, scene, transition }` | Scenes Recall Scene to the group (with a transition time when not 0) | `Done` once sent |
+
+Groups are 0x0001–0xFFF7 (scenes may use group 0). Group-addressed frames
+are never acknowledged and devices send no response to them: nothing
+confirms a group command. The members' reports show what they did. The
+hub keeps no group table of its own; the devices' Groups and Scenes
+servers are the record.
 
 **Brightness scale.** The application range is 0–100 %. 1–100 % maps
 linearly onto Level Control levels 1–254, rounded to the nearest level
@@ -576,6 +605,12 @@ A request of another version is answered `UnsupportedVersion`.
 | `ReadCapture { max }` (0x1C) | Admin | `CapturePage` (≤ 3 frames, each with its original length) |
 | `SetKeyExchangeExemption { ieee, seconds }` (0x1D) | Admin | `Done`; 0 seconds revokes |
 | `GetSecurityStatus` (0x1E) | Monitor | `SecurityStatus` (response tag 0x10) |
+| `LightSetColorTemperature` / `LightSetColorXy` / `LightSetHueSaturation` (0x24–0x26) | Control | `Accepted` → … |
+| `GetLightColor { ieee }` (0x27) | Monitor | `LightColor` (response tag 0x13); `NotSupported` without Color Control |
+| `AddGroup` / `RemoveGroup` (0x28, 0x29) | Control | `Accepted` → … |
+| `GroupLight { group, command }` (0x2A) | Control | `Done` |
+| `StoreScene` (0x2B) | Control | `Accepted` → … |
+| `RecallScene { group, scene, transition }` (0x2C) | Control | `Done` |
 
 Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
 renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
@@ -592,6 +627,7 @@ serves firmware built with and without capture: the capability shows as
 | `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
 | `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
 | `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
+| Requests 0x24–0x2C, response 0x13, event `LightColorChanged` (0x16) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
 | Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
 
 Everything changed since 0.2.0 is unreleased, so no released host or
@@ -742,7 +778,7 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
   driver).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
-* **Not implemented**: Color Control commands, groups and scenes, OTA
+* **Not implemented**: OTA
   upgrades, install codes through the protocol, Poll Control fast-poll
   management, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
 * **Sleepy devices**: whatever the hub asks a sleeping device waits for its

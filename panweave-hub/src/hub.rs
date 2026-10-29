@@ -11,8 +11,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_storage::{Storage, StorageError};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ClusterId, CommandId, CryptoRng, Endpoint, ExtendedAddress, MacCapability, ProfileId,
-    ShortAddress, TransactionSequence,
+    ClusterId, CommandId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, MacCapability,
+    ProfileId, ShortAddress, TransactionSequence,
 };
 use panweave_zcl::global::{
     AttributeValue, ConfigureReportingStatus, DefaultResponse, ReadAttributeStatus, Records,
@@ -215,9 +215,43 @@ pub(crate) enum Reply<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CommandKind {
     Light(LightCommand),
-    Read { cluster: u16, attribute: u16 },
-    Configure { cluster: u16, report: Report },
-    Bind { cluster: u16 },
+    Read {
+        cluster: u16,
+        attribute: u16,
+    },
+    Configure {
+        cluster: u16,
+        report: Report,
+    },
+    Bind {
+        cluster: u16,
+    },
+    /// Groups Add Group / Remove Group.
+    Group {
+        remove: bool,
+        group: u16,
+    },
+    /// Scenes Store Scene.
+    StoreScene {
+        group: u16,
+        scene: u8,
+    },
+}
+
+/// Highest group address a host may use (0xfff8–0xffff are reserved,
+/// ZCL8 §3.6.1.1).
+const MAX_GROUP: u16 = 0xfff7;
+
+/// Groups and Scenes response commands, and the statuses that mean the
+/// request already holds (ZCL8 Table 2-12).
+mod member_cmd {
+    pub const ADD_GROUP_RESPONSE: u8 = 0x00;
+    pub const REMOVE_GROUP_RESPONSE: u8 = 0x03;
+    pub const STORE_SCENE_RESPONSE: u8 = 0x04;
+    /// DUPLICATE_EXISTS: already a member.
+    pub const DUPLICATE_EXISTS: u8 = 0x8a;
+    /// NOT_FOUND: not a member.
+    pub const NOT_FOUND: u8 = 0x8b;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -960,6 +994,7 @@ impl<HS: Storage> Hub<HS> {
         };
         let ieee = d.ieee;
         let before = d.state;
+        let color_before = d.color;
         let was_enrolled = d.zone.is_some_and(|z| z.enrolled);
         let zone_type_before = d.zone.and_then(|z| z.zone_type);
         let mut identity = false;
@@ -979,7 +1014,7 @@ impl<HS: Storage> Hub<HS> {
                         value: zcl::attribute_data(&value),
                     });
                 }
-                Applied::State | Applied::Unchanged | Applied::Unmapped => {}
+                Applied::State | Applied::Color | Applied::Unchanged | Applied::Unmapped => {}
             }
         }
         // A zone status that arrived before the zone type was known (an
@@ -1031,10 +1066,14 @@ impl<HS: Storage> Hub<HS> {
             return;
         };
         let after = d.state;
+        let color = d.color;
         if identity {
             self.schedule_persist();
         }
         self.emit_state_events(ieee, &before, &after);
+        if color != color_before {
+            self.emit(Event::LightColorChanged { ieee, color });
+        }
     }
 
     fn ingest_report(&mut self, i: usize, f: &ZclFrame) {
@@ -2014,6 +2053,12 @@ impl<HS: Storage> Hub<HS> {
                 endpoint,
                 command,
             } => self.start_light(stack, *ieee, *endpoint, *command),
+            Request::GetLightColor { .. }
+            | Request::AddGroup { .. }
+            | Request::RemoveGroup { .. }
+            | Request::StoreScene { .. }
+            | Request::GroupLight { .. }
+            | Request::RecallScene { .. } => self.handle_lighting(stack, request),
             Request::RemoveDevice { ieee, leave } => self
                 .remove_device(stack, *ieee, *leave)
                 .map(|()| Response::Done),
@@ -2108,18 +2153,9 @@ impl<HS: Storage> Hub<HS> {
         endpoint: u8,
         command: LightCommand,
     ) -> Result<Response, ErrorCode> {
-        let command = match command {
-            LightCommand::SetBrightness { percent: 0, .. } => LightCommand::TurnOff,
-            LightCommand::SetBrightness { percent, .. } if percent > 100 => {
-                return Err(ErrorCode::InvalidArgument);
-            }
-            c => c,
-        };
+        let command = Self::normalize_light(command)?;
         let d = self.command_target(ieee)?;
-        let needed = match command {
-            LightCommand::SetBrightness { .. } => cluster::LEVEL,
-            _ => cluster::ON_OFF,
-        };
+        let needed = command.cluster();
         let endpoint = if endpoint == 0 {
             d.endpoint_serving(needed).ok_or(ErrorCode::NotSupported)?
         } else if d
@@ -2131,6 +2167,229 @@ impl<HS: Storage> Hub<HS> {
             return Err(ErrorCode::NotSupported);
         };
         self.start_command(stack, ieee, endpoint, CommandKind::Light(command))
+    }
+
+    /// Colour, group and scene requests (0.4).
+    fn handle_lighting<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        request: &Request,
+    ) -> Result<Response, ErrorCode> {
+        match request {
+            Request::GetLightColor { ieee } => {
+                let d = self.registry.get(*ieee).ok_or(ErrorCode::UnknownDevice)?;
+                if !d.capabilities.contains(crate::model::Capabilities::COLOR) {
+                    return Err(ErrorCode::NotSupported);
+                }
+                Ok(Response::LightColor {
+                    ieee: *ieee,
+                    color: d.color,
+                })
+            }
+            Request::AddGroup {
+                ieee,
+                endpoint,
+                group,
+            }
+            | Request::RemoveGroup {
+                ieee,
+                endpoint,
+                group,
+            } => {
+                if *group == 0 || *group > MAX_GROUP {
+                    return Err(ErrorCode::InvalidArgument);
+                }
+                let remove = matches!(request, Request::RemoveGroup { .. });
+                let endpoint = self.member_endpoint(*ieee, *endpoint, cluster::GROUPS)?;
+                self.start_command(
+                    stack,
+                    *ieee,
+                    endpoint,
+                    CommandKind::Group {
+                        remove,
+                        group: *group,
+                    },
+                )
+            }
+            Request::StoreScene {
+                ieee,
+                endpoint,
+                group,
+                scene,
+            } => {
+                if *group > MAX_GROUP {
+                    return Err(ErrorCode::InvalidArgument);
+                }
+                let endpoint = self.member_endpoint(*ieee, *endpoint, cluster::SCENES)?;
+                self.start_command(
+                    stack,
+                    *ieee,
+                    endpoint,
+                    CommandKind::StoreScene {
+                        group: *group,
+                        scene: *scene,
+                    },
+                )
+            }
+            Request::GroupLight { group, command } => {
+                if *group == 0 || *group > MAX_GROUP {
+                    return Err(ErrorCode::InvalidArgument);
+                }
+                let command = Self::normalize_light(*command)?;
+                let (cluster_id, cmd, payload) =
+                    Self::light_frame(command).ok_or(ErrorCode::InvalidArgument)?;
+                self.send_group(stack, *group, cluster_id, cmd, &payload)
+                    .map(|()| Response::Done)
+            }
+            Request::RecallScene {
+                group,
+                scene,
+                transition_ds,
+            } => {
+                if *group > MAX_GROUP {
+                    return Err(ErrorCode::InvalidArgument);
+                }
+                let g = group.to_le_bytes();
+                let t = transition_ds.to_le_bytes();
+                // Recall Scene: group, scene and, when given, a transition
+                // time overriding the scene's (ZCL8 §3.7.2.4.5).
+                let payload: Vec<u8, 5> = if *transition_ds == 0 {
+                    Vec::from_slice(&[g[0], g[1], *scene]).unwrap_or_default()
+                } else {
+                    Vec::from_slice(&[g[0], g[1], *scene, t[0], t[1]]).unwrap_or_default()
+                };
+                self.send_group(stack, *group, cluster::SCENES, 0x05, &payload)
+                    .map(|()| Response::Done)
+            }
+            _ => Err(ErrorCode::UnknownRequest),
+        }
+    }
+
+    /// A light command as sent: brightness 0 is Off; out-of-range values
+    /// are refused.
+    fn normalize_light(command: LightCommand) -> Result<LightCommand, ErrorCode> {
+        match command {
+            LightCommand::SetBrightness { percent: 0, .. } => Ok(LightCommand::TurnOff),
+            LightCommand::SetBrightness { percent, .. } if percent > 100 => {
+                Err(ErrorCode::InvalidArgument)
+            }
+            // 0 is undefined and 0xffff invalid (ZCL8 §5.2.2.2.1.8).
+            LightCommand::SetColorTemperature { mireds, .. } if mireds == 0 || mireds == 0xffff => {
+                Err(ErrorCode::InvalidArgument)
+            }
+            // At most 0xfeff (§5.2.2.2.1.4).
+            LightCommand::SetColorXy { x, y, .. } if x > 0xfeff || y > 0xfeff => {
+                Err(ErrorCode::InvalidArgument)
+            }
+            // At most 0xfe (§5.2.2.2.1.1).
+            LightCommand::SetHueSaturation {
+                hue, saturation, ..
+            } if hue > 0xfe || saturation > 0xfe => Err(ErrorCode::InvalidArgument),
+            c => Ok(c),
+        }
+    }
+
+    /// The cluster, command and payload of a light command.
+    fn light_frame(l: LightCommand) -> Option<(u16, u8, Vec<u8, 8>)> {
+        // Color commands execute even while the light is off
+        // (OptionsMask / OptionsOverride bit 0, ExecuteIfOff, §5.2.2.2.1.29),
+        // so a colour set before turning on is kept.
+        const IF_OFF: [u8; 2] = [1, 1];
+        Some(match l {
+            LightCommand::TurnOn => (cluster::ON_OFF, 0x01, Vec::new()),
+            LightCommand::TurnOff => (cluster::ON_OFF, 0x00, Vec::new()),
+            LightCommand::Toggle => (cluster::ON_OFF, 0x02, Vec::new()),
+            LightCommand::SetBrightness {
+                percent,
+                transition_ds,
+            } => {
+                let level = brightness_to_level(percent)?;
+                let t = transition_ds.to_le_bytes();
+                // Move to Level (with On/Off): level, transition time,
+                // OptionsMask, OptionsOverride (ZCL8 §3.10.2.3.1).
+                let p = Vec::from_slice(&[level, t[0], t[1], 0, 0]).ok()?;
+                (cluster::LEVEL, 0x04, p)
+            }
+            LightCommand::SetColorTemperature {
+                mireds,
+                transition_ds,
+            } => {
+                let m = mireds.to_le_bytes();
+                let t = transition_ds.to_le_bytes();
+                let p = Vec::from_slice(&[m[0], m[1], t[0], t[1], IF_OFF[0], IF_OFF[1]]).ok()?;
+                (cluster::COLOR, 0x0a, p)
+            }
+            LightCommand::SetColorXy {
+                x,
+                y,
+                transition_ds,
+            } => {
+                let (x, y, t) = (
+                    x.to_le_bytes(),
+                    y.to_le_bytes(),
+                    transition_ds.to_le_bytes(),
+                );
+                let p =
+                    Vec::from_slice(&[x[0], x[1], y[0], y[1], t[0], t[1], IF_OFF[0], IF_OFF[1]])
+                        .ok()?;
+                (cluster::COLOR, 0x07, p)
+            }
+            LightCommand::SetHueSaturation {
+                hue,
+                saturation,
+                transition_ds,
+            } => {
+                let t = transition_ds.to_le_bytes();
+                let p =
+                    Vec::from_slice(&[hue, saturation, t[0], t[1], IF_OFF[0], IF_OFF[1]]).ok()?;
+                (cluster::COLOR, 0x06, p)
+            }
+        })
+    }
+
+    /// The endpoint of `ieee` serving `cluster_id`: `endpoint`, or the
+    /// first one when 0.
+    fn member_endpoint(&self, ieee: u64, endpoint: u8, cluster_id: u16) -> Result<u8, ErrorCode> {
+        let d = self.command_target(ieee)?;
+        if endpoint == 0 {
+            d.endpoint_serving(cluster_id)
+                .ok_or(ErrorCode::NotSupported)
+        } else if d
+            .endpoint(endpoint)
+            .is_some_and(|e| e.inputs.contains(&cluster_id))
+        {
+            Ok(endpoint)
+        } else {
+            Err(ErrorCode::NotSupported)
+        }
+    }
+
+    /// Sends a cluster command to a group: one group-addressed frame, no
+    /// response asked for (ZCL8 §2.5.12.2: none comes for groupcasts).
+    fn send_group<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &self,
+        stack: &mut Stack<C, R, S>,
+        group: u16,
+        cluster_id: u16,
+        command: u8,
+        payload: &[u8],
+    ) -> Result<(), ErrorCode> {
+        if !stack.is_operating() {
+            return Err(ErrorCode::NetworkDown);
+        }
+        let seq: TransactionSequence = stack.zcl.next_seq();
+        let mut header = Header::cluster_specific(seq, CommandId(command), Direction::ToServer);
+        header.control.disable_default_response = true;
+        stack
+            .zcl_send(
+                Destination::Group(GroupAddress(group)),
+                ProfileId::HOME_AUTOMATION,
+                ClusterId(cluster_id),
+                self.config.endpoint,
+                &header,
+                payload,
+            )
+            .map_err(|_| ErrorCode::SendFailed)
     }
 
     fn start_command<C: BlockCipher, R: CryptoRng, S: Storage>(
@@ -2179,23 +2438,7 @@ impl<HS: Storage> Hub<HS> {
     ) -> Option<Wait> {
         match c.kind {
             CommandKind::Light(l) => {
-                let (cluster_id, command, payload): (u16, u8, Vec<u8, 5>) = match l {
-                    LightCommand::TurnOn => (cluster::ON_OFF, 0x01, Vec::new()),
-                    LightCommand::TurnOff => (cluster::ON_OFF, 0x00, Vec::new()),
-                    LightCommand::Toggle => (cluster::ON_OFF, 0x02, Vec::new()),
-                    LightCommand::SetBrightness {
-                        percent,
-                        transition_ds,
-                    } => {
-                        let level = brightness_to_level(percent)?;
-                        let t = transition_ds.to_le_bytes();
-                        // Move to Level (with On/Off): level, transition
-                        // time, OptionsMask, OptionsOverride (ZCL8
-                        // §3.10.2.3.1).
-                        let p = Vec::from_slice(&[level, t[0], t[1], 0, 0]).ok()?;
-                        (cluster::LEVEL, 0x04, p)
-                    }
-                };
+                let (cluster_id, command, payload) = Self::light_frame(l)?;
                 self.send_cluster_command(
                     stack, c.short, c.endpoint, cluster_id, command, &payload, true,
                 )
@@ -2219,13 +2462,47 @@ impl<HS: Storage> Hub<HS> {
             CommandKind::Bind { cluster } => self
                 .send_bind(stack, c.ieee, c.short, c.endpoint, cluster)
                 .map(Wait::Zdp),
+            CommandKind::Group { remove, group } => {
+                let g = group.to_le_bytes();
+                // Add Group: group and an empty name; Remove Group: the
+                // group (ZCL8 §3.6.2.3).
+                let (command, payload): (u8, &[u8]) = if remove {
+                    (0x03, &g)
+                } else {
+                    (0x00, &[g[0], g[1], 0])
+                };
+                self.send_cluster_command(
+                    stack,
+                    c.short,
+                    c.endpoint,
+                    cluster::GROUPS,
+                    command,
+                    payload,
+                    true,
+                )
+                .map(Wait::Zcl)
+            }
+            CommandKind::StoreScene { group, scene } => {
+                let g = group.to_le_bytes();
+                self.send_cluster_command(
+                    stack,
+                    c.short,
+                    c.endpoint,
+                    cluster::SCENES,
+                    0x04,
+                    &[g[0], g[1], scene],
+                    true,
+                )
+                .map(Wait::Zcl)
+            }
         }
     }
 
     fn log_command(&mut self, c: &HostCommand, which: u16, severity: Severity, status: Option<u8>) {
         let cluster_id = match c.kind {
-            CommandKind::Light(LightCommand::SetBrightness { .. }) => cluster::LEVEL,
-            CommandKind::Light(_) => cluster::ON_OFF,
+            CommandKind::Light(l) => l.cluster(),
+            CommandKind::Group { .. } => cluster::GROUPS,
+            CommandKind::StoreScene { .. } => cluster::SCENES,
             CommandKind::Read { cluster, .. }
             | CommandKind::Configure { cluster, .. }
             | CommandKind::Bind { cluster } => cluster,
@@ -2342,6 +2619,29 @@ impl<HS: Storage> Hub<HS> {
     ) {
         let h = &f.origin.header;
         if h.control.frame_type != FrameType::Global {
+            // Groups / Scenes responses: a status first (ZCL8 §3.6.2.4,
+            // §3.7.2.5).
+            let expected = match c.kind {
+                CommandKind::Group { remove: false, .. } => Some(member_cmd::ADD_GROUP_RESPONSE),
+                CommandKind::Group { remove: true, .. } => Some(member_cmd::REMOVE_GROUP_RESPONSE),
+                CommandKind::StoreScene { .. } => Some(member_cmd::STORE_SCENE_RESPONSE),
+                _ => None,
+            };
+            if expected == Some(h.command.0) {
+                let status = f.payload.first().copied().unwrap_or(0xff);
+                let holds = match c.kind {
+                    CommandKind::Group { remove: false, .. } => {
+                        status == member_cmd::DUPLICATE_EXISTS
+                    }
+                    CommandKind::Group { remove: true, .. } => status == member_cmd::NOT_FOUND,
+                    _ => false,
+                };
+                if status == 0 || holds {
+                    self.finish_command_ok(c.id, CommandStage::Responded, None);
+                } else {
+                    self.finish_command_failed(c.id, ErrorCode::ZclFailure, status);
+                }
+            }
             return;
         }
         if h.command == global::DEFAULT_RESPONSE {
@@ -2372,6 +2672,26 @@ impl<HS: Storage> Hub<HS> {
                     }
                     let (cl, attrs): (u16, &[u16]) = match l {
                         LightCommand::SetBrightness { .. } => (cluster::LEVEL, &[0x0000]),
+                        LightCommand::SetColorTemperature { .. } => (
+                            cluster::COLOR,
+                            &[zcl::color_attr::MIREDS, zcl::color_attr::MODE],
+                        ),
+                        LightCommand::SetColorXy { .. } => (
+                            cluster::COLOR,
+                            &[
+                                zcl::color_attr::X,
+                                zcl::color_attr::Y,
+                                zcl::color_attr::MODE,
+                            ],
+                        ),
+                        LightCommand::SetHueSaturation { .. } => (
+                            cluster::COLOR,
+                            &[
+                                zcl::color_attr::HUE,
+                                zcl::color_attr::SATURATION,
+                                zcl::color_attr::MODE,
+                            ],
+                        ),
                         _ => (cluster::ON_OFF, &[0x0000]),
                     };
                     match self.send_read(stack, c.short, c.endpoint, cl, attrs) {
