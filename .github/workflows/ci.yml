@@ -156,11 +156,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
-      - run: cargo fuzz build
+      # `+nightly`: rust-toolchain.toml pins the stable 1.95.0, which
+      # rejects cargo-fuzz's -Z flags.
+      - run: cargo +nightly fuzz build
       - name: short fuzz smoke run
         run: |
-          for t in $(cargo fuzz list); do
-            cargo fuzz run "$t" -- -max_total_time=20 -max_len=256
+          for t in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$t" -- -max_total_time=20 -max_len=256
           done
 
   deny:

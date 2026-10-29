@@ -25,6 +25,9 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Path-only dev-dependencies (the simulator cycle of panweave-runtime and
+# panweave-lite) are stripped by `cargo publish`.
+allow-wildcard-paths = true
 deny = [
     { name = "openssl" },
     { name = "openssl-sys" },

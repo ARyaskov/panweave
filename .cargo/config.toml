@@ -8,5 +8,3 @@ RUST_MIN_STACK = "8388608"
 # Full quality gate used by CI and before every commit.
 gate = "run --quiet --package xtask -- gate"
 
-[target.'cfg(all(target_arch = "arm", target_os = "none"))']
-rustflags = ["-C", "link-arg=-Tlink.x"]

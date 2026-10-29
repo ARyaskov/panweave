@@ -4,6 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn main() {
+    // cortex-m-rt's linker script; in the build script because a
+    // `RUSTFLAGS` environment variable replaces config rustflags.
+    println!("cargo:rustc-link-arg=-Tlink.x");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     File::create(out.join("memory.x"))
         .unwrap()

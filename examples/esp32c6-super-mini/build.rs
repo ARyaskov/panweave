@@ -8,6 +8,9 @@
 //! * `PANWEAVE_BUILD_ID` is set to the source revision (`git rev-parse`,
 //!   `-dirty` with local changes) unless the environment already sets it,
 //!   and to `unknown` without git. The hub reports it in its boot report.
+//! * The esp-hal linker script `linkall.x`, passed here rather than in
+//!   `.cargo/config.toml` rustflags, which a `RUSTFLAGS` environment
+//!   variable (CI sets one) replaces entirely.
 
 use std::process::Command;
 
@@ -22,6 +25,7 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
+    println!("cargo:rustc-link-arg=-Tlinkall.x");
     println!("cargo:rerun-if-changed=partitions-hub.csv");
     println!("cargo:rerun-if-env-changed=PANWEAVE_BUILD_ID");
     let csv = std::fs::read_to_string("partitions-hub.csv").expect("partitions-hub.csv");
