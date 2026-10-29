@@ -9,4 +9,4 @@ cargo run --release -p panweave-mqtt -- --broker 127.0.0.1:1883
 ```
 
 Options, topics, the state object and availability rules:
-[`docs/mqtt.md`](../docs/mqtt.md).
+[`docs/mqtt.md`](https://github.com/ARyaskov/panweave/blob/main/docs/mqtt.md).

@@ -7,9 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Panweave hub: development command-line client for the Panweave Hub Protocol over USB serial"
 readme = "README.md"
-keywords.workspace = true
-categories.workspace = true
-publish = false
+keywords = ["zigbee", "ieee802154", "iot", "cli", "hub"]
+categories = ["command-line-utilities", "embedded"]
 
 [[bin]]
 name = "panweave-hub-cli"

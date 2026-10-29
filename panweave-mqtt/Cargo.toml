@@ -7,9 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Panweave hub to MQTT bridge with Home Assistant discovery"
 readme = "README.md"
-keywords.workspace = true
-categories = ["network-programming", "embedded"]
-publish = false
+keywords = ["zigbee", "mqtt", "home-assistant", "iot", "ieee802154"]
+categories = ["network-programming", "embedded", "command-line-utilities"]
+# The end-to-end tests reuse panweave-hub's test harness from the
+# repository, which a published package does not contain.
+exclude = ["tests"]
 
 [[bin]]
 name = "panweave-mqtt"
