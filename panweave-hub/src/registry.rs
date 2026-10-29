@@ -160,6 +160,9 @@ pub struct Device {
     pub(crate) enroll_answered: bool,
     /// Unsolicited enrolments repeated in this interview.
     pub(crate) enroll_retries: u8,
+    /// The device was asked to fast poll at its last Check-in and has not
+    /// been told to stop.
+    pub(crate) fast_polling: bool,
 }
 
 impl Device {
@@ -196,6 +199,7 @@ impl Device {
             cie_address: None,
             enroll_answered: false,
             enroll_retries: 0,
+            fast_polling: false,
         }
     }
 

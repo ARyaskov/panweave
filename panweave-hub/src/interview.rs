@@ -90,6 +90,20 @@ fn report_list(d: &Device) -> Vec<(u8, u16), 8> {
     l
 }
 
+/// Clusters bound to the hub: Poll Control first (its Check-ins let the
+/// hub ask for fast polling during the rest of the interview), then the
+/// reportable ones.
+fn bind_list(d: &Device) -> Vec<(u8, u16), 9> {
+    let mut l = Vec::new();
+    if let Some(ep) = d.endpoint_serving(cluster::POLL_CONTROL) {
+        let _ = l.push((ep, cluster::POLL_CONTROL));
+    }
+    for e in report_list(d) {
+        let _ = l.push(e);
+    }
+    l
+}
+
 /// Clusters whose state is read at the end of the interview (the IAS
 /// zone's was read by its own stage).
 fn state_list(d: &Device) -> Vec<(u8, u16), 8> {
@@ -440,7 +454,7 @@ impl<HS: Storage> Hub<HS> {
                 }
             }
             InterviewStage::IasZone => self.ias_step(stack, i),
-            InterviewStage::Bindings => match report_list(d).get(step) {
+            InterviewStage::Bindings => match bind_list(d).get(step) {
                 Some(&(ep, c)) => zdp_sent(self.send_bind(stack, d.ieee, short, ep, c)),
                 None => Step::Advance,
             },

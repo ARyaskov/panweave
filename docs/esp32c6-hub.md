@@ -368,6 +368,27 @@ current colour. `GetLightColor` returns them; `LightColorChanged` reports
 every change. Like the rest of the state, the colour is not persisted: the
 synchronization after a reboot reads it again.
 
+## Poll Control
+
+A sleepy device with a Poll Control server sends a Check-in to its bound
+clients every `CheckInInterval` (an hour by default) and polls fast while
+it waits for the answer. The interview binds Poll Control to the hub
+first, before the reportable clusters. The hub answers every Check-in
+itself (its endpoint has no Poll Control client):
+
+* with **start fast polling** for `fast_poll_timeout_qs` quarter seconds
+  (default 120, 30 s) when it has work for the device: an interview, a
+  state synchronization, a host command or an awaited answer;
+* without, when it has none.
+
+Once that work is done the hub sends **Fast Poll Stop**, and the device
+returns to long polling at once instead of at the timeout. The hub does
+not change the device's intervals. Trace codes `poll-check-in` (0x0A0B,
+status 1 when fast polling was asked, `arg` the timeout) and
+`fast-poll-stop` (0x0A0C) record both. In simulation, re-interviewing an
+idle sensor with a 30 s long poll took 5 s with Poll Control and 26 s
+without.
+
 ## Groups and scenes
 
 | Request | Zigbee | Outcome |
@@ -779,11 +800,12 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
 * **Not implemented**: OTA
-  upgrades, install codes through the protocol, Poll Control fast-poll
-  management, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
+  upgrades, install codes through the protocol, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
 * **Sleepy devices**: whatever the hub asks a sleeping device waits for its
   next poll; a device polling rarely (minutes) makes interviews and reads
-  slow, and stalled interviews resume only when it is heard.
+  slow, and stalled interviews resume only when it is heard. Devices with
+  a Poll Control server are faster (see [Poll Control](#poll-control));
+  the others are not.
 
 ## Compatibility matrix
 

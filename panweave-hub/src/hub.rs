@@ -92,6 +92,11 @@ pub struct HubConfig {
     /// kept in RAM only: the storage is never read or written, and hosts
     /// are told.
     pub persistent: bool,
+    /// Fast-poll timeout asked of a device at a Check-in while the hub
+    /// has work for it, in quarter seconds (Poll Control Check-in
+    /// Response). The hub sends Fast Poll Stop as soon as the work is
+    /// done.
+    pub fast_poll_timeout_qs: u16,
 }
 
 impl Default for HubConfig {
@@ -108,6 +113,7 @@ impl Default for HubConfig {
             sync_interval: Duration::from_secs(60),
             max_interviews: 2,
             persistent: true,
+            fast_poll_timeout_qs: 120,
         }
     }
 }
@@ -717,6 +723,12 @@ impl<HS: Storage> Hub<HS> {
                 self.log(rec);
                 self.on_reply(stack, dst.0, Wait::Zdp(seq.0), Reply::Timeout);
             }
+            // A Check-in to the hub's endpoint, which has no Poll Control
+            // client: the ZCL hands it up as a server's response.
+            StackEvent::ZclResponse(f) if Self::is_check_in(f) => {
+                let i = self.heard(stack, f.origin.src.0);
+                self.on_check_in(stack, i, f);
+            }
             StackEvent::ZclResponse(f) => {
                 let src = f.origin.src.0;
                 if let Some(i) = self.heard(stack, src) {
@@ -1200,6 +1212,9 @@ impl<HS: Storage> Hub<HS> {
     ) {
         let o = &f.origin;
         let from_server = o.header.control.direction == Direction::ToClient;
+        if Self::is_check_in(f) {
+            return self.on_check_in(stack, i, f);
+        }
         if o.cluster.0 == cluster::IAS_ZONE && from_server {
             match o.header.command.0 {
                 ias_cmd::STATUS_CHANGE => {
@@ -1446,8 +1461,107 @@ impl<HS: Storage> Hub<HS> {
         if stack.is_operating() {
             self.run_interviews(stack);
             self.run_syncs(stack);
+            self.stop_fast_polls(stack);
         }
         self.flush_storage();
+    }
+
+    // ---------------------------------------------------------------
+    // Poll Control
+    // ---------------------------------------------------------------
+
+    /// A Poll Control Check-in (server to client, ZCL8 §3.16.5.3).
+    fn is_check_in(f: &ZclFrame) -> bool {
+        let h = &f.origin.header;
+        f.origin.cluster.0 == cluster::POLL_CONTROL
+            && h.control.frame_type == FrameType::ClusterSpecific
+            && h.control.direction == Direction::ToClient
+            && h.command.0 == 0x00
+    }
+
+    /// Whether the hub has something for the device: its interview, a
+    /// state synchronization, a host command or an awaited answer.
+    fn has_work(&self, d: &Device) -> bool {
+        !d.interview.status.is_finished()
+            || d.needs_sync
+            || d.sync_busy
+            || self.commands.iter().any(|c| c.ieee == d.ieee)
+            || self.pending.iter().any(|p| p.short == d.short)
+    }
+
+    /// Answers a Check-in: fast polling while the hub has work for the
+    /// device, so its requests are not held until the next long poll
+    /// (§3.16.5.4.1). Every Check-in is answered; a device that gets no
+    /// answer keeps its normal polling after `CheckInResponseWait`.
+    fn on_check_in<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        i: Option<usize>,
+        f: &ZclFrame,
+    ) {
+        let work = i
+            .and_then(|i| self.registry.at(i))
+            .is_some_and(|d| self.has_work(d));
+        let timeout = self.config.fast_poll_timeout_qs;
+        let t = timeout.to_le_bytes();
+        stack.zcl.reply_cluster_specific(
+            &f.origin,
+            CommandId(0x00), // Check-in Response
+            &[u8::from(work), t[0], t[1]],
+        );
+        stack.flush();
+        let mut rec = DiagRecord::new(Category::Zcl, Severity::Debug, code::POLL_CHECK_IN)
+            .short(f.origin.src.0)
+            .endpoint(f.origin.src_endpoint.0)
+            .cluster(cluster::POLL_CONTROL)
+            .tsn(f.origin.header.seq.0)
+            .status(u8::from(work))
+            .arg(u32::from(timeout));
+        if let Some(d) = i.and_then(|i| self.registry.at_mut(i)) {
+            rec = rec.ieee(d.ieee);
+            d.fast_polling = work;
+        }
+        self.log(rec);
+    }
+
+    /// Sends Fast Poll Stop to devices asked to fast poll whose work is
+    /// done (§3.16.5.4.2), so they return to long polling at once.
+    fn stop_fast_polls<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+    ) {
+        for i in 0..self.registry.len() {
+            let Some(d) = self.registry.at(i) else {
+                continue;
+            };
+            if !d.fast_polling || self.has_work(d) {
+                continue;
+            }
+            let (ieee, short) = (d.ieee, d.short);
+            let Some(ep) = d.endpoint_serving(cluster::POLL_CONTROL) else {
+                if let Some(d) = self.registry.at_mut(i) {
+                    d.fast_polling = false;
+                }
+                continue;
+            };
+            if self
+                .send_cluster_command(stack, short, ep, cluster::POLL_CONTROL, 0x01, &[], false)
+                .is_none()
+            {
+                // The stack is busy: try again at the next poll.
+                continue;
+            }
+            if let Some(d) = self.registry.at_mut(i) {
+                d.fast_polling = false;
+            }
+            self.log(
+                DiagRecord::new(Category::Zcl, Severity::Debug, code::FAST_POLL_STOP)
+                    .ieee(ieee)
+                    .short(short)
+                    .endpoint(ep)
+                    .cluster(cluster::POLL_CONTROL),
+            );
+        }
     }
 
     /// The earliest time [`Hub::poll`] has work.

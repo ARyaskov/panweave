@@ -24,6 +24,12 @@ Keep a Changelog; versions follow SemVer.
   `scene`. The MQTT bridge offers colour modes and mired ranges, takes
   `color_temp` / `color` commands, configured groups as lights
   (`--group N=NAME`) and group / scene requests.
+* Hub Poll Control: the interview binds Poll Control first; the hub
+  answers every Check-in, asking for fast polling while it has work for
+  the device (interview, sync, host command, awaited answer), and sends
+  Fast Poll Stop when the work is done (`HubConfig::fast_poll_timeout_qs`,
+  trace codes `poll-check-in` and `fast-poll-stop`).
+  `Zcl::reply_cluster_specific` is public.
 
 ### Changed
 

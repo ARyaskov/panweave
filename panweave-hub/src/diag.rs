@@ -395,6 +395,11 @@ pub mod code {
     /// An unsupported cluster-specific command arrived (`cluster`,
     /// `arg`: command).
     pub const ZCL_UNSUPPORTED_COMMAND: u16 = 0x0a0a;
+    /// A Poll Control Check-in was answered (`status`: 1 fast poll
+    /// requested, 0 not; `arg`: fast-poll timeout in quarter seconds).
+    pub const POLL_CHECK_IN: u16 = 0x0a0b;
+    /// Fast Poll Stop was sent: the hub had nothing more for the device.
+    pub const FAST_POLL_STOP: u16 = 0x0a0c;
 
     // Interview (`arg`: stage << 8 | step).
     /// An interview started or restarted.
@@ -542,6 +547,8 @@ pub const fn code_name(c: u16) -> &'static str {
         COMMAND_FAILED => "command-failed",
         COMMAND_RETRY => "command-retry",
         ZCL_UNSUPPORTED_COMMAND => "zcl-unsupported-command",
+        POLL_CHECK_IN => "poll-check-in",
+        FAST_POLL_STOP => "fast-poll-stop",
         INTERVIEW_STARTED => "interview-started",
         INTERVIEW_REQUEST => "interview-request",
         INTERVIEW_ANSWER => "interview-answer",

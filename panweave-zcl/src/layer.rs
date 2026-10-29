@@ -2888,7 +2888,11 @@ impl<const E: usize, const C: usize, const A: usize, P: ZclProfile> Zcl<E, C, A,
     }
 
     /// Sends a cluster-specific response to `origin` built from `payload`.
-    fn reply_cluster_specific(&mut self, origin: &Origin, cmd: CommandId, payload: &[u8]) {
+    /// Answers a received command with cluster-specific command `cmd`
+    /// (same TSN, opposite direction): for an application that handles a
+    /// command itself, such as a Poll Control Check-in on an endpoint
+    /// without a Poll Control client.
+    pub fn reply_cluster_specific(&mut self, origin: &Origin, cmd: CommandId, payload: &[u8]) {
         let header = origin.header.response(cmd, FrameType::ClusterSpecific);
         if let Ok(fr) = Self::build(&header, payload) {
             self.push_action(ZclAction::Send {
