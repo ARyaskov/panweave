@@ -23,6 +23,7 @@ members = [
     "panweave-cli",
     "panweave-hub",
     "panweave-hub-cli",
+    "panweave-mqtt",
     "panweave-lite",
     "xtask",
 ]

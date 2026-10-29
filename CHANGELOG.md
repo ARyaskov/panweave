@@ -5,6 +5,17 @@ Keep a Changelog; versions follow SemVer.
 
 ## [Unreleased]
 
+### Added
+
+* `panweave-mqtt`: a host bridge from the hub (USB serial, Hub Protocol)
+  to an MQTT broker with Home Assistant discovery. Lights, switches,
+  contact / water / motion / tamper / battery binary sensors and
+  temperature, humidity and battery sensors; a permit-join switch; state,
+  availability (Basic read of silent mains devices, 25 h timeout for
+  battery ones), light commands and network requests (permit join,
+  remove, interview; off with `--no-admin`). Its own MQTT 3.1.1 packet
+  codec; `docs/mqtt.md`.
+
 ## [0.3.0] - 2026-10-29
 
 Crate versions: 0.3.0 for the crates on the workspace version (new:

@@ -1,0 +1,39 @@
+[package]
+name = "panweave-mqtt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Panweave hub to MQTT bridge with Home Assistant discovery"
+readme = "README.md"
+keywords.workspace = true
+categories = ["network-programming", "embedded"]
+publish = false
+
+[[bin]]
+name = "panweave-mqtt"
+path = "src/main.rs"
+
+[dependencies]
+panweave-hub = { workspace = true, features = ["std"] }
+serde_json = "1.0.149"
+serialport = { version = "4.10.1", default-features = false }
+ctrlc = "3.5"
+
+[dev-dependencies]
+# The hub engine in the simulator, for the end-to-end tests
+# (`tests/end_to_end.rs` reuses panweave-hub's test harness).
+panweave-hub = { workspace = true, features = ["engine", "std"] }
+panweave-runtime = { workspace = true }
+panweave-security = { workspace = true, features = ["crypto-software"] }
+panweave-sim = { workspace = true }
+panweave-testkit = { workspace = true }
+panweave-mac = { workspace = true }
+panweave-storage = { workspace = true }
+panweave-types = { workspace = true }
+panweave-zcl = { workspace = true }
+panweave-zdo = { workspace = true }
+
+[lints]
+workspace = true

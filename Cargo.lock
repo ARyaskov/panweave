@@ -930,6 +930,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "panweave-mqtt"
+version = "0.3.0"
+dependencies = [
+ "ctrlc",
+ "panweave-hub",
+ "panweave-mac",
+ "panweave-runtime",
+ "panweave-security",
+ "panweave-sim",
+ "panweave-storage",
+ "panweave-testkit",
+ "panweave-types",
+ "panweave-zcl",
+ "panweave-zdo",
+ "serde_json",
+ "serialport",
+]
+
+[[package]]
 name = "panweave-nwk"
 version = "0.3.0"
 dependencies = [
