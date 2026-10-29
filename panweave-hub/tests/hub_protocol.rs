@@ -651,6 +651,10 @@ fn every_message() -> Vec<Message> {
         },
         Request::OtaCancel,
         Request::GetOtaStatus,
+        Request::AddInstallCode {
+            ieee,
+            code: HVec::from_slice(&[0x5a; panweave_hub::protocol::MAX_INSTALL_CODE]).unwrap(),
+        },
         Request::RemoveDevice { ieee, leave: true },
         Request::GetDiagnostics,
         Request::GetBootReport,

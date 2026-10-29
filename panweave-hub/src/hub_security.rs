@@ -8,9 +8,11 @@
 use heapless::Vec;
 use panweave_runtime::{Authorization, Stack};
 use panweave_security::cipher::BlockCipher;
+use panweave_security::key_hierarchy::link_key_from_install_code;
+use panweave_security::material::{InitialJoinAuthentication, LinkKeyEntry, LinkKeyKind};
 use panweave_storage::Storage;
 use panweave_types::time::Duration;
-use panweave_types::{CryptoRng, ExtendedAddress, ShortAddress};
+use panweave_types::{CryptoRng, ExtendedAddress, InstallCode, ShortAddress};
 
 use crate::diag::{Category, DiagRecord, Severity, code};
 use crate::hub::Hub;
@@ -281,8 +283,49 @@ impl<HS: Storage> Hub<HS> {
             Request::SetKeyExchangeExemption { ieee, seconds } => self
                 .set_exemption(stack, *ieee, *seconds)
                 .map(|()| Response::Done),
+            Request::AddInstallCode { ieee, code } => self
+                .add_install_code(stack, *ieee, code)
+                .map(|()| Response::Done),
             _ => return None,
         })
+    }
+
+    /// Installs the link key derived from `ieee`'s install code at the
+    /// Trust Center (BDB §10.1, R23.2 §4.7.3.3): a provisional unique key
+    /// the device joins with and then updates.
+    fn add_install_code<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        ieee: u64,
+        code: &[u8],
+    ) -> Result<(), ErrorCode> {
+        if ieee == 0 || ieee == u64::MAX {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        let ic = InstallCode::new(code).ok_or(ErrorCode::InvalidArgument)?;
+        if !ic.crc_valid() {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        let key = link_key_from_install_code::<C>(&ic);
+        let partner = ExtendedAddress(ieee);
+        stack.aps.security.remove(partner);
+        let mut entry = LinkKeyEntry::provisional(partner, key, LinkKeyKind::Unique);
+        entry.initial_join_authentication = InitialJoinAuthentication::InstallCodeKey;
+        stack
+            .aps
+            .install_link_key(entry)
+            .map_err(|_| ErrorCode::RegistryFull)?;
+        stack.flush();
+        self.log(
+            DiagRecord::new(
+                Category::TrustCenter,
+                Severity::Info,
+                code::INSTALL_CODE_ADDED,
+            )
+            .ieee(ieee)
+            .arg(u32::try_from(ic.as_bytes().len()).unwrap_or(0)),
+        );
+        Ok(())
     }
 
     fn set_exemption<C: BlockCipher, R: CryptoRng, S: Storage>(

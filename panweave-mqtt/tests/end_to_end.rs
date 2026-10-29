@@ -510,3 +510,28 @@ fn configured_groups_are_lights_and_scenes_are_requests() {
         transition_ds: 5
     }));
 }
+
+#[test]
+fn install_codes_are_forwarded_and_never_logged() {
+    let mut h = host(Config::default());
+    h.mqtt(
+        "panweave/bridge/request/install_code",
+        r#"{"id":"0x00aa000000000050","code":"83FE D340 7A93 9723 A5C6 39B2 6916 D505 C3B5"}"#,
+    );
+    let code = [
+        0x83, 0xFE, 0xD3, 0x40, 0x7A, 0x93, 0x97, 0x23, 0xA5, 0xC6, 0x39, 0xB2, 0x69, 0x16, 0xD5,
+        0x05, 0xC3, 0xB5,
+    ];
+    assert!(h.requests.contains(&Request::AddInstallCode {
+        ieee: 0x00AA_0000_0000_0050,
+        code: heapless::Vec::from_slice(&code).unwrap(),
+    }));
+    h.published.clear();
+    h.mqtt(
+        "panweave/bridge/request/install_code",
+        r#"{"id":"0x00aa000000000050","code":"83FE-not-hex"}"#,
+    );
+    let log = h.published.last().unwrap();
+    assert_eq!(log.topic, "panweave/bridge/log");
+    assert!(!String::from_utf8_lossy(&log.payload).contains("83FE"));
+}

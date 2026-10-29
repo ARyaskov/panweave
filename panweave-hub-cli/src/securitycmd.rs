@@ -138,6 +138,27 @@ fn set(hub: &mut Hub, target: u64, seconds: u16) -> Result<(), String> {
 }
 
 /// `security [exempt <ieee> [--seconds N] | revoke <ieee>]`.
+/// An install code as printed: hex digits, spaces, dashes and colons
+/// ignored.
+pub(crate) fn parse_install_code(text: &str) -> Result<Vec<u8>, String> {
+    let digits: Vec<u8> = text
+        .bytes()
+        .filter(|c| !matches!(c, b' ' | b'-' | b':'))
+        .collect();
+    if !digits.len().is_multiple_of(2) {
+        return Err("install code: an even number of hex digits expected".into());
+    }
+    digits
+        .chunks(2)
+        .map(|p| {
+            std::str::from_utf8(p)
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+                .ok_or_else(|| "install code: hex digits expected".to_string())
+        })
+        .collect()
+}
+
 pub(crate) fn run(hub: &mut Hub, args: &[&str], as_json: bool) -> Result<(), String> {
     match args {
         [] | ["status", ..] => status(hub, as_json),
@@ -163,6 +184,29 @@ pub(crate) fn run(hub: &mut Hub, args: &[&str], as_json: bool) -> Result<(), Str
                 Ieee(target)
             );
             Ok(())
+        }
+        ["install-code", id, code, ..] => {
+            let target = ieee(id)?;
+            let bytes = parse_install_code(code)?;
+            let r = hub.call(Request::AddInstallCode {
+                ieee: target,
+                code: heapless::Vec::from_slice(&bytes)
+                    .map_err(|_| "an install code has at most 18 octets".to_string())?,
+            })?;
+            match r {
+                Response::Done => {
+                    println!(
+                        "{}: install-code key installed; open the network and join the device",
+                        Ieee(target)
+                    );
+                    Ok(())
+                }
+                Response::Error(ErrorCode::InvalidArgument) => Err(
+                    "install code refused: 8, 10, 14 or 18 octets with a valid CRC expected".into(),
+                ),
+                Response::Error(e) => Err(error_text(e)),
+                other => Err(format!("unexpected response {other:?}")),
+            }
         }
         ["revoke", id, ..] => {
             let target = ieee(id)?;

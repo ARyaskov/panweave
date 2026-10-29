@@ -934,6 +934,7 @@ name = "panweave-mqtt"
 version = "0.3.0"
 dependencies = [
  "ctrlc",
+ "heapless",
  "panweave-hub",
  "panweave-mac",
  "panweave-runtime",

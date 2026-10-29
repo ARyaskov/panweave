@@ -627,7 +627,20 @@ pub enum Request {
     OtaCancel,
     /// The OTA server's state (0.4).
     GetOtaStatus,
+    /// Lets `ieee` join with the link key derived from its install code
+    /// (`code` and its CRC-16, 8, 10, 14 or 18 octets, as printed on the
+    /// device; 0.4). The key is installed at the Trust Center as a
+    /// provisional unique key; the code is not kept.
+    AddInstallCode {
+        /// The device.
+        ieee: u64,
+        /// Install code with its CRC.
+        code: Vec<u8, MAX_INSTALL_CODE>,
+    },
 }
+
+/// Longest install code with its CRC (ZD 1.1 / BDB §10.1).
+pub const MAX_INSTALL_CODE: usize = 18;
 
 impl Request {
     /// The access a session needs to issue this request.
@@ -674,6 +687,7 @@ impl Request {
             | Request::OtaOffer(_)
             | Request::OtaData { .. }
             | Request::OtaCancel
+            | Request::AddInstallCode { .. }
             | Request::GetWifiScan => Access::Admin,
         }
     }
@@ -722,6 +736,7 @@ impl Request {
             Request::OtaData { .. } => 0x2e,
             Request::OtaCancel => 0x2f,
             Request::GetOtaStatus => 0x30,
+            Request::AddInstallCode { .. } => 0x31,
         }
     }
 
@@ -747,6 +762,11 @@ impl Request {
             | Request::GetOtaStatus
             | Request::StopCapture => Ok(()),
             Request::OtaOffer(o) => ota::write_offer(w, o),
+            Request::AddInstallCode { ieee, code } => {
+                w.u64_le(*ieee)?;
+                w.u8(count(code.len())?)?;
+                w.bytes(code)
+            }
             Request::OtaData { offset, data } => {
                 w.u32_le(*offset)?;
                 ota::write_chunk(w, data)
@@ -1001,6 +1021,13 @@ impl Request {
             },
             0x2f => Request::OtaCancel,
             0x30 => Request::GetOtaStatus,
+            0x31 => Request::AddInstallCode {
+                ieee: r.u64_le()?,
+                code: {
+                    let n = usize::from(r.u8()?);
+                    Vec::from_slice(r.bytes(n)?).map_err(|_| ProtocolError::TooLarge)?
+                },
+            },
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }

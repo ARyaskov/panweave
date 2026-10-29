@@ -389,6 +389,26 @@ status 1 when fast polling was asked, `arg` the timeout) and
 idle sensor with a 30 s long poll took 5 s with Poll Control and 26 s
 without.
 
+## Install codes
+
+A device that joins with an install code (printed on it, often as a QR
+code) knows only the link key derived from that code. The hub can let it
+join once it has the code:
+
+```bash
+panweave-hub-cli security install-code 00124b002a3b4c5d "83FE D340 7A93 9723 A5C6 39B2 6916 D505 C3B5"
+```
+
+`AddInstallCode { ieee, code }` (Admin) takes the code with its CRC-16
+(8, 10, 14 or 18 octets). The hub checks the CRC, derives the key with
+AES-MMO (BDB §10.1) and installs it at the Trust Center as the device's
+provisional unique key, which the device then replaces through the usual
+key update. The code and the key are never written to the trace
+(`install-code-added` records only the device and the code's length) and
+the code is not kept. Open the network and join the device as usual. The
+install-code policy of the Trust Center is the firmware's: with the
+default, devices without an install code still join with the default key.
+
 ## OTA upgrades
 
 The hub is the network's OTA upgrade server (ZCL8 chapter 11) for one
@@ -677,6 +697,7 @@ A request of another version is answered `UnsupportedVersion`.
 | `OtaData { offset, data }` (0x2E) | Admin | `Done`; `InvalidArgument` unless `offset` is where the window ends |
 | `OtaCancel` (0x2F) | Admin | `Done` |
 | `GetOtaStatus` (0x30) | Monitor | `OtaStatus` (response tag 0x14) |
+| `AddInstallCode { ieee, code }` (0x31) | Admin | `Done`; `InvalidArgument` for a bad length or CRC |
 
 Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
 renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
@@ -693,7 +714,7 @@ serves firmware built with and without capture: the capability shows as
 | `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
 | `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
 | `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
-| Requests 0x24–0x30, responses 0x13–0x14, events 0x16–0x19 (`LightColorChanged`, `OtaDataWanted`, `OtaProgress`, `OtaFinished`) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
+| Requests 0x24–0x31, responses 0x13–0x14, events 0x16–0x19 (`LightColorChanged`, `OtaDataWanted`, `OtaProgress`, `OtaFinished`) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
 | Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
 
 Everything changed since 0.2.0 is unreleased, so no released host or
@@ -844,7 +865,7 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
   driver).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
-* **Not implemented**: OTA Image Page Requests, install codes through the protocol, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
+* **Not implemented**: OTA Image Page Requests, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
 * **Sleepy devices**: whatever the hub asks a sleeping device waits for its
   next poll; a device polling rarely (minutes) makes interviews and reads
   slow, and stalled interviews resume only when it is heard. Devices with

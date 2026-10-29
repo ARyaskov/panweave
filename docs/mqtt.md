@@ -71,6 +71,7 @@ optimistic; the members' own entities show what they did.
 | `<base>/bridge/request/permit_join` | in | seconds (0 closes), `ON` (254 s), `OFF`, or `{"time"}` |
 | `<base>/bridge/request/remove` | in | device id, or `{"id", "force"}` (`force`: registry only, no Leave) |
 | `<base>/bridge/request/interview` | in | device id |
+| `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the install code in hex with its CRC (never logged) |
 | `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
 | `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}`: the device's current state becomes the scene |
 | `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |

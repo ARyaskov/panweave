@@ -108,6 +108,8 @@ commands:
                                           channels, signal, the configured SSID (Admin)
   security                                Trust Center policy, unauthorized devices, exemptions
   security exempt <ieee> [--seconds N]    let one device join without the key exchange (Admin)
+  security install-code <ieee> <code>     let a device join with its install code (hex,
+                                          code and CRC as printed; Admin)
   security revoke <ieee>                  withdraw its exemption (Admin)
   self-test [--allow-reboot] [--join-test [--join-seconds N]]
                                           hardware smoke test (PASS/FAIL/SKIP)

@@ -41,6 +41,11 @@ Keep a Changelog; versions follow SemVer.
   endpoint gains the OTA server cluster when the tables have room. CLI
   `ota update <file>` (header checked) / `status` / `cancel`; the MQTT
   bridge publishes `<base>/<id>/ota`.
+* Hub install codes: `AddInstallCode { ieee, code }` checks the CRC,
+  derives the key (AES-MMO) and installs it at the Trust Center as the
+  device's provisional unique key; neither code nor key reaches the trace
+  (`install-code-added`). CLI `security install-code`, MQTT
+  `bridge/request/install_code`.
 
 ### Changed
 

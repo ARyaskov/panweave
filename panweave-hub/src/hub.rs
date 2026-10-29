@@ -2208,7 +2208,8 @@ impl<HS: Storage> Hub<HS> {
             | Request::OtaOffer(_)
             | Request::OtaData { .. }
             | Request::OtaCancel
-            | Request::GetOtaStatus => Err(ErrorCode::UnknownRequest),
+            | Request::GetOtaStatus
+            | Request::AddInstallCode { .. } => Err(ErrorCode::UnknownRequest),
             // Answered by `handle_alerts` with the `alerts` feature.
             Request::GetAlertStatus
             | Request::SetAlertConfig(_)

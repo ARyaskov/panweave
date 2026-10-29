@@ -19,6 +19,7 @@
 //! | `<base>/bridge/request/permit_join` | in | seconds, `ON` (254 s) or `OFF` |
 //! | `<base>/bridge/request/remove` | in | device id; `{"id", "force"}` |
 //! | `<base>/bridge/request/interview` | in | device id |
+//! | `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the code in hex, with its CRC |
 //! | `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
 //! | `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}` |
 //! | `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |
@@ -275,6 +276,25 @@ fn color_json(c: &ColorState, modes: &[&str], out: &mut Value) {
     } else {
         Value::Object(color)
     };
+}
+
+/// Hex digits (spaces, dashes and colons ignored) as octets.
+fn parse_hex(text: &str) -> Option<Vec<u8>> {
+    let digits: Vec<u8> = text
+        .bytes()
+        .filter(|c| !matches!(c, b' ' | b'-' | b':'))
+        .collect();
+    if !digits.len().is_multiple_of(2) {
+        return None;
+    }
+    digits
+        .chunks(2)
+        .map(|p| {
+            core::str::from_utf8(p)
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+        })
+        .collect()
 }
 
 /// Seconds as tenths of a second, 0 for anything unusable.
@@ -1205,6 +1225,28 @@ impl Bridge {
                 match r {
                     Some(r) => self.request(r),
                     None => self.log("warning", format!("{name}: bad payload {payload:?}")),
+                }
+            }
+            "install_code" => {
+                let o = value.as_ref().and_then(Value::as_object);
+                let id = o
+                    .and_then(|o| o.get("id"))
+                    .and_then(Value::as_str)
+                    .and_then(parse_device_id);
+                let code = o
+                    .and_then(|o| o.get("code"))
+                    .and_then(Value::as_str)
+                    .and_then(parse_hex)
+                    .and_then(|c| heapless::Vec::from_slice(&c).ok());
+                match (id, code) {
+                    (Some(ieee), Some(code)) => {
+                        self.request(Request::AddInstallCode { ieee, code });
+                    }
+                    // The payload holds a credential: it is not logged.
+                    _ => self.log(
+                        "warning",
+                        "install_code: {\"id\", \"code\"} with a hex code expected".into(),
+                    ),
                 }
             }
             other => self.log("warning", format!("unknown bridge request {other:?}")),

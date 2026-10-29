@@ -331,6 +331,9 @@ pub mod code {
     /// The device joined again through the unauthenticated path; its
     /// earlier admission without the key exchange was withdrawn.
     pub const JOIN_EXEMPTION_WITHDRAWN: u16 = 0x070e;
+    /// An install-code key was installed for a device (`arg`: code
+    /// length; the code and key are never recorded).
+    pub const INSTALL_CODE_ADDED: u16 = 0x070f;
 
     // Commissioning.
     /// The network opened for joining (`arg`: seconds).
@@ -541,6 +544,7 @@ pub const fn code_name(c: u16) -> &'static str {
         JOIN_KEY_EXCHANGE_TIMEOUT => "join-key-exchange-timeout",
         JOIN_AUTHORIZED => "join-authorized",
         JOIN_EXEMPTION_WITHDRAWN => "join-exemption-withdrawn",
+        INSTALL_CODE_ADDED => "install-code-added",
         ZDP_TIMEOUT => "zdp-timeout",
         ZCL_DEFAULT_RESPONSE_ERROR => "zcl-default-response-error",
         ZCL_ATTRIBUTE_ERROR => "zcl-attribute-error",
