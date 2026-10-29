@@ -47,20 +47,20 @@ panweave-nwk = { path = "panweave-nwk", version = "0.3.0", default-features = fa
 panweave-security = { path = "panweave-security", version = "0.3.0", default-features = false }
 panweave-aps = { path = "panweave-aps", version = "0.3.0", default-features = false }
 panweave-zdo = { path = "panweave-zdo", version = "0.3.0", default-features = false }
-panweave-zcl = { path = "panweave-zcl", version = "0.3.0", default-features = false }
+panweave-zcl = { path = "panweave-zcl", version = "0.3.1", default-features = false }
 panweave-device-library = { path = "panweave-device-library", version = "0.1.0", default-features = false }
 panweave-bdb = { path = "panweave-bdb", version = "0.3.0", default-features = false }
 panweave-green-power = { path = "panweave-green-power", version = "0.3.0", default-features = false }
 panweave-direct = { path = "panweave-direct", version = "0.3.0", default-features = false }
 panweave-smart-energy = { path = "panweave-smart-energy", version = "0.3.0", default-features = false }
 panweave-storage = { path = "panweave-storage", version = "0.1.2", default-features = false }
-panweave-runtime = { path = "panweave-runtime", version = "0.3.0", default-features = false }
+panweave-runtime = { path = "panweave-runtime", version = "0.4.0", default-features = false }
 panweave-testkit = { path = "panweave-testkit", version = "0.2.0", default-features = false }
-panweave-sim = { path = "panweave-sim", version = "0.3.0", default-features = false }
+panweave-sim = { path = "panweave-sim", version = "0.4.0", default-features = false }
 panweave-pcap = { path = "panweave-pcap", version = "0.3.0", default-features = false }
-panweave = { path = "panweave", version = "0.3.0", default-features = false }
-panweave-hub = { path = "panweave-hub", version = "0.4.0", default-features = false }
-panweave-lite = { path = "panweave-lite", version = "0.3.0", default-features = false }
+panweave = { path = "panweave", version = "0.4.0", default-features = false }
+panweave-hub = { path = "panweave-hub", version = "0.5.0", default-features = false }
+panweave-lite = { path = "panweave-lite", version = "0.4.0", default-features = false }
 
 heapless = { version = "0.9.3", default-features = false }
 aes = { version = "0.9.3", default-features = false }

@@ -1816,7 +1816,7 @@ dependencies = [
 
 [[package]]
 name = "panweave"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "heapless 0.9.3",
  "panweave-aps",
@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-hub"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "heapless 0.9.3",
  "panweave-aps",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "heapless 0.9.3",
  "panweave-aps",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zcl"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "heapless 0.9.3",
  "panweave-aps",

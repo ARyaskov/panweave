@@ -5,6 +5,11 @@ Keep a Changelog; versions follow SemVer.
 
 ## [Unreleased]
 
+Crate versions: `panweave-runtime`, `panweave`, `panweave-sim`,
+`panweave-lite`, `panweave-cli` 0.4.0 (new `StackEvent` variants),
+`panweave-hub` 0.5.0 (Hub Protocol additions, new `HubConfig` fields),
+`panweave-zcl` 0.3.1. The other crates are unchanged since 0.3.0.
+
 ### Added
 
 * `panweave-mqtt`: a host bridge from the hub (USB serial, Hub Protocol)
