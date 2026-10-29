@@ -494,6 +494,8 @@ impl<HS: Storage> Hub<HS> {
     pub fn attach<C: BlockCipher, R: CryptoRng, S: Storage>(&mut self, stack: &mut Stack<C, R, S>) {
         stack.zdo.response_timeout = self.config.response_timeout;
         stack.config.trust_center_policy.allow_joins = false;
+        #[cfg(feature = "green-power")]
+        Self::attach_green_power(stack);
         self.now = stack.now();
     }
 
@@ -752,6 +754,12 @@ impl<HS: Storage> Hub<HS> {
                 let i = self.heard(stack, f.origin.src.0);
                 self.on_command(stack, i, f);
             }
+            #[cfg(feature = "green-power")]
+            StackEvent::GreenPowerCommissioningMode { .. }
+            | StackEvent::GreenPowerPaired { .. }
+            | StackEvent::GreenPowerDecommissioned { .. }
+            | StackEvent::GreenPowerRefused { .. }
+            | StackEvent::GreenPowerCommand { .. } => self.on_green_power_event(event),
             _ => {}
         }
     }
@@ -2043,6 +2051,10 @@ impl<HS: Storage> Hub<HS> {
         if let Some(r) = self.handle_ota(stack, request) {
             return r.unwrap_or_else(Response::Error);
         }
+        #[cfg(feature = "green-power")]
+        if let Some(r) = self.handle_green_power(stack, request) {
+            return r.unwrap_or_else(Response::Error);
+        }
         #[cfg(feature = "alerts")]
         if let Some(r) = self.handle_alerts(request) {
             return r.unwrap_or_else(Response::Error);
@@ -2210,6 +2222,11 @@ impl<HS: Storage> Hub<HS> {
             | Request::OtaCancel
             | Request::GetOtaStatus
             | Request::AddInstallCode { .. } => Err(ErrorCode::UnknownRequest),
+            // Answered by `handle_green_power` with the `green-power`
+            // feature.
+            Request::GreenPowerCommission { .. }
+            | Request::ListGreenPowerDevices { .. }
+            | Request::RemoveGreenPowerDevice { .. } => Err(ErrorCode::NotSupported),
             // Answered by `handle_alerts` with the `alerts` feature.
             Request::GetAlertStatus
             | Request::SetAlertConfig(_)

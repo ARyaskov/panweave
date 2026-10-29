@@ -871,6 +871,8 @@ dependencies = [
  "heapless",
  "panweave-aps",
  "panweave-codec",
+ "panweave-green-power",
+ "panweave-hub",
  "panweave-mac",
  "panweave-nwk",
  "panweave-pcap",

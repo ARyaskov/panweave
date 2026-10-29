@@ -36,6 +36,9 @@ radio-capture = ["engine"]
 # Off by default; without it the alert requests answer `NotSupported`.
 # The radio switching itself is the firmware's (docs/esp32c6-wifi-alerts.md).
 alerts = ["engine"]
+# The hub as Green Power Combo Basic sink: Green Power Devices
+# (battery-less switches) commissioned and their commands reported.
+green-power = ["engine", "panweave-runtime/green-power", "dep:panweave-green-power"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -51,8 +54,13 @@ panweave-zdo = { workspace = true, optional = true }
 panweave-aps = { workspace = true, optional = true }
 panweave-security = { workspace = true, optional = true }
 panweave-nwk = { workspace = true, optional = true }
+panweave-green-power = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The feature-gated Green Power tests run in the gate (`cargo test`
+# builds the crate with this feature for its tests).
+panweave-hub = { path = ".", features = ["green-power"] }
+panweave-green-power = { workspace = true }
 panweave-security = { workspace = true, features = ["crypto-software"] }
 panweave-sim = { workspace = true }
 panweave-testkit = { workspace = true }

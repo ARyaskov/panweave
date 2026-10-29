@@ -40,8 +40,9 @@ embedded-tls = { version = "0.19.0", default-features = false, features = ["rust
 
 [features]
 default = ["capture"]
-# Green Power Basic Proxy on the router firmware.
-green-power = ["panweave-runtime/green-power"]
+# Green Power: the Basic Proxy on the router firmware, the Combo Basic
+# sink on the hub (docs/esp32c6-hub.md).
+green-power = ["panweave-runtime/green-power", "panweave-hub/green-power"]
 # Smaller ZCL tables (docs/footprint.md).
 small-tables = ["panweave/small-tables"]
 # Hub: radio frame capture for diagnostics (bounded, sanitized by

@@ -37,8 +37,8 @@ use panweave_hub::model::{
 };
 use panweave_hub::protocol::frame::{FrameDecoder, MAX_WIRE};
 use panweave_hub::protocol::{
-    CommandStage, DeviceInfo, DeviceSummary, ErrorCode, Event, LightCommand, Message, Request,
-    Response,
+    CommandStage, DeviceInfo, DeviceSummary, ErrorCode, Event, GpdAddress, LightCommand, Message,
+    Request, Response,
 };
 
 const USAGE: &str = "\
@@ -73,6 +73,9 @@ commands:
                                           offer an OTA image and serve it until a device
                                           upgrades (Admin; Ctrl+C withdraws it)
   ota status | ota cancel                 the offer and the download in progress
+  gp commission [--seconds N] | gp close  Green Power commissioning window (Admin;
+                                          firmware with the green-power feature)
+  gp list | gp remove <srcid>             paired Green Power Devices
   read <ieee> <endpoint> <cluster> <attribute>
   bind <ieee> <endpoint> <cluster>
   report <ieee> <endpoint> <cluster> <attribute> <type> <min> <max> <change>
@@ -613,6 +616,30 @@ fn describe_event(e: &Event) -> String {
         Event::OtaFinished { ieee, status } => {
             format!("{} OTA download ended (status {status:#04x})", Ieee(*ieee))
         }
+        Event::GreenPowerCommissioning { seconds: 0 } => {
+            "Green Power commissioning closed".to_string()
+        }
+        Event::GreenPowerCommissioning { seconds } => {
+            format!("Green Power commissioning open for {seconds} s")
+        }
+        Event::GreenPowerPaired { gpd, device_id } => {
+            format!("{} paired (device id {device_id:#04x})", describe_gpd(gpd))
+        }
+        Event::GreenPowerRemoved { gpd } => format!("{} removed", describe_gpd(gpd)),
+        Event::GreenPowerCommand {
+            gpd,
+            command,
+            payload,
+        } => format!(
+            "{}: {} ({command:#04x}){}",
+            describe_gpd(gpd),
+            panweave_hub::protocol::gp::command_name(*command).unwrap_or("command"),
+            if payload.is_empty() {
+                String::new()
+            } else {
+                format!(" payload {payload:02x?}")
+            }
+        ),
     }
 }
 
@@ -678,6 +705,13 @@ fn describe_color(c: &ColorState) -> String {
         opt(c.hue),
         opt(c.saturation),
     )
+}
+
+fn describe_gpd(g: &GpdAddress) -> String {
+    match g {
+        GpdAddress::SrcId(id) => format!("GPD {id:#010x}"),
+        GpdAddress::Ieee { ieee, endpoint } => format!("GPD {} endpoint {endpoint}", Ieee(*ieee)),
+    }
 }
 
 fn print_summary(d: &DeviceSummary) {
@@ -1075,6 +1109,47 @@ fn run(o: &Options) -> Result<(), String> {
         ["capture", rest @ ..] => capturecmd::run(&mut hub, rest),
         ["security", rest @ ..] => securitycmd::run(&mut hub, rest, as_json),
         ["ota", rest @ ..] => otacmd::run(&mut hub, rest, &o.args),
+        ["gp", "commission", ..] => {
+            let seconds = flag_value(&o.args, "--seconds", 180u16)?;
+            expect_done(hub.call(Request::GreenPowerCommission { seconds })?)?;
+            println!(
+                "Green Power commissioning open for {seconds} s: press the switch's commissioning button"
+            );
+            Ok(())
+        }
+        ["gp", "close"] => {
+            expect_done(hub.call(Request::GreenPowerCommission { seconds: 0 })?)?;
+            println!("Green Power commissioning closed");
+            Ok(())
+        }
+        ["gp", "list"] => {
+            let mut start = 0u8;
+            loop {
+                match hub.call(Request::ListGreenPowerDevices { start })? {
+                    Response::GreenPowerDevices(l) => {
+                        for d in &l.devices {
+                            println!("{}  device id {:#04x}", describe_gpd(&d.gpd), d.device_id);
+                        }
+                        let next = usize::from(l.start) + l.devices.len();
+                        if l.devices.is_empty() || next >= usize::from(l.total) {
+                            if l.total == 0 {
+                                println!("no Green Power Device paired");
+                            }
+                            return Ok(());
+                        }
+                        start = u8::try_from(next).unwrap_or(u8::MAX);
+                    }
+                    Response::Error(e) => return Err(error_text(e)),
+                    r => return Err(format!("unexpected response {r:?}")),
+                }
+            }
+        }
+        ["gp", "remove", id] => {
+            let gpd = GpdAddress::SrcId(number(id)?);
+            expect_done(hub.call(Request::RemoveGreenPowerDevice { gpd })?)?;
+            println!("{} removed", describe_gpd(&gpd));
+            Ok(())
+        }
         ["alerts", rest @ ..] => alertscmd::run(&mut hub, rest, as_json),
         ["self-test", rest @ ..] => {
             let options = selftest::Options {

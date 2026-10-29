@@ -334,6 +334,11 @@ pub mod code {
     /// An install-code key was installed for a device (`arg`: code
     /// length; the code and key are never recorded).
     pub const INSTALL_CODE_ADDED: u16 = 0x070f;
+    /// A Green Power Device was paired (`status`: GPD DeviceID, `arg`:
+    /// SrcId or the low half of its IEEE address).
+    pub const GPD_PAIRED: u16 = 0x0710;
+    /// A Green Power Device's commissioning was refused (`arg` as above).
+    pub const GPD_REFUSED: u16 = 0x0711;
 
     // Commissioning.
     /// The network opened for joining (`arg`: seconds).
@@ -545,6 +550,8 @@ pub const fn code_name(c: u16) -> &'static str {
         JOIN_AUTHORIZED => "join-authorized",
         JOIN_EXEMPTION_WITHDRAWN => "join-exemption-withdrawn",
         INSTALL_CODE_ADDED => "install-code-added",
+        GPD_PAIRED => "gpd-paired",
+        GPD_REFUSED => "gpd-refused",
         ZDP_TIMEOUT => "zdp-timeout",
         ZCL_DEFAULT_RESPONSE_ERROR => "zcl-default-response-error",
         ZCL_ATTRIBUTE_ERROR => "zcl-attribute-error",

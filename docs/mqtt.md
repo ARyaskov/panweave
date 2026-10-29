@@ -54,6 +54,10 @@ interview's category and capabilities:
 | temperature, humidity | `sensor` (°C, %) |
 | battery percentage, voltage | `sensor` (%, mV; diagnostic) |
 
+Each paired Green Power Device (hub built with `green-power`) is an
+`event` entity whose event types are the GPD command names (`toggle`,
+`press_1_of_2`, `recall_scene_0`, …, and `other`), for automations.
+
 Each `--group` is a further `light` on the hub's device. A group command
 is one group-addressed frame: nothing confirms it, so the group light is
 optimistic; the members' own entities show what they did.
@@ -72,6 +76,9 @@ optimistic; the members' own entities show what they did.
 | `<base>/bridge/request/remove` | in | device id, or `{"id", "force"}` (`force`: registry only, no Leave) |
 | `<base>/bridge/request/interview` | in | device id |
 | `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the install code in hex with its CRC (never logged) |
+| `<base>/bridge/request/gp_commission` | in | seconds (0 closes), `ON` (180 s), `OFF` |
+| `<base>/bridge/request/gp_remove` | in | a GPD id (`0x` and 8 hex digits) |
+| `<base>/gp/<gpd>/action` | out | `{"event_type", "command", "payload"}`: a Green Power Device's command |
 | `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
 | `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}`: the device's current state becomes the scene |
 | `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |

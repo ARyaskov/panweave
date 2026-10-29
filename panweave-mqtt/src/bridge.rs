@@ -20,6 +20,9 @@
 //! | `<base>/bridge/request/remove` | in | device id; `{"id", "force"}` |
 //! | `<base>/bridge/request/interview` | in | device id |
 //! | `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the code in hex, with its CRC |
+//! | `<base>/bridge/request/gp_commission` | in | seconds (0 closes) |
+//! | `<base>/bridge/request/gp_remove` | in | a GPD id (`0x` and 8 hex digits) |
+//! | `<base>/gp/<gpd>/action` | out | `{"event_type", "command"}`: a Green Power Device's command |
 //! | `<base>/bridge/request/group_add`, `group_remove` | in | `{"id", "group"}` |
 //! | `<base>/bridge/request/scene_store` | in | `{"id", "group", "scene"}` |
 //! | `<base>/bridge/request/scene_recall` | in | `{"group", "scene", "transition"}` |
@@ -45,8 +48,10 @@ use panweave_hub::model::{
     Capabilities, ColorMode, ColorState, ContactState, DeviceCategory, DeviceState, Flag,
     LeakState, PowerSource, level_to_brightness,
 };
+use panweave_hub::protocol::gp::{COMMAND_NAMES, command_name};
 use panweave_hub::protocol::{
-    DeviceInfo, ErrorCode, Event, LightCommand, MAX_PERMIT_JOIN_SECONDS, Request, Response,
+    DeviceInfo, ErrorCode, Event, GpdAddress, LightCommand, MAX_PERMIT_JOIN_SECONDS, Request,
+    Response,
 };
 use serde_json::{Value, json};
 
@@ -315,6 +320,15 @@ fn scale(v: f64, factor: f64, max: u16) -> u16 {
     x
 }
 
+/// A Green Power Device's id in topics: `0x` and 8 hex digits for a
+/// SrcId, `0x<ieee>_<endpoint>` for an IEEE-addressed GPD.
+pub fn gpd_id(g: &GpdAddress) -> String {
+    match g {
+        GpdAddress::SrcId(id) => format!("0x{id:08x}"),
+        GpdAddress::Ieee { ieee, endpoint } => format!("0x{ieee:016x}_{endpoint}"),
+    }
+}
+
 /// `0x` and 16 hex digits.
 pub fn device_id(ieee: u64) -> String {
     format!("0x{ieee:016x}")
@@ -428,6 +442,8 @@ pub struct Bridge {
     hub_clock: Option<(u32, u64)>,
     permit_join: Option<bool>,
     devices: BTreeMap<u64, Device>,
+    /// Paired Green Power Devices and their DeviceIDs.
+    gpds: BTreeMap<String, (GpdAddress, u8)>,
     /// Devices listed in the registry walk in progress.
     listed: Option<BTreeSet<u64>>,
     now: u64,
@@ -444,6 +460,7 @@ impl Bridge {
             hub_clock: None,
             permit_join: None,
             devices: BTreeMap::new(),
+            gpds: BTreeMap::new(),
             listed: None,
             now: 0,
             out: Vec::new(),
@@ -520,10 +537,55 @@ impl Bridge {
         self.take()
     }
 
-    /// Re-reads the registry from its start.
+    /// Re-reads the registry (and the paired GPDs) from its start.
     fn resync(&mut self) {
         self.listed = Some(BTreeSet::new());
         self.request(Request::ListDevices { start: 0 });
+        self.request(Request::ListGreenPowerDevices { start: 0 });
+    }
+
+    fn gpd_config_topic(&self, g: &GpdAddress) -> String {
+        format!(
+            "{}/event/panweave_gpd_{}/action/config",
+            self.cfg.discovery_prefix,
+            gpd_id(g)
+        )
+    }
+
+    /// A paired GPD as a Home Assistant event entity.
+    fn publish_gpd(&mut self, g: GpdAddress, kind: u8) {
+        let id = gpd_id(&g);
+        let base = &self.cfg.base_topic;
+        let unique = format!("panweave_gpd_{id}_action");
+        let mut types: Vec<&str> = COMMAND_NAMES.to_vec();
+        types.push("other");
+        let mut device = json!({
+            "identifiers": [format!("panweave_gpd_{id}")],
+            "name": format!("Green Power {id}"),
+            "model": format!("GPD device id {kind:#04x}"),
+        });
+        if let Some(hub) = self.hub_ieee {
+            device["via_device"] = json!(format!("panweave_bridge_{}", device_id(hub)));
+        }
+        let config = json!({
+            "name": Value::Null,
+            "unique_id": unique,
+            "object_id": unique,
+            "state_topic": format!("{base}/gp/{id}/action"),
+            "availability_topic": format!("{base}/bridge/state"),
+            "event_types": types,
+            "device": device,
+        });
+        let topic = self.gpd_config_topic(&g);
+        self.gpds.insert(id, (g, kind));
+        self.publish(topic, config.to_string(), true);
+    }
+
+    fn remove_gpd(&mut self, g: &GpdAddress) {
+        if self.gpds.remove(&gpd_id(g)).is_some() {
+            let topic = self.gpd_config_topic(g);
+            self.publish(topic, Vec::new(), true);
+        }
     }
 
     /// Republishes every discovery configuration, state and availability
@@ -535,6 +597,10 @@ impl Bridge {
         let ids: Vec<u64> = self.devices.keys().copied().collect();
         for ieee in ids {
             self.publish_device(ieee);
+        }
+        let gpds: Vec<(GpdAddress, u8)> = self.gpds.values().copied().collect();
+        for (g, d) in gpds {
+            self.publish_gpd(g, d);
         }
         self.take()
     }
@@ -920,6 +986,19 @@ impl Bridge {
             (Request::GetLightColor { .. }, Response::LightColor { ieee, color }) => {
                 self.color_changed(ieee, color);
             }
+            (Request::ListGreenPowerDevices { .. }, Response::GreenPowerDevices(l)) => {
+                for d in &l.devices {
+                    self.publish_gpd(d.gpd, d.device_id);
+                }
+                let next = usize::from(l.start) + l.devices.len();
+                if next < usize::from(l.total) && !l.devices.is_empty() {
+                    self.request(Request::ListGreenPowerDevices {
+                        start: u8::try_from(next).unwrap_or(u8::MAX),
+                    });
+                }
+            }
+            // Firmware without the green-power feature.
+            (Request::ListGreenPowerDevices { .. }, Response::Error(ErrorCode::NotSupported)) => {}
             (Request::RemoveDevice { ieee, .. }, Response::Done) => {
                 self.remove_device(*ieee);
             }
@@ -1093,6 +1172,31 @@ impl Bridge {
                 });
                 self.publish(topic, body.to_string(), false);
             }
+            Event::GreenPowerCommissioning { .. } => {}
+            Event::GreenPowerPaired { gpd, device_id } => self.publish_gpd(gpd, device_id),
+            Event::GreenPowerRemoved { gpd } => self.remove_gpd(&gpd),
+            Event::GreenPowerCommand {
+                gpd,
+                command,
+                payload,
+            } => {
+                let id = gpd_id(&gpd);
+                if !self.gpds.contains_key(&id) {
+                    self.request(Request::ListGreenPowerDevices { start: 0 });
+                }
+                let topic = format!("{}/gp/{id}/action", self.cfg.base_topic);
+                let hex = payload.iter().fold(String::new(), |mut h, b| {
+                    use core::fmt::Write as _;
+                    let _ = write!(h, "{b:02x}");
+                    h
+                });
+                let body = json!({
+                    "event_type": command_name(command).unwrap_or("other"),
+                    "command": command,
+                    "payload": hex,
+                });
+                self.publish(topic, body.to_string(), false);
+            }
             Event::OtaFinished { ieee, status } => {
                 let topic = format!("{}/{}/ota", self.cfg.base_topic, device_id(ieee));
                 let state = if status == 0 { "upgrading" } else { "failed" };
@@ -1225,6 +1329,31 @@ impl Bridge {
                 match r {
                     Some(r) => self.request(r),
                     None => self.log("warning", format!("{name}: bad payload {payload:?}")),
+                }
+            }
+            "gp_commission" => {
+                let seconds = match payload.to_ascii_uppercase().as_str() {
+                    "ON" | "TRUE" => Some(180),
+                    "OFF" | "FALSE" => Some(0),
+                    _ => payload.parse::<u64>().ok(),
+                };
+                match seconds {
+                    Some(s) => self.request(Request::GreenPowerCommission {
+                        seconds: u16::try_from(s.min(3600)).unwrap_or(3600),
+                    }),
+                    None => self.log("warning", format!("gp_commission: bad payload {payload:?}")),
+                }
+            }
+            "gp_remove" => {
+                let id = payload.trim().trim_matches('"');
+                let src = id
+                    .strip_prefix("0x")
+                    .and_then(|h| u32::from_str_radix(h, 16).ok());
+                match src {
+                    Some(src) => self.request(Request::RemoveGreenPowerDevice {
+                        gpd: GpdAddress::SrcId(src),
+                    }),
+                    None => self.log("warning", format!("gp_remove: bad GPD id {id:?}")),
                 }
             }
             "install_code" => {

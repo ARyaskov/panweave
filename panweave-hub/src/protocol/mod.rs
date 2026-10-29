@@ -23,6 +23,7 @@
 pub mod alerts;
 pub mod diagnostics;
 pub mod frame;
+pub mod gp;
 pub mod ota;
 pub mod security;
 
@@ -36,6 +37,7 @@ pub use diagnostics::{
     QueueUsage, RadioDiagnostics, RadioDriverStats, ResetKind, RuntimeDiagnostics,
     StorageDiagnostics, StoreUsage, StoredNetwork, TargetMetrics, TraceConfiguration, TracePage,
 };
+pub use gp::{GPD_PAGE, GpdAddress, GpdInfo, GpdList, MAX_GPD_PAYLOAD};
 pub use ota::{MAX_OTA_CHUNK, OtaImage, OtaOffer, OtaStatus};
 pub use security::{
     DeniedCounts, DeviceAuthorization, ExemptionInfo, MAX_EXEMPTION_SECONDS, MAX_EXEMPTIONS,
@@ -637,6 +639,23 @@ pub enum Request {
         /// Install code with its CRC.
         code: Vec<u8, MAX_INSTALL_CODE>,
     },
+    /// Opens the Green Power sink's commissioning window for `seconds`
+    /// (proxies included); 0 closes it (0.4, feature `green-power`).
+    GreenPowerCommission {
+        /// Window length; 0 closes.
+        seconds: u16,
+    },
+    /// A page of the paired Green Power Devices, from index `start`
+    /// (0.4).
+    ListGreenPowerDevices {
+        /// First index.
+        start: u8,
+    },
+    /// Removes a GPD's pairing from the sink (0.4).
+    RemoveGreenPowerDevice {
+        /// The GPD.
+        gpd: GpdAddress,
+    },
 }
 
 /// Longest install code with its CRC (ZD 1.1 / BDB §10.1).
@@ -661,6 +680,7 @@ impl Request {
             | Request::GetTraceConfiguration
             | Request::GetLightColor { .. }
             | Request::GetOtaStatus
+            | Request::ListGreenPowerDevices { .. }
             | Request::ReadTrace { .. } => Access::Monitor,
             Request::InterviewDevice { .. }
             | Request::ReadAttribute { .. }
@@ -688,6 +708,8 @@ impl Request {
             | Request::OtaData { .. }
             | Request::OtaCancel
             | Request::AddInstallCode { .. }
+            | Request::GreenPowerCommission { .. }
+            | Request::RemoveGreenPowerDevice { .. }
             | Request::GetWifiScan => Access::Admin,
         }
     }
@@ -737,6 +759,9 @@ impl Request {
             Request::OtaCancel => 0x2f,
             Request::GetOtaStatus => 0x30,
             Request::AddInstallCode { .. } => 0x31,
+            Request::GreenPowerCommission { .. } => 0x32,
+            Request::ListGreenPowerDevices { .. } => 0x33,
+            Request::RemoveGreenPowerDevice { .. } => 0x34,
         }
     }
 
@@ -762,6 +787,9 @@ impl Request {
             | Request::GetOtaStatus
             | Request::StopCapture => Ok(()),
             Request::OtaOffer(o) => ota::write_offer(w, o),
+            Request::GreenPowerCommission { seconds } => w.u16_le(*seconds),
+            Request::ListGreenPowerDevices { start } => w.u8(*start),
+            Request::RemoveGreenPowerDevice { gpd } => gp::write_gpd(w, gpd),
             Request::AddInstallCode { ieee, code } => {
                 w.u64_le(*ieee)?;
                 w.u8(count(code.len())?)?;
@@ -1021,6 +1049,13 @@ impl Request {
             },
             0x2f => Request::OtaCancel,
             0x30 => Request::GetOtaStatus,
+            0x32 => Request::GreenPowerCommission {
+                seconds: r.u16_le()?,
+            },
+            0x33 => Request::ListGreenPowerDevices { start: r.u8()? },
+            0x34 => Request::RemoveGreenPowerDevice {
+                gpd: gp::read_gpd(r)?,
+            },
             0x31 => Request::AddInstallCode {
                 ieee: r.u64_le()?,
                 code: {
@@ -1314,6 +1349,8 @@ pub enum Response {
     },
     /// To [`Request::GetOtaStatus`].
     OtaStatus(OtaStatus),
+    /// To [`Request::ListGreenPowerDevices`].
+    GreenPowerDevices(GpdList),
     /// The request failed.
     Error(ErrorCode),
 }
@@ -1662,6 +1699,35 @@ pub enum Event {
         /// The outcome.
         status: u8,
     },
+    /// The Green Power commissioning window opened (`seconds` left) or
+    /// closed (0; 0.4).
+    GreenPowerCommissioning {
+        /// Seconds left.
+        seconds: u16,
+    },
+    /// A GPD was paired (0.4).
+    GreenPowerPaired {
+        /// The GPD.
+        gpd: GpdAddress,
+        /// Its GPD DeviceID.
+        device_id: u8,
+    },
+    /// A GPD's pairing was removed: it decommissioned itself or the host
+    /// removed it (0.4).
+    GreenPowerRemoved {
+        /// The GPD.
+        gpd: GpdAddress,
+    },
+    /// A command from a paired GPD (a button press, …), once however
+    /// many proxies forwarded it (0.4).
+    GreenPowerCommand {
+        /// The GPD.
+        gpd: GpdAddress,
+        /// GPD CommandID ([`gp::command_name`]).
+        command: u8,
+        /// Its payload (at most [`MAX_GPD_PAYLOAD`] octets kept).
+        payload: Vec<u8, MAX_GPD_PAYLOAD>,
+    },
 }
 
 impl Event {
@@ -1685,6 +1751,10 @@ impl Event {
             Event::OtaDataWanted { .. } => 0x17,
             Event::OtaProgress { .. } => 0x18,
             Event::OtaFinished { .. } => 0x19,
+            Event::GreenPowerCommissioning { .. } => 0x1a,
+            Event::GreenPowerPaired { .. } => 0x1b,
+            Event::GreenPowerRemoved { .. } => 0x1c,
+            Event::GreenPowerCommand { .. } => 0x1d,
         }
     }
 
@@ -1788,6 +1858,21 @@ impl Event {
                 w.u64_le(*ieee)?;
                 w.u8(*status)
             }
+            Event::GreenPowerCommissioning { seconds } => w.u16_le(*seconds),
+            Event::GreenPowerPaired { gpd, device_id } => {
+                gp::write_gpd(w, gpd)?;
+                w.u8(*device_id)
+            }
+            Event::GreenPowerRemoved { gpd } => gp::write_gpd(w, gpd),
+            Event::GreenPowerCommand {
+                gpd,
+                command,
+                payload,
+            } => {
+                gp::write_gpd(w, gpd)?;
+                w.u8(*command)?;
+                gp::write_payload(w, payload)
+            }
         }
     }
 
@@ -1870,6 +1955,21 @@ impl Event {
                 ieee: r.u64_le()?,
                 status: r.u8()?,
             },
+            0x1a => Event::GreenPowerCommissioning {
+                seconds: r.u16_le()?,
+            },
+            0x1b => Event::GreenPowerPaired {
+                gpd: gp::read_gpd(r)?,
+                device_id: r.u8()?,
+            },
+            0x1c => Event::GreenPowerRemoved {
+                gpd: gp::read_gpd(r)?,
+            },
+            0x1d => Event::GreenPowerCommand {
+                gpd: gp::read_gpd(r)?,
+                command: r.u8()?,
+                payload: gp::read_payload(r)?,
+            },
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -1898,6 +1998,7 @@ impl Response {
             Response::WifiScan(_) => 0x12,
             Response::LightColor { .. } => 0x13,
             Response::OtaStatus(_) => 0x14,
+            Response::GreenPowerDevices(_) => 0x15,
             Response::Error(_) => 0x7f,
         }
     }
@@ -1946,6 +2047,7 @@ impl Response {
                 write_color(w, color)
             }
             Response::OtaStatus(st) => ota::write_status(w, st),
+            Response::GreenPowerDevices(l) => gp::write_list(w, l),
             Response::Diagnostics(d) => write_diagnostics(w, d),
             Response::BootReport(b) => diagnostics::write_boot_report(w, b),
             Response::RadioDiagnostics(d) => diagnostics::write_radio(w, d),
@@ -2020,6 +2122,7 @@ impl Response {
                 color: read_color(r)?,
             },
             0x14 => Response::OtaStatus(ota::read_status(r)?),
+            0x15 => Response::GreenPowerDevices(gp::read_list(r)?),
             0x7f => Response::Error(ErrorCode::from_code(r.u8()?)),
             t => return Err(ProtocolError::UnknownTag(t)),
         })

@@ -55,6 +55,9 @@ mod hub;
 mod hub_alerts;
 #[cfg(feature = "engine")]
 mod hub_diag;
+/// The Green Power sink.
+#[cfg(feature = "green-power")]
+mod hub_gp;
 /// The OTA upgrade server.
 #[cfg(feature = "engine")]
 mod hub_ota;

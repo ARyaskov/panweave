@@ -535,3 +535,62 @@ fn install_codes_are_forwarded_and_never_logged() {
     assert_eq!(log.topic, "panweave/bridge/log");
     assert!(!String::from_utf8_lossy(&log.payload).contains("83FE"));
 }
+
+#[test]
+fn green_power_devices_are_event_entities() {
+    use panweave_hub::protocol::GpdAddress;
+    let mut h = host(Config::default());
+    // The test hub has no Green Power sink: listing it is not an error.
+    assert!(!h.published.iter().any(|p| p.topic == "panweave/bridge/log"
+        && String::from_utf8_lossy(&p.payload).contains("GreenPower")),);
+    let gpd = GpdAddress::SrcId(0x8765_4321);
+    let a = h.bridge.on_event(
+        Event::GreenPowerPaired {
+            gpd,
+            device_id: 0x02,
+        },
+        h.now,
+    );
+    h.run(a);
+    let config_topic = "homeassistant/event/panweave_gpd_0x87654321/action/config";
+    let config = h.json(config_topic);
+    assert_eq!(config["state_topic"], "panweave/gp/0x87654321/action");
+    let types = config["event_types"].as_array().unwrap();
+    assert!(types.contains(&serde_json::json!("toggle")));
+    assert!(types.contains(&serde_json::json!("other")));
+
+    let a = h.bridge.on_event(
+        Event::GreenPowerCommand {
+            gpd,
+            command: 0x22,
+            payload: heapless::Vec::new(),
+        },
+        h.now,
+    );
+    h.run(a);
+    let action = h.published.last().unwrap();
+    assert_eq!(action.topic, "panweave/gp/0x87654321/action");
+    assert!(!action.retain);
+    let v: Value = serde_json::from_slice(&action.payload).unwrap();
+    assert_eq!(v["event_type"], "toggle");
+
+    // HA restarts: the GPD is announced again.
+    h.published.clear();
+    h.mqtt("homeassistant/status", "online");
+    assert!(h.retained(config_topic).is_some());
+
+    let a = h.bridge.on_event(Event::GreenPowerRemoved { gpd }, h.now);
+    h.run(a);
+    assert_eq!(h.retained(config_topic), Some(&[][..]));
+
+    h.mqtt("panweave/bridge/request/gp_commission", "60");
+    h.mqtt("panweave/bridge/request/gp_remove", "0x87654321");
+    assert!(
+        h.requests
+            .contains(&Request::GreenPowerCommission { seconds: 60 })
+    );
+    assert!(
+        h.requests
+            .contains(&Request::RemoveGreenPowerDevice { gpd })
+    );
+}

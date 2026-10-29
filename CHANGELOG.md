@@ -46,6 +46,13 @@ Keep a Changelog; versions follow SemVer.
   device's provisional unique key; neither code nor key reaches the trace
   (`install-code-added`). CLI `security install-code`, MQTT
   `bridge/request/install_code`.
+* Hub Green Power (feature `green-power`, also of the ESP32-C6
+  firmware): the stack's Combo Basic sink on endpoint 242,
+  `GreenPowerCommission`, `ListGreenPowerDevices`,
+  `RemoveGreenPowerDevice`, events `GreenPowerCommissioning`,
+  `GreenPowerPaired`, `GreenPowerRemoved`, `GreenPowerCommand` (once per
+  command); GPD command names in `protocol::gp`. CLI `gp`; the MQTT bridge
+  makes each GPD a Home Assistant event entity.
 
 ### Changed
 

@@ -381,6 +381,17 @@ fn diagnostic_responses() -> Vec<Response> {
             color: full_color(),
         },
         Response::OtaStatus(panweave_hub::protocol::OtaStatus::default()),
+        Response::GreenPowerDevices(panweave_hub::protocol::GpdList {
+            total: 9,
+            start: 0,
+            devices: HVec::from_slice(
+                &[panweave_hub::protocol::GpdInfo {
+                    gpd: panweave_hub::protocol::GpdAddress::SrcId(1),
+                    device_id: 2,
+                }; panweave_hub::protocol::GPD_PAGE],
+            )
+            .unwrap(),
+        }),
         Response::OtaStatus(panweave_hub::protocol::OtaStatus {
             offer: Some(panweave_hub::protocol::OtaOffer {
                 image: panweave_hub::protocol::OtaImage {
@@ -519,7 +530,7 @@ fn every_message() -> Vec<Message> {
         data_type: 0x42,
         raw: HVec::from_slice(&[32; 32]).unwrap(),
     };
-    let requests = [
+    let requests = vec![
         Request::GetHubInfo,
         Request::GetNetworkStatus,
         Request::PermitJoin { seconds: 254 },
@@ -651,6 +662,18 @@ fn every_message() -> Vec<Message> {
         },
         Request::OtaCancel,
         Request::GetOtaStatus,
+        Request::GreenPowerCommission { seconds: 180 },
+        Request::GreenPowerCommission { seconds: 0 },
+        Request::ListGreenPowerDevices { start: 8 },
+        Request::RemoveGreenPowerDevice {
+            gpd: panweave_hub::protocol::GpdAddress::SrcId(0x8765_4321),
+        },
+        Request::RemoveGreenPowerDevice {
+            gpd: panweave_hub::protocol::GpdAddress::Ieee {
+                ieee,
+                endpoint: 0xff,
+            },
+        },
         Request::AddInstallCode {
             ieee,
             code: HVec::from_slice(&[0x5a; panweave_hub::protocol::MAX_INSTALL_CODE]).unwrap(),
@@ -837,6 +860,22 @@ fn every_message() -> Vec<Message> {
         Event::OtaFinished {
             ieee: 3,
             status: 0x95,
+        },
+        Event::GreenPowerCommissioning { seconds: 180 },
+        Event::GreenPowerPaired {
+            gpd: panweave_hub::protocol::GpdAddress::SrcId(7),
+            device_id: 0x02,
+        },
+        Event::GreenPowerRemoved {
+            gpd: panweave_hub::protocol::GpdAddress::Ieee {
+                ieee: 9,
+                endpoint: 1,
+            },
+        },
+        Event::GreenPowerCommand {
+            gpd: panweave_hub::protocol::GpdAddress::SrcId(7),
+            command: 0x22,
+            payload: HVec::from_slice(&[1; panweave_hub::protocol::MAX_GPD_PAYLOAD]).unwrap(),
         },
     ];
     for e in [

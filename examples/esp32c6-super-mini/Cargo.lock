@@ -1914,6 +1914,7 @@ dependencies = [
  "heapless 0.9.3",
  "panweave-aps",
  "panweave-codec",
+ "panweave-green-power",
  "panweave-nwk",
  "panweave-runtime",
  "panweave-security",

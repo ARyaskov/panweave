@@ -409,6 +409,37 @@ the code is not kept. Open the network and join the device as usual. The
 install-code policy of the Trust Center is the firmware's: with the
 default, devices without an install code still join with the default key.
 
+## Green Power
+
+Built with the `green-power` feature (`cargo build --release --bin hub
+--features green-power` in `examples/esp32c6-super-mini`), the hub is a
+Green Power Combo Basic sink on endpoint 242. Green Power Devices
+(battery-less switches such as the Hue Tap and Friends of Hue switches)
+are commissioned and their commands reported:
+
+```bash
+panweave-hub-cli gp commission --seconds 180   # then press the switch's pairing button
+panweave-hub-cli watch                         # GPD 0x87654321: toggle (0x22)
+panweave-hub-cli gp list
+panweave-hub-cli gp remove 0x87654321
+```
+
+| Request | Outcome |
+|---|---|
+| `GreenPowerCommission { seconds }` | `Done`; the sink and the proxies open the window (`GreenPowerCommissioning` events with the seconds left, 0 when it closes). 0 closes it |
+| `ListGreenPowerDevices { start }` | `GreenPowerDevices`: up to 8 paired GPDs (SrcId or IEEE + endpoint, GPD DeviceID) |
+| `RemoveGreenPowerDevice { gpd }` | `Done` (`GreenPowerRemoved`); `UnknownDevice` when not paired |
+
+`GreenPowerPaired` reports each pairing and `GreenPowerCommand` each
+command once, however many proxies tunnelled it (the sink checks the
+frame counter and the GPD key). The command identifiers have names in
+`panweave_hub::protocol::gp::command_name` (`toggle`, `press_1_of_2`,
+`recall_scene_0`, …). GPDs are not Zigbee devices and are not in the
+hub's registry; the stack keeps their pairings in its Sink Table across
+reboots. Removing a pairing removes it from the sink only: proxies forget
+it when the GPD decommissions. Without the feature these requests answer
+`NotSupported`.
+
 ## OTA upgrades
 
 The hub is the network's OTA upgrade server (ZCL8 chapter 11) for one
@@ -698,6 +729,9 @@ A request of another version is answered `UnsupportedVersion`.
 | `OtaCancel` (0x2F) | Admin | `Done` |
 | `GetOtaStatus` (0x30) | Monitor | `OtaStatus` (response tag 0x14) |
 | `AddInstallCode { ieee, code }` (0x31) | Admin | `Done`; `InvalidArgument` for a bad length or CRC |
+| `GreenPowerCommission { seconds }` (0x32) | Admin | `Done`; `NotSupported` without `green-power` |
+| `ListGreenPowerDevices { start }` (0x33) | Monitor | `GreenPowerDevices` (response tag 0x15) |
+| `RemoveGreenPowerDevice { gpd }` (0x34) | Admin | `Done` |
 
 Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
 renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
@@ -714,7 +748,7 @@ serves firmware built with and without capture: the capability shows as
 | `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
 | `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
 | `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
-| Requests 0x24–0x31, responses 0x13–0x14, events 0x16–0x19 (`LightColorChanged`, `OtaDataWanted`, `OtaProgress`, `OtaFinished`) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
+| Requests 0x24–0x34, responses 0x13–0x15, events 0x16–0x1D (colour, OTA and Green Power events) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
 | Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
 
 Everything changed since 0.2.0 is unreleased, so no released host or
@@ -865,7 +899,9 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
   driver).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
-* **Not implemented**: OTA Image Page Requests, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
+* **Not implemented**: OTA Image Page Requests, Green Power bidirectional
+  operation beyond commissioning, BLE, Wi-Fi. Green Power needs the
+  `green-power` build.
 * **Sleepy devices**: whatever the hub asks a sleeping device waits for its
   next poll; a device polling rarely (minutes) makes interviews and reads
   slow, and stalled interviews resume only when it is heard. Devices with
