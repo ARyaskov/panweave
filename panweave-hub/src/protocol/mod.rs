@@ -23,6 +23,7 @@
 pub mod alerts;
 pub mod diagnostics;
 pub mod frame;
+pub mod ota;
 pub mod security;
 
 pub use alerts::{
@@ -35,6 +36,7 @@ pub use diagnostics::{
     QueueUsage, RadioDiagnostics, RadioDriverStats, ResetKind, RuntimeDiagnostics,
     StorageDiagnostics, StoreUsage, StoredNetwork, TargetMetrics, TraceConfiguration, TracePage,
 };
+pub use ota::{MAX_OTA_CHUNK, OtaImage, OtaOffer, OtaStatus};
 pub use security::{
     DeniedCounts, DeviceAuthorization, ExemptionInfo, MAX_EXEMPTION_SECONDS, MAX_EXEMPTIONS,
     MAX_UNAUTHORIZED, SecurityStatus,
@@ -609,6 +611,22 @@ pub enum Request {
         /// Transition time in tenths of a second (0: the scene's own).
         transition_ds: u16,
     },
+    /// Offers an OTA image to devices, replacing any earlier offer; its
+    /// bytes follow as [`Request::OtaData`] when the hub asks for them
+    /// (0.4).
+    OtaOffer(OtaOffer),
+    /// Image octets from `offset`, which must be where the hub's window
+    /// ends ([`Event::OtaDataWanted`]; 0.4).
+    OtaData {
+        /// File offset of `data`.
+        offset: u32,
+        /// At most [`MAX_OTA_CHUNK`] octets.
+        data: Vec<u8, MAX_OTA_CHUNK>,
+    },
+    /// Withdraws the offer; a download in progress is aborted (0.4).
+    OtaCancel,
+    /// The OTA server's state (0.4).
+    GetOtaStatus,
 }
 
 impl Request {
@@ -629,6 +647,7 @@ impl Request {
             | Request::GetRuntimeDiagnostics
             | Request::GetTraceConfiguration
             | Request::GetLightColor { .. }
+            | Request::GetOtaStatus
             | Request::ReadTrace { .. } => Access::Monitor,
             Request::InterviewDevice { .. }
             | Request::ReadAttribute { .. }
@@ -652,6 +671,9 @@ impl Request {
             | Request::SetAlertConfig(_)
             | Request::QueueTestAlert
             | Request::RunRadioProbe
+            | Request::OtaOffer(_)
+            | Request::OtaData { .. }
+            | Request::OtaCancel
             | Request::GetWifiScan => Access::Admin,
         }
     }
@@ -696,6 +718,10 @@ impl Request {
             Request::GroupLight { .. } => 0x2a,
             Request::StoreScene { .. } => 0x2b,
             Request::RecallScene { .. } => 0x2c,
+            Request::OtaOffer(_) => 0x2d,
+            Request::OtaData { .. } => 0x2e,
+            Request::OtaCancel => 0x2f,
+            Request::GetOtaStatus => 0x30,
         }
     }
 
@@ -717,7 +743,14 @@ impl Request {
             | Request::GetRuntimeDiagnostics
             | Request::GetTraceConfiguration
             | Request::ClearTrace
+            | Request::OtaCancel
+            | Request::GetOtaStatus
             | Request::StopCapture => Ok(()),
+            Request::OtaOffer(o) => ota::write_offer(w, o),
+            Request::OtaData { offset, data } => {
+                w.u32_le(*offset)?;
+                ota::write_chunk(w, data)
+            }
             Request::SetTraceConfiguration {
                 min_severity,
                 categories,
@@ -961,6 +994,13 @@ impl Request {
                 scene: r.u8()?,
                 transition_ds: r.u16_le()?,
             },
+            0x2d => Request::OtaOffer(ota::read_offer(r)?),
+            0x2e => Request::OtaData {
+                offset: r.u32_le()?,
+                data: ota::read_chunk(r)?,
+            },
+            0x2f => Request::OtaCancel,
+            0x30 => Request::GetOtaStatus,
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -1245,6 +1285,8 @@ pub enum Response {
         /// Its Color Control server.
         color: ColorState,
     },
+    /// To [`Request::GetOtaStatus`].
+    OtaStatus(OtaStatus),
     /// The request failed.
     Error(ErrorCode),
 }
@@ -1566,6 +1608,33 @@ pub enum Event {
         /// Its Color Control server.
         color: ColorState,
     },
+    /// The hub wants image octets from `offset`: send up to `length` of
+    /// them as [`Request::OtaData`] (0.4).
+    OtaDataWanted {
+        /// File offset.
+        offset: u32,
+        /// Octets the window has room for.
+        length: u16,
+    },
+    /// A device's download advanced (every 5 %; 0.4).
+    OtaProgress {
+        /// The device.
+        ieee: u64,
+        /// Octets delivered.
+        offset: u32,
+        /// Image size.
+        size: u32,
+    },
+    /// A device's download ended (0.4): `status` 0 the device verified
+    /// the image and was told to upgrade now; otherwise the ZCL status
+    /// it reported, ABORT (0x95) when cancelled, TIMEOUT (0x94) when it
+    /// stopped asking.
+    OtaFinished {
+        /// The device.
+        ieee: u64,
+        /// The outcome.
+        status: u8,
+    },
 }
 
 impl Event {
@@ -1586,6 +1655,9 @@ impl Event {
             Event::HubError { .. } => 0x14,
             Event::EventsDropped { .. } => 0x15,
             Event::LightColorChanged { .. } => 0x16,
+            Event::OtaDataWanted { .. } => 0x17,
+            Event::OtaProgress { .. } => 0x18,
+            Event::OtaFinished { .. } => 0x19,
         }
     }
 
@@ -1676,6 +1748,19 @@ impl Event {
                 w.u64_le(*ieee)?;
                 write_color(w, color)
             }
+            Event::OtaDataWanted { offset, length } => {
+                w.u32_le(*offset)?;
+                w.u16_le(*length)
+            }
+            Event::OtaProgress { ieee, offset, size } => {
+                w.u64_le(*ieee)?;
+                w.u32_le(*offset)?;
+                w.u32_le(*size)
+            }
+            Event::OtaFinished { ieee, status } => {
+                w.u64_le(*ieee)?;
+                w.u8(*status)
+            }
         }
     }
 
@@ -1745,6 +1830,19 @@ impl Event {
                 ieee: r.u64_le()?,
                 color: read_color(r)?,
             },
+            0x17 => Event::OtaDataWanted {
+                offset: r.u32_le()?,
+                length: r.u16_le()?,
+            },
+            0x18 => Event::OtaProgress {
+                ieee: r.u64_le()?,
+                offset: r.u32_le()?,
+                size: r.u32_le()?,
+            },
+            0x19 => Event::OtaFinished {
+                ieee: r.u64_le()?,
+                status: r.u8()?,
+            },
             t => return Err(ProtocolError::UnknownTag(t)),
         })
     }
@@ -1772,6 +1870,7 @@ impl Response {
             Response::AlertStatus(_) => 0x11,
             Response::WifiScan(_) => 0x12,
             Response::LightColor { .. } => 0x13,
+            Response::OtaStatus(_) => 0x14,
             Response::Error(_) => 0x7f,
         }
     }
@@ -1819,6 +1918,7 @@ impl Response {
                 w.u64_le(*ieee)?;
                 write_color(w, color)
             }
+            Response::OtaStatus(st) => ota::write_status(w, st),
             Response::Diagnostics(d) => write_diagnostics(w, d),
             Response::BootReport(b) => diagnostics::write_boot_report(w, b),
             Response::RadioDiagnostics(d) => diagnostics::write_radio(w, d),
@@ -1892,6 +1992,7 @@ impl Response {
                 ieee: r.u64_le()?,
                 color: read_color(r)?,
             },
+            0x14 => Response::OtaStatus(ota::read_status(r)?),
             0x7f => Response::Error(ErrorCode::from_code(r.u8()?)),
             t => return Err(ProtocolError::UnknownTag(t)),
         })

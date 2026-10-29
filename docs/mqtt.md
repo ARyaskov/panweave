@@ -80,6 +80,7 @@ optimistic; the members' own entities show what they did.
 | `<base>/<id>/set` | in | `{"state": "ON"/"OFF"/"TOGGLE", "brightness": 0–100, "color_temp": mireds, "color": {"x", "y"} or {"h", "s"}, "transition": seconds}`, or `ON` / `OFF` / `TOGGLE` |
 | `<base>/<id>/event` | out | `{"event"}`: `contact-opened`, `water-leak-detected`, `battery-low`, … |
 | `<base>/<id>/attribute` | out | an attribute report the state model does not cover |
+| `<base>/<id>/ota` | out | `{"state": "downloading", "progress"}`, then `upgrading` or `failed` with the device's `status` |
 | `<discovery>/status` | in | `online`: Home Assistant restarted; everything is republished |
 
 The state object always carries every field, `null` when unknown:
@@ -94,6 +95,10 @@ The state object always carries every field, `null` when unknown:
 A colour light adds `color_mode` (`color_temp`, `xy` or `hs`),
 `color_temp` (mireds) and `color` (`x`, `y` in 0–1; `h` in degrees, `s`
 in percent, when the light reports hue and saturation).
+
+OTA upgrades are run with `panweave-hub-cli ota update`, which serves
+the image; the hub's serial port has one client at a time, so stop the
+bridge meanwhile.
 
 ## Availability
 

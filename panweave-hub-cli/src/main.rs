@@ -21,6 +21,7 @@ mod diagcmd;
 mod fingerprint;
 mod hil;
 mod json;
+mod otacmd;
 mod securitycmd;
 mod selftest;
 
@@ -68,6 +69,10 @@ commands:
                                           one group-addressed command (no confirmation)
   scene store <ieee> <group> <scene> [--endpoint N]
   scene recall <group> <scene> [--transition TENTHS]
+  ota update <file> [--ieee IEEE] [--allow-downgrade] [--wait SECONDS]
+                                          offer an OTA image and serve it until a device
+                                          upgrades (Admin; Ctrl+C withdraws it)
+  ota status | ota cancel                 the offer and the download in progress
   read <ieee> <endpoint> <cluster> <attribute>
   bind <ieee> <endpoint> <cluster>
   report <ieee> <endpoint> <cluster> <attribute> <type> <min> <max> <change>
@@ -597,6 +602,15 @@ fn describe_event(e: &Event) -> String {
         Event::LightColorChanged { ieee, color } => {
             format!("{} colour: {}", Ieee(*ieee), describe_color(color))
         }
+        Event::OtaDataWanted { offset, length } => {
+            format!("OTA: the hub wants {length} octets from offset {offset}")
+        }
+        Event::OtaProgress { ieee, offset, size } => {
+            format!("{} OTA download: {offset}/{size} octets", Ieee(*ieee))
+        }
+        Event::OtaFinished { ieee, status } => {
+            format!("{} OTA download ended (status {status:#04x})", Ieee(*ieee))
+        }
     }
 }
 
@@ -1058,6 +1072,7 @@ fn run(o: &Options) -> Result<(), String> {
         ["diagnostics", rest @ ..] => diagcmd::run(&mut hub, rest, as_json),
         ["capture", rest @ ..] => capturecmd::run(&mut hub, rest),
         ["security", rest @ ..] => securitycmd::run(&mut hub, rest, as_json),
+        ["ota", rest @ ..] => otacmd::run(&mut hub, rest, &o.args),
         ["alerts", rest @ ..] => alertscmd::run(&mut hub, rest, as_json),
         ["self-test", rest @ ..] => {
             let options = selftest::Options {

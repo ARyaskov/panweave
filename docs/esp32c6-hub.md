@@ -389,6 +389,47 @@ status 1 when fast polling was asked, `arg` the timeout) and
 idle sensor with a 30 s long poll took 5 s with Poll Control and 26 s
 without.
 
+## OTA upgrades
+
+The hub is the network's OTA upgrade server (ZCL8 chapter 11) for one
+image at a time, which a host offers and streams. The hub holds no image:
+
+```bash
+panweave-hub-cli ota update device-v2.ota [--ieee 00124b002a3b4c5d] [--allow-downgrade]
+```
+
+1. The CLI reads the file and checks its header (file identifier, header
+   version and length, total size equal to the file's). It sends
+   `OtaOffer` with the manufacturer code, image type, file version and
+   size, and the target device if one was named.
+2. Only a device whose manufacturer code and image type match, that runs
+   an older version (another one with `--allow-downgrade`), and is the
+   target when there is one, gets the image in answer to its Query Next
+   Image Request. A named target is sent Image Notify, so it asks at
+   once instead of at its next periodic query. One device downloads at a
+   time; the others are told there is no image until it is done.
+3. The hub keeps a 1 KiB window of the image ahead of the device and
+   asks the host for more (`OtaDataWanted`) whenever half of it is free.
+   The CLI answers with `OtaData` (up to 255 octets each). A block outside
+   the window is answered WAIT_FOR_DATA (retry after 1 s) and fetched.
+   Blocks are at most 64 octets. Sleepy devices are asked to fast poll
+   while they download (see [Poll Control](#poll-control)).
+4. The device verifies the image. On an Upgrade End Request with SUCCESS
+   the hub answers "upgrade now"; `OtaFinished` reports status 0, or the
+   device's failure status. A named target's offer ends with its download.
+
+`OtaProgress` comes every 5 %. `ota cancel` (or Ctrl+C in `ota update`)
+withdraws the offer: the next block request is answered ABORT and
+`OtaFinished` reports 0x95. A device that stops asking for 10 minutes
+is released with status 0x94 (TIMEOUT). Image Page Requests and
+device-specific files are not served. The hub never parses or verifies
+the image itself: the host should only offer files from a trusted source
+(the vendor's), and the device checks the image, including its
+signature where it has one.
+
+With the small tables the hub's endpoint has no room for the OTA server
+cluster, and `OtaOffer` answers `NotSupported`.
+
 ## Groups and scenes
 
 | Request | Zigbee | Outcome |
@@ -632,6 +673,10 @@ A request of another version is answered `UnsupportedVersion`.
 | `GroupLight { group, command }` (0x2A) | Control | `Done` |
 | `StoreScene` (0x2B) | Control | `Accepted` → … |
 | `RecallScene { group, scene, transition }` (0x2C) | Control | `Done` |
+| `OtaOffer` (0x2D) | Admin | `Done`; `NotSupported` without the OTA server cluster |
+| `OtaData { offset, data }` (0x2E) | Admin | `Done`; `InvalidArgument` unless `offset` is where the window ends |
+| `OtaCancel` (0x2F) | Admin | `Done` |
+| `GetOtaStatus` (0x30) | Monitor | `OtaStatus` (response tag 0x14) |
 
 Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
 renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
@@ -648,7 +693,7 @@ serves firmware built with and without capture: the capability shows as
 | `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
 | `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
 | `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
-| Requests 0x24–0x2C, response 0x13, event `LightColorChanged` (0x16) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
+| Requests 0x24–0x30, responses 0x13–0x14, events 0x16–0x19 (`LightColorChanged`, `OtaDataWanted`, `OtaProgress`, `OtaFinished`) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
 | Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
 
 Everything changed since 0.2.0 is unreleased, so no released host or
@@ -799,8 +844,7 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
   driver).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
-* **Not implemented**: OTA
-  upgrades, install codes through the protocol, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
+* **Not implemented**: OTA Image Page Requests, install codes through the protocol, Zigbee Green Power devices on the hub, BLE, Wi-Fi.
 * **Sleepy devices**: whatever the hub asks a sleeping device waits for its
   next poll; a device polling rarely (minutes) makes interviews and reads
   slow, and stalled interviews resume only when it is heard. Devices with

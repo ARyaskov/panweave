@@ -55,6 +55,9 @@ mod hub;
 mod hub_alerts;
 #[cfg(feature = "engine")]
 mod hub_diag;
+/// The OTA upgrade server.
+#[cfg(feature = "engine")]
+mod hub_ota;
 #[cfg(feature = "engine")]
 mod hub_security;
 #[cfg(feature = "engine")]

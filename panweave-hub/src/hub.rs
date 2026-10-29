@@ -315,6 +315,8 @@ pub struct Hub<HS: Storage> {
     pub(crate) exemption_grants: Vec<(u64, Instant), { crate::protocol::MAX_EXEMPTIONS }>,
     /// The persisted exemptions were applied to the stack.
     pub(crate) exemptions_applied: bool,
+    /// The OTA upgrade server.
+    pub(crate) ota: crate::hub_ota::OtaServer,
     /// Experimental Wi-Fi notifications.
     #[cfg(feature = "alerts")]
     pub(crate) alerts: crate::hub_alerts::AlertEngine,
@@ -377,6 +379,7 @@ impl<HS: Storage> Hub<HS> {
             join_last: Vec::new(),
             exemption_grants: Vec::new(),
             exemptions_applied: false,
+            ota: crate::hub_ota::OtaServer::default(),
             #[cfg(feature = "alerts")]
             alerts: crate::hub_alerts::AlertEngine::default(),
         }
@@ -1215,6 +1218,9 @@ impl<HS: Storage> Hub<HS> {
         if Self::is_check_in(f) {
             return self.on_check_in(stack, i, f);
         }
+        if o.cluster == panweave_zcl::clusters::ota::ID && !from_server {
+            return self.on_ota_command(stack, i, f);
+        }
         if o.cluster.0 == cluster::IAS_ZONE && from_server {
             match o.header.command.0 {
                 ias_cmd::STATUS_CHANGE => {
@@ -1463,6 +1469,7 @@ impl<HS: Storage> Hub<HS> {
             self.run_syncs(stack);
             self.stop_fast_polls(stack);
         }
+        self.poll_ota();
         self.flush_storage();
     }
 
@@ -1487,6 +1494,7 @@ impl<HS: Storage> Hub<HS> {
             || d.sync_busy
             || self.commands.iter().any(|c| c.ieee == d.ieee)
             || self.pending.iter().any(|p| p.short == d.short)
+            || self.ota.serving(d.ieee)
     }
 
     /// Answers a Check-in: fast polling while the hub has work for the
@@ -1572,6 +1580,9 @@ impl<HS: Storage> Hub<HS> {
                 next = Some(t);
             }
         };
+        if let Some(t) = self.ota_deadline() {
+            consider(t);
+        }
         for p in &self.pending {
             consider(p.deadline);
         }
@@ -2029,6 +2040,9 @@ impl<HS: Storage> Hub<HS> {
         if let Some(r) = self.handle_security(stack, request) {
             return r.unwrap_or_else(Response::Error);
         }
+        if let Some(r) = self.handle_ota(stack, request) {
+            return r.unwrap_or_else(Response::Error);
+        }
         #[cfg(feature = "alerts")]
         if let Some(r) = self.handle_alerts(request) {
             return r.unwrap_or_else(Response::Error);
@@ -2190,7 +2204,11 @@ impl<HS: Storage> Hub<HS> {
             | Request::StopCapture
             | Request::ReadCapture { .. }
             | Request::SetKeyExchangeExemption { .. }
-            | Request::GetSecurityStatus => Err(ErrorCode::UnknownRequest),
+            | Request::GetSecurityStatus
+            | Request::OtaOffer(_)
+            | Request::OtaData { .. }
+            | Request::OtaCancel
+            | Request::GetOtaStatus => Err(ErrorCode::UnknownRequest),
             // Answered by `handle_alerts` with the `alerts` feature.
             Request::GetAlertStatus
             | Request::SetAlertConfig(_)

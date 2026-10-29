@@ -5,7 +5,7 @@ use panweave_runtime::{ENDPOINT_CLUSTERS, StackCluster, StackEndpoint};
 use panweave_types::{ClusterId, DeviceId, Endpoint, ProfileId};
 use panweave_zcl::clusters::measurement::{illuminance, occupancy, temperature, water_content};
 use panweave_zcl::clusters::{
-    color_control, ias_zone, identify, level, on_off, power_configuration,
+    color_control, ias_zone, identify, level, on_off, ota, power_configuration,
 };
 use panweave_zcl::layer::EndpointInstance;
 use panweave_zdo::descriptor::SimpleDescriptor;
@@ -55,12 +55,19 @@ pub fn hub_endpoint_into(ep: &mut StackEndpoint) -> Option<SimpleDescriptor> {
             clients.push(id).ok()?;
         }
     }
+    // The OTA upgrade server when there is room (not with the small
+    // tables): the clients come first, they receive the reports.
+    let mut servers: Vec<ClusterId, 2> = Vec::new();
+    servers.push(ClusterId(0x0000)).ok()?;
+    if ep.clusters.len() + 1 < ENDPOINT_CLUSTERS && ep.add_instance(ota::server()).is_ok() {
+        servers.push(ota::ID).ok()?;
+    }
     SimpleDescriptor::new(
         endpoint,
         ProfileId::HOME_AUTOMATION,
         COMBINED_INTERFACE,
         0,
-        &[ClusterId(0x0000)],
+        &servers,
         &clients,
     )
 }

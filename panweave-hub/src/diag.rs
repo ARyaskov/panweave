@@ -400,6 +400,11 @@ pub mod code {
     pub const POLL_CHECK_IN: u16 = 0x0a0b;
     /// Fast Poll Stop was sent: the hub had nothing more for the device.
     pub const FAST_POLL_STOP: u16 = 0x0a0c;
+    /// An OTA image was offered (`arg`: file version).
+    pub const OTA_OFFERED: u16 = 0x0a0d;
+    /// A device's OTA download ended (`status`: 0 upgrading, else the
+    /// device's status).
+    pub const OTA_FINISHED: u16 = 0x0a0e;
 
     // Interview (`arg`: stage << 8 | step).
     /// An interview started or restarted.
@@ -549,6 +554,8 @@ pub const fn code_name(c: u16) -> &'static str {
         ZCL_UNSUPPORTED_COMMAND => "zcl-unsupported-command",
         POLL_CHECK_IN => "poll-check-in",
         FAST_POLL_STOP => "fast-poll-stop",
+        OTA_OFFERED => "ota-offered",
+        OTA_FINISHED => "ota-finished",
         INTERVIEW_STARTED => "interview-started",
         INTERVIEW_REQUEST => "interview-request",
         INTERVIEW_ANSWER => "interview-answer",

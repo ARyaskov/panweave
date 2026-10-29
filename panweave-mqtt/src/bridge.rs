@@ -28,6 +28,7 @@
 //! | `<base>/<id>/set` | in | `{"state", "brightness", "color_temp", "color", "transition"}` or `ON` / `OFF` / `TOGGLE` |
 //! | `<base>/<id>/event` | out | `{"event"}`: a sensor event |
 //! | `<base>/<id>/attribute` | out | an attribute report outside the state model |
+//! | `<base>/<id>/ota` | out | `{"state": "downloading", "progress"}`, then `upgrading` or `failed` with the `status` |
 //! | `<discovery>/status` | in | `online`: Home Assistant restarted |
 //!
 //! The state object always carries every field, `null` when unknown:
@@ -1059,6 +1060,24 @@ impl Bridge {
             Event::LightColorChanged { ieee, color } => {
                 self.heard(ieee);
                 self.color_changed(ieee, color);
+            }
+            // The OTA image is served by the host that offered it
+            // (`panweave-hub-cli ota update`); the bridge reports progress.
+            Event::OtaDataWanted { .. } => {}
+            Event::OtaProgress { ieee, offset, size } => {
+                self.heard(ieee);
+                let topic = format!("{}/{}/ota", self.cfg.base_topic, device_id(ieee));
+                let body = json!({
+                    "state": "downloading",
+                    "progress": u64::from(offset) * 100 / u64::from(size.max(1)),
+                });
+                self.publish(topic, body.to_string(), false);
+            }
+            Event::OtaFinished { ieee, status } => {
+                let topic = format!("{}/{}/ota", self.cfg.base_topic, device_id(ieee));
+                let state = if status == 0 { "upgrading" } else { "failed" };
+                let body = json!({ "state": state, "status": status });
+                self.publish(topic, body.to_string(), false);
             }
         }
         self.take()

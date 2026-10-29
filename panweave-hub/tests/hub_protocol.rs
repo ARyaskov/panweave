@@ -380,6 +380,23 @@ fn diagnostic_responses() -> Vec<Response> {
             ieee: 1,
             color: full_color(),
         },
+        Response::OtaStatus(panweave_hub::protocol::OtaStatus::default()),
+        Response::OtaStatus(panweave_hub::protocol::OtaStatus {
+            offer: Some(panweave_hub::protocol::OtaOffer {
+                image: panweave_hub::protocol::OtaImage {
+                    manufacturer_code: 1,
+                    image_type: 2,
+                    file_version: 3,
+                    size: 4,
+                },
+                target: None,
+                allow_downgrade: false,
+            }),
+            device: Some(5),
+            offset: 6,
+            window_offset: 7,
+            window_len: 1024,
+        }),
         Response::CapturePage(CapturePage {
             active: false,
             mode: CaptureMode::Metadata,
@@ -614,6 +631,26 @@ fn every_message() -> Vec<Message> {
             scene: 3,
             transition_ds: 0,
         },
+        Request::OtaOffer(panweave_hub::protocol::OtaOffer {
+            image: panweave_hub::protocol::OtaImage {
+                manufacturer_code: 0x1234,
+                image_type: 0xffff,
+                file_version: 0x0102_0304,
+                size: 0x0012_3456,
+            },
+            target: Some(ieee),
+            allow_downgrade: true,
+        }),
+        Request::OtaData {
+            offset: 0x0001_0000,
+            data: HVec::from_slice(&[0xab; panweave_hub::protocol::MAX_OTA_CHUNK]).unwrap(),
+        },
+        Request::OtaData {
+            offset: 0,
+            data: HVec::new(),
+        },
+        Request::OtaCancel,
+        Request::GetOtaStatus,
         Request::RemoveDevice { ieee, leave: true },
         Request::GetDiagnostics,
         Request::GetBootReport,
@@ -783,6 +820,19 @@ fn every_message() -> Vec<Message> {
         Event::LightColorChanged {
             ieee: 2,
             color: full_color(),
+        },
+        Event::OtaDataWanted {
+            offset: 512,
+            length: 512,
+        },
+        Event::OtaProgress {
+            ieee: 3,
+            offset: 150,
+            size: 3000,
+        },
+        Event::OtaFinished {
+            ieee: 3,
+            status: 0x95,
         },
     ];
     for e in [

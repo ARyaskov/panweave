@@ -30,6 +30,17 @@ Keep a Changelog; versions follow SemVer.
   Fast Poll Stop when the work is done (`HubConfig::fast_poll_timeout_qs`,
   trace codes `poll-check-in` and `fast-poll-stop`).
   `Zcl::reply_cluster_specific` is public.
+* Hub OTA upgrade server: the host offers one image (`OtaOffer`:
+  manufacturer code, image type, version, size, optional target, downgrade
+  allowed or not) and streams it into a 1 KiB window on demand
+  (`OtaDataWanted` / `OtaData`); only matching devices with an older
+  version are served, one at a time, with Image Notify to a named target,
+  WAIT_FOR_DATA outside the window, fast polling for sleepy devices,
+  `OtaProgress` every 5 %, `OtaFinished` (upgrade now, device failure,
+  0x95 cancelled, 0x94 timed out), `OtaCancel`, `GetOtaStatus`. The hub's
+  endpoint gains the OTA server cluster when the tables have room. CLI
+  `ota update <file>` (header checked) / `status` / `cancel`; the MQTT
+  bridge publishes `<base>/<id>/ota`.
 
 ### Changed
 
