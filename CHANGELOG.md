@@ -5,6 +5,13 @@ Keep a Changelog; versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
+Crate versions: 0.3.0 for the crates on the workspace version (new:
+`panweave-lite`), `panweave-mac` 0.2.0, `panweave-testkit` 0.2.0,
+`panweave-hub` 0.4.0, `panweave-types` 0.1.1, `panweave-storage` 0.1.2.
+`panweave-codec` and `panweave-device-library` are unchanged.
+
 ### Added
 
 * `panweave-lite`: the stack dimensioned for battery IAS Zone sensors on
@@ -68,6 +75,12 @@ Keep a Changelog; versions follow SemVer.
 * A failed frame-counter reservation write blocked every NWK- or
   APS-secured transmission until a reboot; it is now retried (nothing is
   secured beyond the committed bound meanwhile).
+
+## [0.2.0] - 2026-10-26
+
+`panweave-hub` 0.3.0, `panweave-storage` 0.1.1.
+
+### Added
 
 * Experimental Telegram notifications in periodic batches (60 s by default):
   door open/close and leak/recovery events share the next check, empty

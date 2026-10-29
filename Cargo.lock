@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "panweave"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-aps"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-bdb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "panweave-mac",
  "panweave-pcap",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-direct"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-green-power"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-hub"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-hub-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ctrlc",
  "heapless",
@@ -897,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-lite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-mac"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-nwk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "defmt",
@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-pcap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "panweave-codec",
  "panweave-mac",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-security"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "cipher",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "panweave-bdb",
  "panweave-mac",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-smart-energy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-storage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "defmt",
  "embedded-storage",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "defmt",
  "heapless",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "defmt",
  "heapless",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zcl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "defmt",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zdo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "defmt",
  "heapless",

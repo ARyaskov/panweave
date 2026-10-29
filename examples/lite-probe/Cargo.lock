@@ -254,7 +254,7 @@ checksum = "a513e167849a384b7f9b746e517604398518590a9142f4846a32e3c2a4de7b11"
 
 [[package]]
 name = "panweave-aps"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-bdb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-lite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-mac"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-nwk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-codec",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-security"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "cipher",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-storage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "embedded-storage",
  "heapless",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "heapless",
  "panweave-mac",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "heapless",
  "rand_core",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zcl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-aps",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-zdo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "heapless",
  "panweave-aps",
