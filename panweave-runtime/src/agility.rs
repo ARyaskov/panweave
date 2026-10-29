@@ -108,6 +108,7 @@ impl<
         {
             self.pending_channel_change = None;
             self.nwk.change_channel(p.channel, p.update_id);
+            self.push_event(StackEvent::ChannelChanged { channel: p.channel });
         }
         let policy = self.config.interference;
         let eligible = policy.enabled
@@ -205,6 +206,28 @@ impl<
             });
         }
         true
+    }
+
+    /// Runs an energy detect scan over `channels` for the application
+    /// (`duration` 0–5, the MAC scan duration exponent: each channel is
+    /// sampled for (2^duration + 1) superframes); the result comes as
+    /// [`StackEvent::EnergyScanned`]. The radio leaves the network's
+    /// channel meanwhile. `NotPermitted` while another scan runs.
+    pub fn scan_energy(&mut self, channels: ChannelMask, duration: u8) -> Result<(), NwkStatus> {
+        if self.phase != Phase::Operating {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        if self.host_energy_scan || self.energy_scan.is_some() {
+            return Err(NwkStatus::NotPermitted);
+        }
+        match self.nwk.energy_scan(channels, duration) {
+            Ok(()) => {
+                self.host_energy_scan = true;
+                Ok(())
+            }
+            Err(panweave_nwk::layer::NwkError::Busy) => Err(NwkStatus::NotPermitted),
+            Err(_) => Err(NwkStatus::InvalidParameter),
+        }
     }
 
     /// The network channel manager moves the network to `channel`

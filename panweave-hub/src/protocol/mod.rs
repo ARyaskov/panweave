@@ -656,6 +656,22 @@ pub enum Request {
         /// The GPD.
         gpd: GpdAddress,
     },
+    /// Measures the energy on every 2.4 GHz channel (the result comes as
+    /// [`Event::EnergyScan`]); the hub is off its channel for the scan:
+    /// about 16 × (2^`duration` + 1) × 15.36 ms. `NotSupported` when the
+    /// radio driver cannot measure (0.4).
+    ScanEnergy {
+        /// MAC scan duration exponent, 0–5.
+        duration: u8,
+    },
+    /// Moves the whole network to `channel` (11–26): the routers and
+    /// rx-on devices are told (Mgmt_NWK_Update_req), sleepy ones follow
+    /// their parent; [`Event::ChannelChanged`] once the hub switched.
+    /// `Busy` within an hour of the previous change (0.4).
+    ChangeChannel {
+        /// The new channel.
+        channel: u8,
+    },
 }
 
 /// Longest install code with its CRC (ZD 1.1 / BDB §10.1).
@@ -710,6 +726,8 @@ impl Request {
             | Request::AddInstallCode { .. }
             | Request::GreenPowerCommission { .. }
             | Request::RemoveGreenPowerDevice { .. }
+            | Request::ScanEnergy { .. }
+            | Request::ChangeChannel { .. }
             | Request::GetWifiScan => Access::Admin,
         }
     }
@@ -762,6 +780,8 @@ impl Request {
             Request::GreenPowerCommission { .. } => 0x32,
             Request::ListGreenPowerDevices { .. } => 0x33,
             Request::RemoveGreenPowerDevice { .. } => 0x34,
+            Request::ScanEnergy { .. } => 0x35,
+            Request::ChangeChannel { .. } => 0x36,
         }
     }
 
@@ -788,6 +808,8 @@ impl Request {
             | Request::StopCapture => Ok(()),
             Request::OtaOffer(o) => ota::write_offer(w, o),
             Request::GreenPowerCommission { seconds } => w.u16_le(*seconds),
+            Request::ScanEnergy { duration } => w.u8(*duration),
+            Request::ChangeChannel { channel } => w.u8(*channel),
             Request::ListGreenPowerDevices { start } => w.u8(*start),
             Request::RemoveGreenPowerDevice { gpd } => gp::write_gpd(w, gpd),
             Request::AddInstallCode { ieee, code } => {
@@ -1053,6 +1075,8 @@ impl Request {
                 seconds: r.u16_le()?,
             },
             0x33 => Request::ListGreenPowerDevices { start: r.u8()? },
+            0x35 => Request::ScanEnergy { duration: r.u8()? },
+            0x36 => Request::ChangeChannel { channel: r.u8()? },
             0x34 => Request::RemoveGreenPowerDevice {
                 gpd: gp::read_gpd(r)?,
             },
@@ -1728,6 +1752,17 @@ pub enum Event {
         /// Its payload (at most [`MAX_GPD_PAYLOAD`] octets kept).
         payload: Vec<u8, MAX_GPD_PAYLOAD>,
     },
+    /// The result of [`Request::ScanEnergy`] (0.4).
+    EnergyScan {
+        /// Channel and energy (0 quiet … 255 saturated, the MAC's ED
+        /// level), per channel scanned.
+        levels: Vec<(u8, u8), 16>,
+    },
+    /// The hub moved the network to `channel` (0.4).
+    ChannelChanged {
+        /// The new channel.
+        channel: u8,
+    },
 }
 
 impl Event {
@@ -1755,6 +1790,8 @@ impl Event {
             Event::GreenPowerPaired { .. } => 0x1b,
             Event::GreenPowerRemoved { .. } => 0x1c,
             Event::GreenPowerCommand { .. } => 0x1d,
+            Event::EnergyScan { .. } => 0x1e,
+            Event::ChannelChanged { .. } => 0x1f,
         }
     }
 
@@ -1864,6 +1901,15 @@ impl Event {
                 w.u8(*device_id)
             }
             Event::GreenPowerRemoved { gpd } => gp::write_gpd(w, gpd),
+            Event::EnergyScan { levels } => {
+                w.u8(count(levels.len())?)?;
+                for (c, e) in levels {
+                    w.u8(*c)?;
+                    w.u8(*e)?;
+                }
+                Ok(())
+            }
+            Event::ChannelChanged { channel } => w.u8(*channel),
             Event::GreenPowerCommand {
                 gpd,
                 command,
@@ -1965,6 +2011,17 @@ impl Event {
             0x1c => Event::GreenPowerRemoved {
                 gpd: gp::read_gpd(r)?,
             },
+            0x1e => {
+                let n = r.u8()?;
+                let mut levels = Vec::new();
+                for _ in 0..n {
+                    levels
+                        .push((r.u8()?, r.u8()?))
+                        .map_err(|_| ProtocolError::TooLarge)?;
+                }
+                Event::EnergyScan { levels }
+            }
+            0x1f => Event::ChannelChanged { channel: r.u8()? },
             0x1d => Event::GreenPowerCommand {
                 gpd: gp::read_gpd(r)?,
                 command: r.u8()?,

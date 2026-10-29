@@ -288,6 +288,11 @@ pub mod code {
     /// The previous boot ended in a supervisor-requested watchdog reset
     /// (`status`: cause; `arg`: its uptime in seconds).
     pub const PREVIOUS_STALL_RESET: u16 = 0x0305;
+    /// An energy scan ran (`arg`: channels scanned; `status`: the
+    /// quietest channel).
+    pub const ENERGY_SCANNED: u16 = 0x0306;
+    /// The network moved to another channel (`status`: the channel).
+    pub const CHANNEL_CHANGED: u16 = 0x0307;
 
     // NWK.
     /// A unicast was refused: all pending slots in use (`arg`: slots held
@@ -518,6 +523,8 @@ pub const fn code_name(c: u16) -> &'static str {
         STALL_SUSPECTED => "stall-suspected",
         STALL_CONFIRMED => "stall-confirmed",
         PREVIOUS_STALL_RESET => "previous-stall-reset",
+        ENERGY_SCANNED => "energy-scanned",
+        CHANNEL_CHANGED => "channel-changed",
         FLASH_RADIO_STEP_TIME => "flash-radio-step-time",
         NWK_PENDING_FULL => "nwk-pending-full",
         JOIN_ASSOCIATION_REQUEST => "join-association-request",

@@ -11,8 +11,8 @@ use panweave_security::cipher::BlockCipher;
 use panweave_storage::{Storage, StorageError};
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
-    ClusterId, CommandId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, MacCapability,
-    ProfileId, ShortAddress, TransactionSequence,
+    Channel, ChannelMask, ClusterId, CommandId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress,
+    MacCapability, NwkStatus, ProfileId, ShortAddress, TransactionSequence,
 };
 use panweave_zcl::global::{
     AttributeValue, ConfigureReportingStatus, DefaultResponse, ReadAttributeStatus, Records,
@@ -92,6 +92,11 @@ pub struct HubConfig {
     /// kept in RAM only: the storage is never read or written, and hosts
     /// are told.
     pub persistent: bool,
+    /// Whether the radio driver measures channel energy. A driver that
+    /// cannot (the ESP32-C6's, whose energy detection always reports a
+    /// quiet channel) sets `false`: energy scans are refused instead of
+    /// reporting every channel as quiet.
+    pub energy_detection: bool,
     /// Fast-poll timeout asked of a device at a Check-in while the hub
     /// has work for it, in quarter seconds (Poll Control Check-in
     /// Response). The hub sends Fast Poll Stop as soon as the work is
@@ -113,6 +118,7 @@ impl Default for HubConfig {
             sync_interval: Duration::from_secs(60),
             max_interviews: 2,
             persistent: true,
+            energy_detection: true,
             fast_poll_timeout_qs: 120,
         }
     }
@@ -753,6 +759,32 @@ impl<HS: Storage> Hub<HS> {
             StackEvent::ZclCommand(f) => {
                 let i = self.heard(stack, f.origin.src.0);
                 self.on_command(stack, i, f);
+            }
+            StackEvent::EnergyScanned { channels, energy } => {
+                let mut levels = Vec::new();
+                for c in channels.iter() {
+                    let e = energy.get(usize::from(c.raw())).copied().unwrap_or(0xff);
+                    let _ = levels.push((c.raw(), e));
+                }
+                let quietest = levels.iter().min_by_key(|(_, e)| *e).map_or(0, |(c, _)| *c);
+                self.log(
+                    DiagRecord::new(Category::Radio, Severity::Info, code::ENERGY_SCANNED)
+                        .status(quietest)
+                        .arg(u32::try_from(levels.len()).unwrap_or(0)),
+                );
+                self.emit(Event::EnergyScan { levels });
+            }
+            StackEvent::ChannelChanged { channel } => {
+                if let Some(n) = self.network.as_mut() {
+                    n.channel = channel.raw();
+                }
+                self.log(
+                    DiagRecord::new(Category::Radio, Severity::Info, code::CHANNEL_CHANGED)
+                        .status(channel.raw()),
+                );
+                self.emit(Event::ChannelChanged {
+                    channel: channel.raw(),
+                });
             }
             #[cfg(feature = "green-power")]
             StackEvent::GreenPowerCommissioningMode { .. }
@@ -2199,6 +2231,42 @@ impl<HS: Storage> Hub<HS> {
             | Request::StoreScene { .. }
             | Request::GroupLight { .. }
             | Request::RecallScene { .. } => self.handle_lighting(stack, request),
+            Request::ScanEnergy { duration } => {
+                if !self.config.energy_detection {
+                    Err(ErrorCode::NotSupported)
+                } else if *duration > 5 {
+                    Err(ErrorCode::InvalidArgument)
+                } else {
+                    let r = stack
+                        .scan_energy(ChannelMask::ALL_2_4GHZ, *duration)
+                        .map(|()| Response::Done)
+                        .map_err(|e| match e {
+                            NwkStatus::NotPermitted => ErrorCode::Busy,
+                            NwkStatus::InvalidRequest => ErrorCode::NetworkDown,
+                            _ => ErrorCode::InvalidArgument,
+                        });
+                    stack.flush();
+                    r
+                }
+            }
+            Request::ChangeChannel { channel } => {
+                let ch = Channel::new_2_4ghz(*channel).ok_or(ErrorCode::InvalidArgument);
+                let r = ch.and_then(|ch| {
+                    if stack.nwk.nib.channel == ch {
+                        return Ok(Response::Done);
+                    }
+                    stack
+                        .change_network_channel(ch)
+                        .map(|()| Response::Done)
+                        .map_err(|e| match e {
+                            NwkStatus::NotPermitted => ErrorCode::Busy,
+                            NwkStatus::InvalidRequest => ErrorCode::NetworkDown,
+                            _ => ErrorCode::InvalidArgument,
+                        })
+                });
+                stack.flush();
+                r
+            }
             Request::RemoveDevice { ieee, leave } => self
                 .remove_device(stack, *ieee, *leave)
                 .map(|()| Response::Done),

@@ -109,6 +109,9 @@ fn build_hub(persistent: bool, store: HubStore) -> Hub<HubStore> {
             endpoint: HUB_EP,
             firmware: env!("CARGO_PKG_VERSION"),
             persistent,
+            // esp-radio has no energy detection (`Radio::energy_detect`
+            // reports every channel quiet): refuse scans.
+            energy_detection: false,
             ..HubConfig::default()
         },
         store,

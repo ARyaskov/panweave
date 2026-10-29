@@ -662,6 +662,8 @@ fn every_message() -> Vec<Message> {
         },
         Request::OtaCancel,
         Request::GetOtaStatus,
+        Request::ScanEnergy { duration: 5 },
+        Request::ChangeChannel { channel: 26 },
         Request::GreenPowerCommission { seconds: 180 },
         Request::GreenPowerCommission { seconds: 0 },
         Request::ListGreenPowerDevices { start: 8 },
@@ -861,6 +863,13 @@ fn every_message() -> Vec<Message> {
             ieee: 3,
             status: 0x95,
         },
+        Event::EnergyScan {
+            levels: HVec::from_slice(&[(11, 0), (26, 255)]).unwrap(),
+        },
+        Event::EnergyScan {
+            levels: HVec::new(),
+        },
+        Event::ChannelChanged { channel: 15 },
         Event::GreenPowerCommissioning { seconds: 180 },
         Event::GreenPowerPaired {
             gpd: panweave_hub::protocol::GpdAddress::SrcId(7),

@@ -53,6 +53,13 @@ Keep a Changelog; versions follow SemVer.
   `GreenPowerPaired`, `GreenPowerRemoved`, `GreenPowerCommand` (once per
   command); GPD command names in `protocol::gp`. CLI `gp`; the MQTT bridge
   makes each GPD a Home Assistant event entity.
+* Channels: `Stack::scan_energy` with `StackEvent::EnergyScanned`, and
+  `StackEvent::ChannelChanged` when the network manager's channel change
+  takes effect. Hub `ScanEnergy` (`EnergyScan` event) and `ChangeChannel`
+  (`ChannelChanged`), `HubConfig::energy_detection` (false on the
+  ESP32-C6, whose driver cannot measure: scans answer `NotSupported`);
+  CLI `network scan` / `network channel`; MQTT `energy_scan` / `channel`
+  requests.
 
 ### Changed
 

@@ -20,6 +20,9 @@
 //! | `<base>/bridge/request/remove` | in | device id; `{"id", "force"}` |
 //! | `<base>/bridge/request/interview` | in | device id |
 //! | `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the code in hex, with its CRC |
+//! | `<base>/bridge/request/energy_scan` | in | anything: scan the channels |
+//! | `<base>/bridge/request/channel` | in | 11–26: move the network |
+//! | `<base>/bridge/energy_scan` | out | `{"11": level, …}`: a scan's result |
 //! | `<base>/bridge/request/gp_commission` | in | seconds (0 closes) |
 //! | `<base>/bridge/request/gp_remove` | in | a GPD id (`0x` and 8 hex digits) |
 //! | `<base>/gp/<gpd>/action` | out | `{"event_type", "command"}`: a Green Power Device's command |
@@ -1173,6 +1176,17 @@ impl Bridge {
                 self.publish(topic, body.to_string(), false);
             }
             Event::GreenPowerCommissioning { .. } => {}
+            Event::EnergyScan { levels } => {
+                let topic = format!("{}/bridge/energy_scan", self.cfg.base_topic);
+                let body: serde_json::Map<String, Value> = levels
+                    .iter()
+                    .map(|(c, e)| (c.to_string(), json!(e)))
+                    .collect();
+                self.publish(topic, Value::Object(body).to_string(), false);
+            }
+            Event::ChannelChanged { channel } => {
+                self.log("info", format!("the network moved to channel {channel}"));
+            }
             Event::GreenPowerPaired { gpd, device_id } => self.publish_gpd(gpd, device_id),
             Event::GreenPowerRemoved { gpd } => self.remove_gpd(&gpd),
             Event::GreenPowerCommand {
@@ -1331,6 +1345,11 @@ impl Bridge {
                     None => self.log("warning", format!("{name}: bad payload {payload:?}")),
                 }
             }
+            "energy_scan" => self.request(Request::ScanEnergy { duration: 3 }),
+            "channel" => match payload.parse::<u8>() {
+                Ok(channel) => self.request(Request::ChangeChannel { channel }),
+                Err(_) => self.log("warning", format!("channel: bad payload {payload:?}")),
+            },
             "gp_commission" => {
                 let seconds = match payload.to_ascii_uppercase().as_str() {
                     "ON" | "TRUE" => Some(180),

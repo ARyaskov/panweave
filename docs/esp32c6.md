@@ -38,7 +38,9 @@ driver as of `esp-radio` 1.0.0-beta.1:
   so `Radio::energy_detect` reports every channel as quiet and a
   forming coordinator takes the first channel of its primary mask
   (channel 11 by default). Set `Builder::channels` to the channel you
-  want.
+  want, or move a running hub's network with `panweave-hub-cli network
+  channel N`. The hub image declares `energy_detection: false`, so its
+  energy scans answer `NotSupported` instead of misleading zeros.
 * **The frame-pending bit is always set** in the acknowledgements the
   hardware sends: a sleepy child of an ESP32-C6 parent polls once more
   than needed after each frame. Never too little, so nothing is lost.

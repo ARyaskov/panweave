@@ -48,6 +48,10 @@ commands:
   ports                                   list serial ports
   info                                    hub identity and protocol version
   network                                 network parameters, permit-join window
+  network scan [--duration 0-5]           energy on every channel (Admin; the hub is
+                                          off its channel meanwhile)
+  network channel <11-26>                 move the whole network to a channel (Admin;
+                                          at most once an hour)
   permit-join <seconds>                   open the network (1-254 s)
   close                                   close the network
   devices                                 list the registry
@@ -626,6 +630,15 @@ fn describe_event(e: &Event) -> String {
             format!("{} paired (device id {device_id:#04x})", describe_gpd(gpd))
         }
         Event::GreenPowerRemoved { gpd } => format!("{} removed", describe_gpd(gpd)),
+        Event::EnergyScan { levels } => format!(
+            "energy scan: {}",
+            levels
+                .iter()
+                .map(|(c, e)| format!("{c}:{e}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Event::ChannelChanged { channel } => format!("the network moved to channel {channel}"),
         Event::GreenPowerCommand {
             gpd,
             command,
@@ -897,6 +910,42 @@ fn run(o: &Options) -> Result<(), String> {
             }
             r => unexpected(r),
         },
+        ["network", "scan", ..] => {
+            let duration = flag_value(&o.args, "--duration", 3u8)?;
+            expect_done(hub.call(Request::ScanEnergy { duration })?)?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match hub.rx.recv_timeout(left) {
+                    Ok(Message::Event {
+                        event: Event::EnergyScan { levels },
+                        ..
+                    }) => {
+                        for (c, e) in &levels {
+                            let bar = "#".repeat(usize::from(*e) / 8);
+                            println!("channel {c:2}  {e:3}  {bar}");
+                        }
+                        if let Some((c, _)) = levels.iter().min_by_key(|(_, e)| *e) {
+                            println!(
+                                "quietest: {c} (Wi-Fi channels 1, 6, 11 overlap Zigbee 11–14, 16–19, 21–24)"
+                            );
+                        }
+                        return Ok(());
+                    }
+                    Ok(_) => {}
+                    Err(_) => return Err("no scan result".into()),
+                }
+            }
+        }
+        ["network", "channel", ch] => {
+            expect_done(hub.call(Request::ChangeChannel {
+                channel: number(ch)?,
+            })?)?;
+            println!(
+                "moving the network to channel {ch}; sleepy devices follow at their next poll"
+            );
+            Ok(())
+        }
         ["network"] => match hub.call(Request::GetNetworkStatus)? {
             Response::NetworkStatus(s) => {
                 println!("state         {}", s.state.name());

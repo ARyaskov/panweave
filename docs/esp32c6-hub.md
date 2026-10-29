@@ -409,6 +409,31 @@ the code is not kept. Open the network and join the device as usual. The
 install-code policy of the Trust Center is the firmware's: with the
 default, devices without an install code still join with the default key.
 
+## Channels
+
+```bash
+panweave-hub-cli network scan        # energy per channel (radios that measure it)
+panweave-hub-cli network channel 20  # move the whole network
+```
+
+`ScanEnergy { duration }` (Admin) runs a MAC energy-detect scan over the
+16 channels; `EnergyScan` reports each channel's level (0 quiet, 255
+saturated). The hub is off the network's channel during the scan, about
+16 × (2^duration + 1) × 15.36 ms (2.5 s at the default duration 3). A
+radio driver that cannot measure refuses it with `NotSupported` (the
+firmware sets `HubConfig::energy_detection = false`), rather than
+reporting every channel as quiet. **The ESP32-C6 driver cannot**:
+`esp-radio` has no energy-detection API.
+
+`ChangeChannel { channel }` (Admin) moves the network as its channel
+manager does after interference (R23.2 Annex E): Mgmt_NWK_Update_req to
+the routers and rx-on devices, the hub switching after the broadcast
+delivery time, `ChannelChanged` once it has. Sleepy end devices follow
+their parent; one that misses it finds the network again by rejoining.
+A second change within an hour (`apsChannelTimer`) is `Busy`. Without a
+scan, pick a channel away from your Wi-Fi: Wi-Fi channels 1, 6 and 11
+overlap Zigbee 11–14, 16–19 and 21–24; 15, 20 and 25 sit between them.
+
 ## Green Power
 
 Built with the `green-power` feature (`cargo build --release --bin hub
@@ -732,6 +757,8 @@ A request of another version is answered `UnsupportedVersion`.
 | `GreenPowerCommission { seconds }` (0x32) | Admin | `Done`; `NotSupported` without `green-power` |
 | `ListGreenPowerDevices { start }` (0x33) | Monitor | `GreenPowerDevices` (response tag 0x15) |
 | `RemoveGreenPowerDevice { gpd }` (0x34) | Admin | `Done` |
+| `ScanEnergy { duration }` (0x35) | Admin | `Done` → `EnergyScan` event; `NotSupported` without energy detection |
+| `ChangeChannel { channel }` (0x36) | Admin | `Done` → `ChannelChanged` event; `Busy` within an hour of a change |
 
 Requests 0x12–0x1E were added in 0.2.1 after the existing tags; nothing was
 renumbered and the 0.2.0 golden frames are unchanged. A 0.2.0 firmware
@@ -748,7 +775,7 @@ serves firmware built with and without capture: the capability shows as
 | `StartCapture` gained its `mode` octet; mode 0 is rejected | unreleased 0.2.1 builds | only between unreleased builds: no released host or firmware has `StartCapture` |
 | `SecurityStatus`: `denied` (five counters), `exemptions_used`, `exemptions_expired` after `unauthorized_frames_dropped` | 0.3.0 | changes a response no release has; decoders of an unreleased 0.2.1 build fail on it (`Malformed`) — rebuild the host with the same `panweave-hub` |
 | `TargetMetrics`: `radio_tx_idle_ms` renamed `radio_idle_ms` (same position, now TX or RX), `health` and `radio_recoveries` appended | 0.3.0 | same as above |
-| Requests 0x24–0x34, responses 0x13–0x15, events 0x16–0x1D (colour, OTA and Green Power events) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
+| Requests 0x24–0x36, responses 0x13–0x15, events 0x16–0x1F (colour, OTA, Green Power, energy scan and channel events) | 0.4 | appended tags; earlier frames unchanged. Older firmware answers the requests `UnknownRequest`; an older host cannot decode the new event and drops it |
 | Trace codes `stall-suspected` (0x0303), `stall-confirmed` (0x0304), `previous-stall-reset` (0x0305, replacing the unreleased `radio-stalled`), `join-exemption-withdrawn` (0x070e) | 0.3.0 | new codes in existing record fields; an older CLI shows them by number |
 
 Everything changed since 0.2.0 is unreleased, so no released host or
@@ -896,7 +923,8 @@ different, standardized BLE commissioning protocol (`panweave-direct`).
   0xFCC0 (battery voltage among other values) is not read: the hub has
   no client for it. The standard Power Configuration attributes are used.
 * **Channel**: formation uses channel 11 (no energy detection in the
-  driver).
+  driver, so `network scan` answers `NotSupported` on the ESP32-C6); move
+  the network with `network channel` (see [Channels](#channels)).
 * **Link quality**: LQI is known only for the hub's direct neighbours (from
   the neighbour table); RSSI per device is not available.
 * **Not implemented**: OTA Image Page Requests, Green Power bidirectional

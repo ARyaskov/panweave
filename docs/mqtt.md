@@ -76,6 +76,9 @@ optimistic; the members' own entities show what they did.
 | `<base>/bridge/request/remove` | in | device id, or `{"id", "force"}` (`force`: registry only, no Leave) |
 | `<base>/bridge/request/interview` | in | device id |
 | `<base>/bridge/request/install_code` | in | `{"id", "code"}`: the install code in hex with its CRC (never logged) |
+| `<base>/bridge/request/energy_scan` | in | anything: scan the channels (radios that measure energy) |
+| `<base>/bridge/energy_scan` | out | `{"11": level, …, "26": level}` |
+| `<base>/bridge/request/channel` | in | 11–26: move the network |
 | `<base>/bridge/request/gp_commission` | in | seconds (0 closes), `ON` (180 s), `OFF` |
 | `<base>/bridge/request/gp_remove` | in | a GPD id (`0x` and 8 hex digits) |
 | `<base>/gp/<gpd>/action` | out | `{"event_type", "command", "payload"}`: a Green Power Device's command |

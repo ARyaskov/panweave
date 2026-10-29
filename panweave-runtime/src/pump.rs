@@ -991,8 +991,15 @@ impl<
                 }
                 NwkEvent::EnergyScanConfirm { channels, energy } => {
                     let now = self.now;
+                    // An interference check, a Mgmt_NWK_Update_req scan or
+                    // the application's (Stack::scan_energy).
                     if !self.on_interference_scan(&energy, now) {
-                        self.on_energy_scan_confirm(channels, &energy);
+                        if self.host_energy_scan && self.energy_scan.is_none() {
+                            self.host_energy_scan = false;
+                            self.push_event(StackEvent::EnergyScanned { channels, energy });
+                        } else {
+                            self.on_energy_scan_confirm(channels, &energy);
+                        }
                     }
                 }
                 NwkEvent::LinkPowerDelta {

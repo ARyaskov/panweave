@@ -643,6 +643,22 @@ pub enum StackEvent {
         /// Length of the period in minutes.
         period_minutes: u8,
     },
+    /// An energy scan the application asked for
+    /// ([`Stack::scan_energy`]) completed.
+    EnergyScanned {
+        /// Channels scanned.
+        channels: ChannelMask,
+        /// Energy per channel (index = channel number; 0 quiet, 0xff
+        /// saturated).
+        energy: [u8; 27],
+    },
+    /// This device moved the network to `channel`
+    /// ([`Stack::change_network_channel`], after the broadcast delivery
+    /// time).
+    ChannelChanged {
+        /// The new channel.
+        channel: Channel,
+    },
     /// This device's channel was found noisier than the alternatives and
     /// an interference report went to the network manager (Annex E).
     InterferenceReported {
@@ -1028,6 +1044,7 @@ macro_rules! stack_literal {
             interference: crate::agility::Interference::default(),
             fragmentation: crate::fragment_cache::FragmentationCache::default(),
             pending_channel_change: None,
+            host_energy_scan: false,
             channel_change_lockout: None,
             pending_restart: None,
             parent_annce: None,
@@ -1139,6 +1156,8 @@ pub struct Stack<
     /// A channel change this network manager broadcast, applied after
     /// `nwkNetworkBroadcastDeliveryTime`.
     pub(crate) pending_channel_change: Option<crate::agility::PendingChannelChange>,
+    /// An energy scan the application asked for is running.
+    pub(crate) host_energy_scan: bool,
     /// `apsChannelTimer`: no further channel change before this instant.
     pub(crate) channel_change_lockout: Option<Instant>,
     /// A Restart Device accepted by the Commissioning server on the
