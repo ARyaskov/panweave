@@ -166,7 +166,7 @@ report, not the reset.
 ## Experimental notification records
 
 With the hub's `alerts` feature and the mode enabled
-([esp32c6-wifi-alerts.md](esp32c6-wifi-alerts.md)), the hub store also
+([examples/esp32c6-wifi-alerts](../examples/esp32c6-wifi-alerts/README.md)), the hub store also
 holds `Kind::Application` records with ids whose top octet is 0xFF (an
 EUI-64 with the group bit set, so never a device's IEEE address):
 
