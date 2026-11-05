@@ -9,8 +9,8 @@ use std::io::BufRead;
 
 use panweave_hub::protocol::alerts::{STAGES, auth, kinds};
 use panweave_hub::protocol::{
-    AlertConfigUpdate, AlertStage, AlertStatus, ErrorCode, Request, Response, ScanEntry, Text,
-    WifiFailure, WifiScan,
+    AlertConfigUpdate, AlertDestination, AlertStage, AlertStatus, ErrorCode, Request, Response,
+    ScanEntry, Text, WifiFailure, WifiScan,
 };
 
 use crate::diagcmd::unsupported;
@@ -286,6 +286,11 @@ pub(crate) fn status_json(s: &AlertStatus) -> String {
         .opt_str("wifi_bssid", s.bssid.map(mac_text).as_deref())
         .opt("wifi_channel", s.channel.map(Into::into))
         .bool("wifi_wpa3_only", s.wpa3_only)
+        .str("destination", s.destination.name())
+        .str("server_host", &String::from_utf8_lossy(&s.server_host))
+        .int("server_port", s.server_port.into())
+        .int("heartbeat_s", s.heartbeat_s.into())
+        .opt("next_heartbeat_ms", s.next_heartbeat_ms.map(Into::into))
         .finish()
 }
 
@@ -323,11 +328,24 @@ fn status(hub: &mut Hub, as_json: bool) -> Result<(), String> {
             "WPA2 or better"
         }
     );
-    println!(
-        "telegram          chat {:?}, bot token {}",
-        String::from_utf8_lossy(&s.chat_id),
-        if s.token_set { "set" } else { "not set" }
-    );
+    match s.destination {
+        AlertDestination::Telegram => println!(
+            "destination       telegram, chat {:?}, bot token {}",
+            String::from_utf8_lossy(&s.chat_id),
+            if s.token_set { "set" } else { "not set" }
+        ),
+        AlertDestination::Server => println!(
+            "destination       server {}:{}, token {}, heartbeat {}",
+            String::from_utf8_lossy(&s.server_host),
+            s.server_port,
+            if s.token_set { "set" } else { "not set" },
+            if s.heartbeat_s == 0 {
+                "off".to_owned()
+            } else {
+                format!("every {} s", s.heartbeat_s)
+            }
+        ),
+    }
     println!("notify            {}", kinds_names(s.kinds));
     println!(
         "timing            check every {} ms (empty intervals stay in Zigbee), Zigbee downtime budget {} ms, at least {} ms of Zigbee between attempts",
@@ -339,6 +357,9 @@ fn status(hub: &mut Hub, as_json: bool) -> Result<(), String> {
     );
     if let Some(n) = s.next_attempt_ms {
         println!("next attempt      in {} s", n.div_ceil(1000));
+    }
+    if let Some(n) = s.next_heartbeat_ms {
+        println!("next heartbeat    in {} s", n.div_ceil(1000));
     }
     println!(
         "attempts          {} ({} delivered, {} failed, {} ambiguous, {} over budget, {} restore failures)",
@@ -458,7 +479,23 @@ fn configure(hub: &mut Hub, rest: &[&str]) -> Result<(), String> {
     if rest.contains(&"--wifi-allow-wpa2") {
         u.wpa3_only = Some(false);
     }
-    for secret in ["--wifi-password", "--telegram-token"] {
+    if let Some(v) = value(rest, "--destination")? {
+        u.destination = Some(match v {
+            "telegram" => AlertDestination::Telegram,
+            "server" => AlertDestination::Server,
+            _ => return Err("--destination is telegram or server".into()),
+        });
+    }
+    if let Some(v) = value(rest, "--server-host")? {
+        u.server_host = Some(text("server host", v)?);
+    }
+    if let Some(v) = value(rest, "--server-port")? {
+        u.server_port = Some(number(v)?);
+    }
+    if let Some(v) = value(rest, "--heartbeat-s")? {
+        u.heartbeat_s = Some(number(v)?);
+    }
+    for secret in ["--wifi-password", "--telegram-token", "--server-token"] {
         if rest.contains(&secret) {
             return Err(format!(
                 "{secret} is not accepted on the command line; use {secret}-stdin"
@@ -470,8 +507,16 @@ fn configure(hub: &mut Hub, rest: &[&str]) -> Result<(), String> {
     if rest.contains(&"--wifi-password-stdin") {
         u.password = Some(read_secret("Wi-Fi password", &mut lines)?);
     }
+    if rest.contains(&"--telegram-token-stdin") && rest.contains(&"--server-token-stdin") {
+        return Err(
+            "the hub keeps one token: give --telegram-token-stdin or --server-token-stdin".into(),
+        );
+    }
     if rest.contains(&"--telegram-token-stdin") {
         u.token = Some(read_secret("Telegram bot token", &mut lines)?);
+    }
+    if rest.contains(&"--server-token-stdin") {
+        u.token = Some(read_secret("server token", &mut lines)?);
     }
     match hub.call(Request::SetAlertConfig(u))? {
         Response::Done => {
@@ -479,7 +524,7 @@ fn configure(hub: &mut Hub, rest: &[&str]) -> Result<(), String> {
             Ok(())
         }
         Response::Error(ErrorCode::InvalidArgument) => Err(
-            "refused: delay 1000-3600000 ms, budget 500-60000 ms, password at least 8 characters, token and chat id without spaces or quotes, channel 1-13, BSSID a unicast MAC address".into(),
+            "refused: delay 1000-3600000 ms, budget 500-60000 ms, password at least 8 characters, token and chat id without spaces or quotes, channel 1-13, BSSID a unicast MAC address, server host a DNS name, port not 0, heartbeat 0 or 60-86400 s".into(),
         ),
         Response::Error(ErrorCode::StorageFailure) => {
             Err("the hub has no persistent storage: notifications need it".into())

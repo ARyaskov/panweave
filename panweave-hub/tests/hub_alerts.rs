@@ -17,15 +17,19 @@
 mod common;
 
 use std::cell::Cell;
+use std::fmt::Write as _;
 
 use common::*;
 use heapless::Vec as HVec;
+use panweave_hub::PreparedAlert;
 use panweave_hub::alert::attempt::{
     self, Clock, Deadline, NetError, Network, RadioSwitch, RadioSwitchError, Report,
 };
+use panweave_hub::alert::queue::EventId;
+use panweave_hub::alert::uplink::{self, Uplink};
 use panweave_hub::protocol::{
-    AlertConfigUpdate, AlertError, AlertStage, AlertState, AlertStatus, ErrorCode, Event, Request,
-    Response, ScanEntry, SensorEvent, WifiFailure, WifiScan,
+    AlertConfigUpdate, AlertDestination, AlertError, AlertStage, AlertState, AlertStatus,
+    ErrorCode, Event, Request, Response, ScanEntry, SensorEvent, WifiFailure, WifiScan,
 };
 use panweave_hub::registry::zone_type;
 use panweave_sim::Simulator;
@@ -852,4 +856,277 @@ fn the_radio_probe_runs_once_per_request_and_sensors_report_afterwards() {
         CONTACT,
         SensorEvent::ContactOpened
     )));
+}
+
+// ---- a server destination ------------------------------------------
+
+/// A server-like uplink for the engine tests: the request lists the
+/// event identifiers; the answer `all` acknowledges every event, a list
+/// `boot.seq,…` only those.
+struct ListUplink;
+
+impl Uplink for ListUplink {
+    fn build(
+        &mut self,
+        _ctx: &uplink::Context<'_>,
+        pending: &[uplink::Pending<'_>],
+        out: &mut [u8],
+    ) -> Result<uplink::Built, uplink::BuildError> {
+        let mut s = String::from("POST /r HTTP/1.1\r\n\r\n");
+        for p in pending {
+            let _ = write!(s, "{}.{},", p.event.id.boot, p.event.id.seq);
+        }
+        let b = s.as_bytes();
+        out.get_mut(..b.len())
+            .ok_or(uplink::BuildError::TooLong)?
+            .copy_from_slice(b);
+        Ok(uplink::Built {
+            len: b.len(),
+            events: pending.len(),
+            overflow_reported: 0,
+        })
+    }
+
+    fn parse(&mut self, response: &[u8]) -> (Option<u16>, uplink::Reply) {
+        let mut scratch = [0u8; 256];
+        let Some((status, body)) = uplink::http_body(response, &mut scratch) else {
+            return (None, uplink::Reply::Malformed);
+        };
+        if status != 200 {
+            return (Some(status), uplink::Reply::ServerError);
+        }
+        let body = core::str::from_utf8(body).unwrap();
+        let acked = if body == "all" {
+            uplink::Acked::All
+        } else {
+            uplink::Acked::Some(
+                body.split(',')
+                    .filter(|x| !x.is_empty())
+                    .map(|x| {
+                        let (b, s) = x.split_once('.').unwrap();
+                        EventId {
+                            boot: b.parse().unwrap(),
+                            seq: s.parse().unwrap(),
+                        }
+                    })
+                    .collect(),
+            )
+        };
+        (
+            Some(status),
+            uplink::Reply::Delivered {
+                acked,
+                message_id: None,
+            },
+        )
+    }
+
+    fn accepts_heartbeat(&self) -> bool {
+        true
+    }
+}
+
+/// Runs the simulation second by second until an attempt is due.
+fn wait_due(sim: &mut Simulator, c: usize, secs: u64) -> bool {
+    for _ in 0..secs {
+        if due(sim, c) {
+            return true;
+        }
+        sim.run_for(Duration::from_secs(1));
+    }
+    due(sim, c)
+}
+
+fn http_ok(body: &str) -> &'static [u8] {
+    Box::leak(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+        .into_boxed_slice(),
+    )
+}
+
+fn enable_server(sim: &mut Simulator, c: usize, heartbeat_s: u32) {
+    configure(
+        sim,
+        c,
+        AlertConfigUpdate {
+            enabled: Some(true),
+            ssid: Some(text("home")),
+            password: Some(text(PASSWORD)),
+            token: Some(text("hub-token_0123456789")),
+            destination: Some(AlertDestination::Server),
+            server_host: Some(text("hub.example.com")),
+            server_port: Some(8443),
+            heartbeat_s: Some(heartbeat_s),
+            ..AlertConfigUpdate::default()
+        },
+    );
+    let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+    app.hub.set_alert_radio_switching(true);
+}
+
+/// One attempt with [`ListUplink`]; returns the prepared request and
+/// the request text.
+fn server_attempt(
+    sim: &mut Simulator,
+    c: usize,
+    fail: Option<(AlertStage, NetError)>,
+    response: &'static [u8],
+) -> (PreparedAlert, String) {
+    let mut request = [0u8; 2048];
+    let (prepared, report, sent, resp) = {
+        let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+        let prepared = app
+            .hub
+            .prepare_alert_with(&mut ListUplink, &mut request)
+            .unwrap();
+        let t = T {
+            now: Cell::new(1_000_000),
+        };
+        let mut radio = Radio { t: &t, on: true };
+        let mut net = Net {
+            t: &t,
+            ms: 100,
+            fail,
+            response,
+            sent: Vec::new(),
+        };
+        let mut resp = [0u8; 1024];
+        let report = attempt::run(
+            &mut TClock(&t),
+            &mut radio,
+            &mut net,
+            prepared.budget_ms,
+            &prepared.host,
+            prepared.port,
+            &request[..prepared.len],
+            &mut resp,
+        );
+        (prepared, report, net.sent, resp)
+    };
+    let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+    app.hub.poll(stack);
+    app.hub
+        .finish_alert_with(&mut ListUplink, &prepared, &report, &resp);
+    (prepared, String::from_utf8(sent).unwrap())
+}
+
+#[test]
+fn a_server_destination_sends_heartbeats_when_nothing_is_queued() {
+    let (mut sim, c) = network();
+    enable_server(&mut sim, c, 120);
+    let s = status(&mut sim, c);
+    assert_eq!(s.state, AlertState::ZigbeeOperational);
+    assert_eq!(s.destination, AlertDestination::Server);
+    assert_eq!(
+        (s.server_host.as_slice(), s.server_port, s.heartbeat_s),
+        (b"hub.example.com".as_slice(), 8443, 120)
+    );
+    assert!(s.next_heartbeat_ms.is_some_and(|ms| ms <= 60_000));
+    assert!(!due(&mut sim, c), "the first heartbeat waits one interval");
+
+    sim.run_for(Duration::from_secs(61));
+    assert!(due(&mut sim, c));
+    let (prepared, sent) = server_attempt(&mut sim, c, None, http_ok("all"));
+    assert!(prepared.heartbeat);
+    assert_eq!(
+        (prepared.host.as_str(), prepared.port),
+        ("hub.example.com", 8443)
+    );
+    assert!(sent.ends_with("\r\n\r\n"), "no events: {sent:?}");
+    let s = status(&mut sim, c);
+    assert_eq!((s.successes, s.last_error), (1, AlertError::None));
+    assert!(s.next_heartbeat_ms.is_some_and(|ms| ms > 110_000));
+    assert!(!due(&mut sim, c));
+
+    // A failed heartbeat is retried sooner than the interval, but not
+    // before the mandatory Zigbee time.
+    sim.run_for(Duration::from_secs(121));
+    assert!(due(&mut sim, c));
+    server_attempt(
+        &mut sim,
+        c,
+        Some((AlertStage::Connect, NetError::Failed)),
+        http_ok("all"),
+    );
+    let s = status(&mut sim, c);
+    assert_eq!(s.failures, 1);
+    assert!(
+        s.next_heartbeat_ms
+            .is_some_and(|ms| (29_000..=120_000).contains(&ms))
+    );
+    assert_eq!(s.queue_depth, 0);
+
+    // Telegram never gets a heartbeat.
+    configure(
+        &mut sim,
+        c,
+        AlertConfigUpdate {
+            destination: Some(AlertDestination::Telegram),
+            chat_id: Some(text("-1001234567890")),
+            ..AlertConfigUpdate::default()
+        },
+    );
+    assert_eq!(status(&mut sim, c).next_heartbeat_ms, None);
+    sim.run_for(Duration::from_secs(600));
+    assert!(!due(&mut sim, c));
+}
+
+#[test]
+fn a_server_acknowledging_some_events_keeps_the_others_queued() {
+    let (mut sim, c) = network();
+    enable_server(&mut sim, c, 0);
+    let leak = leak_sensor(&mut sim, c);
+    let contact = contact_sensor(&mut sim, c);
+    take_hub_events(&mut sim, c);
+    set_zone(&mut sim, leak, ALARM1);
+    set_zone(&mut sim, contact, ALARM1);
+    assert!(sim.run_until(Duration::from_secs(60), |x| {
+        saw(x, c, LEAK, SensorEvent::WaterLeakDetected)
+            && saw(x, c, CONTACT, SensorEvent::ContactOpened)
+    }));
+    assert_eq!(status(&mut sim, c).queue_depth, 2);
+    assert!(wait_due(&mut sim, c, 120));
+
+    // The server takes only the first event.
+    let boot = status(&mut sim, c).boot_id;
+    let (prepared, sent) = server_attempt(&mut sim, c, None, http_ok(&format!("{boot}.0,")));
+    assert!(!prepared.heartbeat);
+    assert!(sent.contains(&format!("{boot}.0,")) && sent.contains(&format!("{boot}.1,")));
+    let s = status(&mut sim, c);
+    assert_eq!((s.queue_depth, s.successes), (1, 1));
+
+    // The other is sent again, marked as possibly delivered, and taken.
+    assert!(wait_due(&mut sim, c, 300));
+    let (_, sent) = server_attempt(&mut sim, c, None, http_ok("all"));
+    assert!(sent.contains(&format!("{boot}.1,")) && !sent.contains(&format!("{boot}.0,")));
+    assert_eq!(status(&mut sim, c).queue_depth, 0);
+}
+
+#[test]
+fn server_settings_travel_in_the_protocol_and_are_validated() {
+    let (mut sim, c) = network();
+    assert_eq!(
+        request(
+            &mut sim,
+            c,
+            &Request::SetAlertConfig(AlertConfigUpdate {
+                server_host: Some(text("not a host")),
+                ..AlertConfigUpdate::default()
+            })
+        ),
+        Response::Error(ErrorCode::InvalidArgument)
+    );
+    enable_server(&mut sim, c, 900);
+    let s = status(&mut sim, c);
+    assert_eq!(
+        s.state,
+        AlertState::ZigbeeOperational,
+        "complete without a chat"
+    );
+    assert!(s.token_set);
+    assert_eq!(s.heartbeat_s, 900);
 }

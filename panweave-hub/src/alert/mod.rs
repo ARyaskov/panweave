@@ -27,6 +27,7 @@ pub mod message;
 pub mod queue;
 pub mod schedule;
 pub mod telegram;
+pub mod uplink;
 
 use core::fmt;
 
@@ -34,8 +35,8 @@ use panweave_codec::{Reader, Writer};
 use panweave_storage::{Key, Kind, Storage};
 
 use crate::protocol::alerts::{
-    BUDGET_MS, DELAY_MS, MAX_BOT_TOKEN, MAX_CHAT_ID, MAX_SSID, MAX_WIFI_PASSWORD, WIFI_CHANNELS,
-    kinds,
+    AlertDestination, BUDGET_MS, DELAY_MS, HEARTBEAT_S, MAX_BOT_TOKEN, MAX_CHAT_ID,
+    MAX_SERVER_HOST, MAX_SSID, MAX_WIFI_PASSWORD, WIFI_CHANNELS, kinds,
 };
 use crate::protocol::{AlertConfigUpdate, ErrorCode, Text};
 
@@ -43,8 +44,15 @@ use crate::protocol::{AlertConfigUpdate, ErrorCode, Text};
 pub const DEFAULT_DELAY_MS: u32 = 60_000;
 /// Default Zigbee downtime budget.
 pub const DEFAULT_BUDGET_MS: u32 = 2_000;
+/// Default notification server port.
+pub const DEFAULT_SERVER_PORT: u16 = 443;
+/// Default heartbeat interval towards a notification server, seconds.
+pub const DEFAULT_HEARTBEAT_S: u32 = 900;
 
 const FORMAT: u8 = 1;
+/// Largest settings record (about 300 octets with every text full; the
+/// flash store takes up to 512).
+const CONFIG_RECORD: usize = 384;
 /// Flags of the access-point pin at the end of the record.
 const PIN_BSSID: u8 = 1;
 const PIN_CHANNEL: u8 = 2;
@@ -75,6 +83,14 @@ pub struct Config {
     pub channel: Option<u8>,
     /// Join only WPA3-Personal (SAE) access points.
     pub wpa3_only: bool,
+    /// Where notifications go.
+    pub destination: AlertDestination,
+    /// Notification server host name.
+    pub server_host: Text<MAX_SERVER_HOST>,
+    /// Notification server port.
+    pub server_port: u16,
+    /// Heartbeat interval towards the server, seconds (0: none).
+    pub heartbeat_s: u32,
 }
 
 impl Default for Config {
@@ -91,6 +107,10 @@ impl Default for Config {
             bssid: None,
             channel: None,
             wpa3_only: false,
+            destination: AlertDestination::Telegram,
+            server_host: Text::new(),
+            server_port: DEFAULT_SERVER_PORT,
+            heartbeat_s: DEFAULT_HEARTBEAT_S,
         }
     }
 }
@@ -109,6 +129,10 @@ impl fmt::Debug for Config {
             .field("bssid", &self.bssid)
             .field("channel", &self.channel)
             .field("wpa3_only", &self.wpa3_only)
+            .field("destination", &self.destination)
+            .field("server_host", &self.server_host)
+            .field("server_port", &self.server_port)
+            .field("heartbeat_s", &self.heartbeat_s)
             .finish()
     }
 }
@@ -141,14 +165,37 @@ fn write_text<const N: usize>(w: &mut Writer<'_>, t: &Text<N>) -> Option<()> {
 }
 
 impl Config {
-    /// Wi-Fi and Telegram settings are all present.
+    /// The Wi-Fi settings and those of the destination are all present.
     pub fn is_complete(&self) -> bool {
-        !self.ssid.is_empty() && !self.token.is_empty() && !self.chat_id.is_empty()
+        !self.ssid.is_empty()
+            && !self.token.is_empty()
+            && match self.destination {
+                AlertDestination::Telegram => !self.chat_id.is_empty(),
+                AlertDestination::Server => !self.server_host.is_empty(),
+            }
+    }
+
+    /// The host and port notifications are sent to.
+    pub fn endpoint(&self) -> (&str, u16) {
+        match self.destination {
+            AlertDestination::Telegram => (telegram::HOST, telegram::PORT),
+            AlertDestination::Server => (
+                core::str::from_utf8(&self.server_host).unwrap_or(""),
+                self.server_port,
+            ),
+        }
+    }
+
+    /// The heartbeat interval in milliseconds, when one applies (a server
+    /// destination with a non-zero interval).
+    pub fn heartbeat_ms(&self) -> Option<u64> {
+        (self.destination == AlertDestination::Server && self.heartbeat_s > 0)
+            .then(|| u64::from(self.heartbeat_s) * 1000)
     }
 
     /// Loads the settings (defaults when absent or unreadable).
     pub fn load<S: Storage>(storage: &mut S) -> Self {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; CONFIG_RECORD];
         let mut c = Config::default();
         if let Ok(Some(n)) = storage.load(config_key(), &mut buf) {
             let mut r = Reader::new(buf.get(..n).unwrap_or(&[]));
@@ -156,17 +203,17 @@ impl Config {
                 if r.u8().ok()? != FORMAT {
                     return None;
                 }
-                let mut c = Config {
-                    enabled: r.u8().ok()? != 0,
-                    kinds: r.u8().ok()?,
-                    delay_ms: r.u32_le().ok()?,
-                    budget_ms: r.u32_le().ok()?,
-                    ssid: read_text(&mut r)?,
-                    password: read_text(&mut r)?,
-                    token: read_text(&mut r)?,
-                    chat_id: read_text(&mut r)?,
-                    ..Config::default()
-                };
+                // Built field by field: `Config` wipes its secrets on drop,
+                // so it cannot be the base of a struct update.
+                let mut c = Config::default();
+                c.enabled = r.u8().ok()? != 0;
+                c.kinds = r.u8().ok()?;
+                c.delay_ms = r.u32_le().ok()?;
+                c.budget_ms = r.u32_le().ok()?;
+                c.ssid = read_text(&mut r)?;
+                c.password = read_text(&mut r)?;
+                c.token = read_text(&mut r)?;
+                c.chat_id = read_text(&mut r)?;
                 // The access-point pin, appended to format 1 later: a
                 // record written before it simply ends here.
                 if !r.is_empty() {
@@ -178,6 +225,13 @@ impl Config {
                         c.channel = Some(r.u8().ok()?);
                     }
                     c.wpa3_only = flags & PIN_WPA3 != 0;
+                }
+                // The server settings, appended after the pin later still.
+                if !r.is_empty() {
+                    c.destination = AlertDestination::from_code(r.u8().ok()?)?;
+                    c.server_host = read_text(&mut r)?;
+                    c.server_port = r.u16_le().ok()?;
+                    c.heartbeat_s = r.u32_le().ok()?;
                 }
                 Some(c)
             })();
@@ -196,7 +250,7 @@ impl Config {
     ///
     /// `StorageFailure`.
     pub fn store<S: Storage>(&self, storage: &mut S) -> Result<(), ErrorCode> {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; CONFIG_RECORD];
         let mut w = Writer::new(&mut buf);
         let ok = (|| {
             w.u8(FORMAT).ok()?;
@@ -222,6 +276,10 @@ impl Config {
             if let Some(c) = self.channel {
                 w.u8(c).ok()?;
             }
+            w.u8(self.destination.code()).ok()?;
+            write_text(&mut w, &self.server_host)?;
+            w.u16_le(self.server_port).ok()?;
+            w.u32_le(self.heartbeat_s).ok()?;
             Some(())
         })();
         let n = w.position();
@@ -262,6 +320,12 @@ impl Config {
             || u.bssid
                 .flatten()
                 .is_some_and(|m| m[0] & 1 != 0 || m == [0; 6])
+            || u.server_host
+                .as_ref()
+                .is_some_and(|h| !h.is_empty() && !valid_host(h))
+            || u.server_port == Some(0)
+            || u.heartbeat_s
+                .is_some_and(|h| h != 0 && !HEARTBEAT_S.contains(&h))
         {
             return Err(ErrorCode::InvalidArgument);
         }
@@ -304,8 +368,34 @@ impl Config {
         if let Some(w) = u.wpa3_only {
             self.wpa3_only = w;
         }
+        if let Some(d) = u.destination {
+            self.destination = d;
+        }
+        if let Some(h) = &u.server_host {
+            self.server_host.clone_from(h);
+        }
+        if let Some(p) = u.server_port {
+            self.server_port = p;
+        }
+        if let Some(h) = u.heartbeat_s {
+            self.heartbeat_s = h;
+        }
         Ok(())
     }
+}
+
+/// A DNS host name: labels of letters, digits and hyphens separated by
+/// dots, no label empty or starting or ending with a hyphen.
+fn valid_host(h: &[u8]) -> bool {
+    h.split(|b| *b == b'.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+            && label.first() != Some(&b'-')
+            && label.last() != Some(&b'-')
+    })
 }
 
 fn telegram_safe(v: &[u8], extra: &[u8]) -> bool {
@@ -363,8 +453,15 @@ mod tests {
             })
             .unwrap();
         plain.store(&mut s).unwrap();
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; CONFIG_RECORD];
         let n = s.load(config_key(), &mut buf).unwrap().unwrap();
+        // The server tail of a default record: destination, empty host,
+        // port, heartbeat.
+        let server_tail = 1 + 1 + 2 + 4;
+        // Written before the server settings existed: ends after the pin.
+        s.store(config_key(), &buf[..n - server_tail]).unwrap();
+        assert_eq!(Config::load(&mut s), plain);
+        let n = n - server_tail;
         assert_eq!(buf[n - 1], 0, "no pin flags");
         s.store(config_key(), &buf[..n - 1]).unwrap();
         assert_eq!(Config::load(&mut s), plain);
@@ -378,6 +475,68 @@ mod tests {
         })
         .unwrap();
         assert_eq!((c.bssid, c.channel, c.wpa3_only), (None, None, false));
+    }
+
+    #[test]
+    fn server_settings_persist_and_decide_completeness_and_endpoint() {
+        let mut s = MemoryStorage::<4, 512>::new();
+        let mut c = Config::default();
+        assert_eq!(c.endpoint(), (telegram::HOST, telegram::PORT));
+        assert_eq!(c.heartbeat_ms(), None, "no heartbeat towards Telegram");
+        c.apply(&AlertConfigUpdate {
+            ssid: Some(text("home")),
+            token: Some(text("hub-token_0123")),
+            destination: Some(AlertDestination::Server),
+            server_host: Some(text("hub.example.com")),
+            server_port: Some(8443),
+            heartbeat_s: Some(600),
+            ..AlertConfigUpdate::default()
+        })
+        .unwrap();
+        assert!(c.is_complete(), "a server needs no chat identifier");
+        assert_eq!(c.endpoint(), ("hub.example.com", 8443));
+        assert_eq!(c.heartbeat_ms(), Some(600_000));
+        c.store(&mut s).unwrap();
+        assert_eq!(Config::load(&mut s), c);
+
+        c.apply(&AlertConfigUpdate {
+            heartbeat_s: Some(0),
+            server_host: Some(Text::new()),
+            ..AlertConfigUpdate::default()
+        })
+        .unwrap();
+        assert_eq!(c.heartbeat_ms(), None);
+        assert!(!c.is_complete(), "a server destination needs a host");
+    }
+
+    #[test]
+    fn invalid_server_settings_are_refused() {
+        let mut c = Config::default();
+        for u in [
+            AlertConfigUpdate {
+                server_host: Some(text("bad host")),
+                ..AlertConfigUpdate::default()
+            },
+            AlertConfigUpdate {
+                server_host: Some(text("-x.example.com")),
+                ..AlertConfigUpdate::default()
+            },
+            AlertConfigUpdate {
+                server_host: Some(text("a..b")),
+                ..AlertConfigUpdate::default()
+            },
+            AlertConfigUpdate {
+                server_port: Some(0),
+                ..AlertConfigUpdate::default()
+            },
+            AlertConfigUpdate {
+                heartbeat_s: Some(10),
+                ..AlertConfigUpdate::default()
+            },
+        ] {
+            assert_eq!(c.apply(&u), Err(ErrorCode::InvalidArgument), "{u:?}");
+        }
+        assert_eq!(c, Config::default(), "nothing changed");
     }
 
     #[test]

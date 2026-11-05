@@ -18,12 +18,13 @@ use panweave_hub::model::{
     LeakState, LogicalType, PowerSource,
 };
 use panweave_hub::protocol::alerts::{
-    MAX_BOT_TOKEN, MAX_CHAT_ID, MAX_SSID, MAX_WIFI_PASSWORD, STAGES, kinds,
+    MAX_BOT_TOKEN, MAX_CHAT_ID, MAX_SERVER_HOST, MAX_SSID, MAX_WIFI_PASSWORD, STAGES, kinds,
 };
 use panweave_hub::protocol::frame::{FrameDecoder, MAX_BODY, MAX_WIRE};
 use panweave_hub::protocol::{
-    AlertConfigUpdate, AlertError, AlertStage, AlertState, AlertStatus, DeviceAuthorization,
-    ExemptionInfo, MAX_EXEMPTIONS, MAX_UNAUTHORIZED, SecurityStatus, TargetMetrics,
+    AlertConfigUpdate, AlertDestination, AlertError, AlertStage, AlertState, AlertStatus,
+    DeviceAuthorization, ExemptionInfo, MAX_EXEMPTIONS, MAX_UNAUTHORIZED, SecurityStatus,
+    TargetMetrics,
 };
 use panweave_hub::protocol::{
     AttributeData, BootReport, CapturePage, CommandStage, DEVICE_PAGE, DeviceInfo, DeviceList,
@@ -479,6 +480,11 @@ fn largest_alert_status() -> AlertStatus {
         bssid: Some([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]),
         channel: Some(13),
         wpa3_only: true,
+        destination: AlertDestination::Server,
+        server_host: HVec::from_slice(&[b'h'; MAX_SERVER_HOST]).unwrap(),
+        server_port: u16::MAX,
+        heartbeat_s: u32::MAX,
+        next_heartbeat_ms: Some(u32::MAX),
     }
 }
 
@@ -496,6 +502,10 @@ fn largest_alert_update() -> AlertConfigUpdate {
         bssid: Some(Some([0x02, 0x11, 0x22, 0x33, 0x44, 0x55])),
         channel: Some(Some(13)),
         wpa3_only: Some(true),
+        destination: Some(AlertDestination::Server),
+        server_host: Some(HVec::from_slice(&[b'h'; MAX_SERVER_HOST]).unwrap()),
+        server_port: Some(u16::MAX),
+        heartbeat_s: Some(u32::MAX),
     }
 }
 
@@ -956,8 +966,47 @@ fn every_message_round_trips_through_the_wire() {
         let mut body = [0u8; MAX_BODY];
         let len = m.encode(&mut body).unwrap();
         for cut in 0..len {
-            assert!(Message::decode(&body[..cut]).is_err(), "{m:?} cut at {cut}");
+            match Message::decode(&body[..cut]) {
+                Err(_) => {}
+                // The server fields are an optional tail: without them the
+                // message is the one older firmware and hosts exchange.
+                Ok(d) => assert_eq!(Some(d), without_server_tail(&m), "{m:?} cut at {cut}"),
+            }
         }
+    }
+}
+
+/// `m` as encoded before the server fields existed, when it has them.
+fn without_server_tail(m: &Message) -> Option<Message> {
+    match m {
+        Message::Request {
+            id,
+            request: Request::SetAlertConfig(u),
+        } => Some(Message::Request {
+            id: *id,
+            request: Request::SetAlertConfig(AlertConfigUpdate {
+                destination: None,
+                server_host: None,
+                server_port: None,
+                heartbeat_s: None,
+                ..u.clone()
+            }),
+        }),
+        Message::Response {
+            id,
+            response: Response::AlertStatus(s),
+        } => Some(Message::Response {
+            id: *id,
+            response: Response::AlertStatus(AlertStatus {
+                destination: AlertDestination::Telegram,
+                server_host: HVec::new(),
+                server_port: 0,
+                heartbeat_s: 0,
+                next_heartbeat_ms: None,
+                ..s.clone()
+            }),
+        }),
+        _ => None,
     }
 }
 

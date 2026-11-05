@@ -1,20 +1,26 @@
 //! The hub's side of the experimental Wi-Fi notifications
 //! ([`crate::alert`]): sensor events are queued durably as they are
 //! emitted; the firmware asks [`Hub::alert_due`], builds the request with
-//! [`Hub::prepare_alert`], runs [`crate::alert::attempt::run`] with its
-//! radio and network, and reports with [`Hub::finish_alert`].
+//! [`Hub::prepare_alert_with`] and the destination's
+//! [`Uplink`](crate::alert::uplink::Uplink), runs
+//! [`crate::alert::attempt::run`] with its radio and network against
+//! [`PreparedAlert::host`] and [`PreparedAlert::port`], and reports with
+//! [`Hub::finish_alert_with`]. With a server destination and a heartbeat,
+//! an attempt is also due when nothing is queued, at the heartbeat
+//! interval.
 
 use heapless::Vec;
 use panweave_storage::Storage;
 
+use crate::alert::Config;
 use crate::alert::attempt::{Outcome, Report};
-use crate::alert::message::{self, Sensor};
+use crate::alert::message::Sensor;
 use crate::alert::queue::{self, EventId, Queue};
 use crate::alert::schedule::{MIN_ZIGBEE_MS, Schedule};
-use crate::alert::{Config, telegram};
+use crate::alert::uplink::{self, Acked, Pending, Telegram, Uplink};
 use crate::hub::Hub;
 use crate::model::{ContactState, DeviceState, Flag, LeakState};
-use crate::protocol::alerts::STAGES;
+use crate::protocol::alerts::{MAX_SERVER_HOST, STAGES};
 use crate::protocol::{
     AlertConfigUpdate, AlertError, AlertKind, AlertStage, AlertState, AlertStatus, ErrorCode,
     Request, Response,
@@ -36,16 +42,30 @@ pub(crate) struct AlertEngine {
     probe_ended: Option<u64>,
     /// What the last probe's scan heard.
     scan: Option<crate::protocol::WifiScan>,
+    /// When the next heartbeat is due (monotonic ms), with a server
+    /// destination and a heartbeat interval.
+    heartbeat_due: Option<u64>,
 }
+
+/// After a failed heartbeat, the next one is tried this much later (or
+/// at the heartbeat interval, when shorter; never sooner than the
+/// mandatory Zigbee time).
+const HEARTBEAT_RETRY_MS: u64 = 300_000;
 
 /// A request ready for an attempt.
 #[derive(Clone, Debug)]
 pub struct PreparedAlert {
-    /// Length of the request in the caller's buffer (which holds the bot
-    /// token: wipe it after the attempt, [`telegram::wipe`]).
+    /// Length of the request in the caller's buffer (which holds the
+    /// token: wipe it after the attempt, [`crate::alert::telegram::wipe`]).
     pub len: usize,
     /// The Zigbee downtime budget to run the attempt with.
     pub budget_ms: u32,
+    /// The host to connect to (and to verify the certificate of).
+    pub host: heapless::String<MAX_SERVER_HOST>,
+    /// The TCP port.
+    pub port: u16,
+    /// The request carries no event: a heartbeat.
+    pub heartbeat: bool,
     ids: Vec<EventId, { queue::CAPACITY }>,
     overflow_reported: u32,
 }
@@ -85,7 +105,26 @@ impl<HS: Storage> Hub<HS> {
                 u64::from(self.alerts.config.delay_ms),
             );
             self.alerts.queue = Some(q);
+            self.schedule_heartbeat(now, u64::from(self.alerts.config.delay_ms));
         }
+    }
+
+    /// Plans the next heartbeat `after_ms` from `now` (none without a
+    /// server destination and interval).
+    fn schedule_heartbeat(&mut self, now: u64, after_ms: u64) {
+        self.alerts.heartbeat_due = self
+            .alerts
+            .config
+            .heartbeat_ms()
+            .map(|_| now.saturating_add(after_ms));
+    }
+
+    fn heartbeat_is_due(&self) -> bool {
+        self.alerts.config.heartbeat_ms().is_some()
+            && self
+                .alerts
+                .heartbeat_due
+                .is_some_and(|t| self.now.as_millis() >= t)
     }
 
     /// Declares whether this firmware can hand the radio to Wi-Fi (it
@@ -240,23 +279,46 @@ impl<HS: Storage> Hub<HS> {
         }
     }
 
-    /// Whether an attempt should start now.
+    fn alerts_can_run(&self) -> bool {
+        let a = &self.alerts;
+        a.config.enabled
+            && a.supported
+            && !a.restore_failed
+            && a.config.is_complete()
+            && a.queue.is_some()
+    }
+
+    /// Whether an attempt should start now: queued events are due, or a
+    /// heartbeat is.
     pub fn alert_due(&self) -> bool {
-        self.alerts.config.enabled
-            && self.alerts.supported
-            && !self.alerts.restore_failed
-            && self.alerts.config.is_complete()
-            && self.alerts.queue.as_ref().is_some_and(|q| !q.is_empty())
-            && self.alerts.schedule.is_due(self.now.as_millis())
+        self.alerts_can_run()
+            && ((self.alerts.queue.as_ref().is_some_and(|q| !q.is_empty())
+                && self.alerts.schedule.is_due(self.now.as_millis()))
+                || self.heartbeat_is_due())
     }
 
     /// When the next attempt is due (monotonic ms), while one can run.
     pub(crate) fn alert_deadline(&self) -> Option<u64> {
+        if !self.alerts_can_run() {
+            return None;
+        }
         let a = &self.alerts;
-        (a.config.enabled && a.supported && !a.restore_failed && a.config.is_complete())
-            .then(|| a.schedule.due())
-            .flatten()
-            .filter(|_| a.queue.as_ref().is_some_and(|q| !q.is_empty()))
+        let queued = a
+            .schedule
+            .due()
+            .filter(|_| a.queue.as_ref().is_some_and(|q| !q.is_empty()));
+        let heartbeat = a
+            .heartbeat_due
+            .filter(|_| a.config.heartbeat_ms().is_some());
+        match (queued, heartbeat) {
+            (Some(q), Some(h)) => Some(q.min(h)),
+            (q, h) => q.or(h),
+        }
+    }
+
+    /// Where notifications go.
+    pub fn alert_destination(&self) -> crate::protocol::AlertDestination {
+        self.alerts.config.destination
     }
 
     /// The Wi-Fi SSID and password the firmware's `Network` connects
@@ -271,60 +333,108 @@ impl<HS: Storage> Hub<HS> {
         (c.bssid, c.channel, c.wpa3_only)
     }
 
-    /// Builds the `sendMessage` request for the pending events into
-    /// `out` (which then holds the bot token).
+    /// Builds the Telegram `sendMessage` request for the pending events
+    /// into `out` (which then holds the bot token):
+    /// [`Hub::prepare_alert_with`] and [`Telegram`].
     pub fn prepare_alert(&mut self, out: &mut [u8]) -> Option<PreparedAlert> {
-        let q = self.alerts.queue.as_ref()?;
-        let pending = q.pending();
-        if pending.is_empty() {
-            return None;
-        }
-        let registry = &self.registry;
-        let mut names: Vec<(u64, heapless::String<72>), { queue::CAPACITY }> = Vec::new();
-        for e in &pending {
-            if let Some(d) = registry.get(e.ieee)
-                && !names.iter().any(|(i, _)| *i == e.ieee)
-            {
-                let mut n = heapless::String::new();
-                let m = core::str::from_utf8(&d.manufacturer).unwrap_or("");
-                let mo = core::str::from_utf8(&d.model).unwrap_or("");
-                let _ = core::fmt::Write::write_fmt(&mut n, format_args!("{m} {mo}"));
-                let _ = names.push((e.ieee, n));
-            }
-        }
-        let composed = message::compose(&pending, q.overflow(), |ieee| Sensor {
-            name: names
-                .iter()
-                .find(|(i, _)| *i == ieee)
-                .map_or("", |(_, n)| n.as_str().trim()),
-            state: registry.get(ieee).map_or("unknown", |d| {
-                sensor_state(d.state.water_leak, d.state.contact)
-            }),
-        });
-        let len = match telegram::build_request(
-            &self.alerts.config.token,
-            &self.alerts.config.chat_id,
-            &composed.text,
-            out,
-        ) {
-            Ok(n) => n,
-            Err(_) => {
-                self.alerts.status.last_error = AlertError::Rejected;
+        self.prepare_alert_with(&mut Telegram, out)
+    }
+
+    /// Builds the request for the pending events — or, when none is
+    /// pending and a heartbeat is due, an empty one — with `uplink` into
+    /// `out` (which then holds the token).
+    pub fn prepare_alert_with<U: Uplink>(
+        &mut self,
+        uplink: &mut U,
+        out: &mut [u8],
+    ) -> Option<PreparedAlert> {
+        let now = self.now.as_millis();
+        let heartbeat_due = self.heartbeat_is_due() && uplink.accepts_heartbeat();
+        let built = {
+            let q = self.alerts.queue.as_ref()?;
+            let pending = q.pending();
+            if pending.is_empty() && !heartbeat_due {
                 return None;
             }
+            let registry = &self.registry;
+            let mut names: Vec<(u64, heapless::String<72>), { queue::CAPACITY }> = Vec::new();
+            for e in &pending {
+                if let Some(d) = registry.get(e.ieee)
+                    && !names.iter().any(|(i, _)| *i == e.ieee)
+                {
+                    let mut n = heapless::String::new();
+                    let m = core::str::from_utf8(&d.manufacturer).unwrap_or("");
+                    let mo = core::str::from_utf8(&d.model).unwrap_or("");
+                    let _ = core::fmt::Write::write_fmt(&mut n, format_args!("{m} {mo}"));
+                    let _ = names.push((e.ieee, n));
+                }
+            }
+            let items: Vec<Pending<'_>, { queue::CAPACITY }> = pending
+                .iter()
+                .map(|e| Pending {
+                    event: e,
+                    sensor: Sensor {
+                        name: names
+                            .iter()
+                            .find(|(i, _)| *i == e.ieee)
+                            .map_or("", |(_, n)| n.as_str().trim()),
+                        state: registry.get(e.ieee).map_or("unknown", |d| {
+                            sensor_state(d.state.water_leak, d.state.contact)
+                        }),
+                    },
+                })
+                .collect();
+            let ctx = uplink::Context {
+                config: &self.alerts.config,
+                boot: q.boot(),
+                uptime_ms: now,
+                overflow: q.overflow(),
+                firmware: self.config.firmware,
+            };
+            uplink.build(&ctx, &items, out).map(|b| {
+                let ids: Vec<EventId, { queue::CAPACITY }> =
+                    pending.iter().take(b.events).map(|e| e.id).collect();
+                (b, ids)
+            })
         };
+        let Ok((built, ids)) = built else {
+            self.alerts.status.last_error = AlertError::Rejected;
+            return None;
+        };
+        let (host, port) = self.alerts.config.endpoint();
+        let mut h = heapless::String::new();
+        if h.push_str(host).is_err() {
+            self.alerts.status.last_error = AlertError::Rejected;
+            return None;
+        }
         self.alerts.status.attempts = self.alerts.status.attempts.saturating_add(1);
         Some(PreparedAlert {
-            len,
+            len: built.len,
             budget_ms: self.alerts.config.budget_ms,
-            ids: pending.iter().take(composed.events).map(|e| e.id).collect(),
-            overflow_reported: composed.overflow_reported,
+            host: h,
+            port,
+            heartbeat: ids.is_empty(),
+            ids,
+            overflow_reported: built.overflow_reported,
         })
     }
 
-    /// Records the outcome of an attempt run with `prepared`; `response`
-    /// is the buffer the attempt received into.
+    /// Records the outcome of a Telegram attempt:
+    /// [`Hub::finish_alert_with`] and [`Telegram`].
     pub fn finish_alert(&mut self, prepared: &PreparedAlert, report: &Report, response: &[u8]) {
+        self.finish_alert_with(&mut Telegram, prepared, report, response);
+    }
+
+    /// Records the outcome of an attempt run with `prepared`; `response`
+    /// is the buffer the attempt received into, read by `uplink`.
+    #[allow(clippy::too_many_lines)]
+    pub fn finish_alert_with<U: Uplink>(
+        &mut self,
+        uplink: &mut U,
+        prepared: &PreparedAlert,
+        report: &Report,
+        response: &[u8],
+    ) {
         let now = self.now.as_millis();
         let delay = u64::from(self.alerts.config.delay_ms);
         let st = &mut self.alerts.status;
@@ -336,28 +446,33 @@ impl<HS: Storage> Hub<HS> {
         }
         st.last_http_status = None;
         let mut retry_after = None;
+        let mut acked: Option<Acked> = None;
         let (error, stage, ambiguous) = match report.outcome {
             Outcome::Response(n) => {
-                let mut scratch = [0u8; 512];
-                let (status, reply) =
-                    telegram::parse_response(response.get(..n).unwrap_or(&[]), &mut scratch);
+                let (status, reply) = uplink.parse(response.get(..n).unwrap_or(&[]));
                 st.last_http_status = status;
                 match reply {
-                    telegram::Reply::Delivered { message_id } => {
-                        st.last_message_id = Some(message_id);
+                    uplink::Reply::Delivered {
+                        acked: a,
+                        message_id,
+                    } => {
+                        if message_id.is_some() {
+                            st.last_message_id = message_id;
+                        }
+                        acked = Some(a);
                         (AlertError::None, None, false)
                     }
-                    telegram::Reply::RetryAfter { seconds, .. } => {
+                    uplink::Reply::RetryAfter { seconds } => {
                         retry_after = Some(seconds);
                         (AlertError::RateLimited, Some(AlertStage::Response), false)
                     }
-                    telegram::Reply::Rejected { .. } => {
+                    uplink::Reply::Rejected => {
                         (AlertError::Rejected, Some(AlertStage::Response), false)
                     }
-                    telegram::Reply::ServerError { .. } => {
+                    uplink::Reply::ServerError => {
                         (AlertError::StageFailed, Some(AlertStage::Response), false)
                     }
-                    telegram::Reply::Malformed => {
+                    uplink::Reply::Malformed => {
                         (AlertError::BadResponse, Some(AlertStage::Response), true)
                     }
                 }
@@ -393,17 +508,48 @@ impl<HS: Storage> Hub<HS> {
             st.last_error_stage = Some(AlertStage::RestoreZigbee);
             self.alerts.restore_failed = true;
         }
+        if let Some(hb) = self.alerts.config.heartbeat_ms() {
+            let next = if delivered {
+                hb
+            } else {
+                HEARTBEAT_RETRY_MS.min(hb).max(MIN_ZIGBEE_MS)
+            };
+            self.alerts.heartbeat_due = Some(now.saturating_add(next));
+        }
         let Some(q) = self.alerts.queue.as_mut() else {
             return;
         };
-        if delivered {
+        if prepared.ids.is_empty() {
+            // A heartbeat: nothing queued was involved.
+            return;
+        }
+        if let Some(acked) = acked {
+            let taken: Vec<EventId, { queue::CAPACITY }> = match &acked {
+                Acked::All => prepared.ids.clone(),
+                Acked::Some(list) => prepared
+                    .ids
+                    .iter()
+                    .filter(|id| list.contains(id))
+                    .copied()
+                    .collect(),
+            };
             let message_id = self.alerts.status.last_message_id.unwrap_or(0);
             q.acknowledge(
                 &mut self.storage,
                 message_id,
-                &prepared.ids,
+                &taken,
                 prepared.overflow_reported,
             );
+            // Sent but not taken: the destination may still have them.
+            let left: Vec<EventId, { queue::CAPACITY }> = prepared
+                .ids
+                .iter()
+                .filter(|id| !taken.contains(id))
+                .copied()
+                .collect();
+            if !left.is_empty() {
+                q.note_attempt(&mut self.storage, &left, true);
+            }
             let boot = q.boot();
             let oldest = q
                 .pending()
@@ -454,6 +600,14 @@ impl<HS: Storage> Hub<HS> {
         s.bssid = c.bssid;
         s.channel = c.channel;
         s.wpa3_only = c.wpa3_only;
+        s.destination = c.destination;
+        s.server_host.clone_from(&c.server_host);
+        s.server_port = c.server_port;
+        s.heartbeat_s = c.heartbeat_s;
+        s.next_heartbeat_ms = a
+            .heartbeat_due
+            .filter(|_| c.heartbeat_ms().is_some() && c.enabled)
+            .map(|t| u32::try_from(t.saturating_sub(self.now.as_millis())).unwrap_or(u32::MAX));
         s.token_set = !c.token.is_empty();
         s.chat_id.clone_from(&c.chat_id);
         s.kinds = c.kinds;
@@ -496,6 +650,11 @@ impl<HS: Storage> Hub<HS> {
         if self.alerts.config.enabled {
             self.open_alert_queue();
             self.alerts.restore_failed = false;
+            // A changed destination or interval starts a new heartbeat
+            // period.
+            let now = self.now.as_millis();
+            let delay = u64::from(self.alerts.config.delay_ms);
+            self.schedule_heartbeat(now, delay);
             if u.delay_ms.is_some() || u.enabled == Some(true) {
                 self.alerts.schedule.clear();
                 if self.alerts.queue.as_ref().is_some_and(|q| !q.is_empty()) {

@@ -27,6 +27,53 @@ pub const STAGES: usize = 12;
 pub const DELAY_MS: core::ops::RangeInclusive<u32> = 1_000..=3_600_000;
 /// Bounds of the configurable Zigbee downtime budget of one attempt.
 pub const BUDGET_MS: core::ops::RangeInclusive<u32> = 500..=60_000;
+/// Longest host name of a notification server.
+pub const MAX_SERVER_HOST: usize = 64;
+/// Bounds of the heartbeat interval towards a notification server, in
+/// seconds (0 turns the heartbeat off).
+pub const HEARTBEAT_S: core::ops::RangeInclusive<u32> = 60..=86_400;
+
+/// Where notifications are sent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AlertDestination {
+    /// The Telegram Bot API directly (`token` is the bot token, `chat_id`
+    /// the chat).
+    #[default]
+    Telegram,
+    /// An HTTPS notification server (`token` is the hub's token on that
+    /// server, `server_host` and `server_port` its address). The request
+    /// format is the firmware's (`alert::uplink::Uplink`); with a
+    /// heartbeat the hub also reports when it has nothing to send, so
+    /// that the server notices a silent hub.
+    Server,
+}
+
+impl AlertDestination {
+    /// The wire / storage code.
+    pub const fn code(self) -> u8 {
+        match self {
+            AlertDestination::Telegram => 0,
+            AlertDestination::Server => 1,
+        }
+    }
+
+    /// The value of a code.
+    pub const fn from_code(c: u8) -> Option<Self> {
+        match c {
+            0 => Some(AlertDestination::Telegram),
+            1 => Some(AlertDestination::Server),
+            _ => None,
+        }
+    }
+
+    /// Lower-case name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            AlertDestination::Telegram => "telegram",
+            AlertDestination::Server => "server",
+        }
+    }
+}
 
 /// [`AlertStatus::kinds`] / [`AlertConfigUpdate::kinds`] bits: which
 /// events are queued for notification.
@@ -450,6 +497,16 @@ pub struct AlertStatus {
     pub channel: Option<u8>,
     /// Only WPA3-Personal (SAE) access points are joined.
     pub wpa3_only: bool,
+    /// Where notifications go.
+    pub destination: AlertDestination,
+    /// Notification server host (empty when unset).
+    pub server_host: Text<MAX_SERVER_HOST>,
+    /// Notification server port.
+    pub server_port: u16,
+    /// Heartbeat interval towards the server, seconds (0: off).
+    pub heartbeat_s: u32,
+    /// Milliseconds until the next heartbeat, when one is scheduled.
+    pub next_heartbeat_ms: Option<u32>,
 }
 
 /// Access points listed in [`WifiScan::strongest`].
@@ -648,6 +705,11 @@ impl Default for AlertStatus {
             bssid: None,
             channel: None,
             wpa3_only: false,
+            destination: AlertDestination::Telegram,
+            server_host: Text::new(),
+            server_port: 0,
+            heartbeat_s: 0,
+            next_heartbeat_ms: None,
         }
     }
 }
@@ -679,7 +741,33 @@ pub struct AlertConfigUpdate {
     pub channel: Option<Option<u8>>,
     /// Join only WPA3-Personal access points.
     pub wpa3_only: Option<bool>,
+    /// Where notifications go.
+    pub destination: Option<AlertDestination>,
+    /// Notification server host name (an empty value clears it).
+    pub server_host: Option<Text<MAX_SERVER_HOST>>,
+    /// Notification server port (not 0).
+    pub server_port: Option<u16>,
+    /// Heartbeat interval towards the server, seconds ([`HEARTBEAT_S`],
+    /// or 0 for none).
+    pub heartbeat_s: Option<u32>,
 }
+
+impl AlertConfigUpdate {
+    /// Any of the server fields (encoded as an optional tail, so that a
+    /// change without them is still understood by older firmware).
+    const fn has_server_fields(&self) -> bool {
+        self.destination.is_some()
+            || self.server_host.is_some()
+            || self.server_port.is_some()
+            || self.heartbeat_s.is_some()
+    }
+}
+
+/// Flags of the server tail of [`AlertConfigUpdate`].
+const TAIL_DESTINATION: u8 = 1;
+const TAIL_HOST: u8 = 2;
+const TAIL_PORT: u8 = 4;
+const TAIL_HEARTBEAT: u8 = 8;
 
 fn write_opt_u32(w: &mut Writer<'_>, v: Option<u32>) -> Result<(), CodecError> {
     match v {
@@ -763,7 +851,41 @@ pub(crate) fn write_update(w: &mut Writer<'_>, u: &AlertConfigUpdate) -> Result<
         None => 0,
         Some(false) => 1,
         Some(true) => 2,
-    })
+    })?;
+    if !u.has_server_fields() {
+        return Ok(());
+    }
+    let flags = if u.destination.is_some() {
+        TAIL_DESTINATION
+    } else {
+        0
+    } | if u.server_host.is_some() {
+        TAIL_HOST
+    } else {
+        0
+    } | if u.server_port.is_some() {
+        TAIL_PORT
+    } else {
+        0
+    } | if u.heartbeat_s.is_some() {
+        TAIL_HEARTBEAT
+    } else {
+        0
+    };
+    w.u8(flags)?;
+    if let Some(d) = u.destination {
+        w.u8(d.code())?;
+    }
+    if let Some(h) = &u.server_host {
+        write_text(w, h)?;
+    }
+    if let Some(p) = u.server_port {
+        w.u16_le(p)?;
+    }
+    if let Some(h) = u.heartbeat_s {
+        w.u32_le(h)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn read_update(r: &mut Reader<'_>) -> Result<AlertConfigUpdate, ProtocolError> {
@@ -773,7 +895,7 @@ pub(crate) fn read_update(r: &mut Reader<'_>) -> Result<AlertConfigUpdate, Proto
         None
     };
     let kinds = if read_bool(r)? { Some(r.u8()?) } else { None };
-    Ok(AlertConfigUpdate {
+    let mut u = AlertConfigUpdate {
         enabled,
         kinds,
         delay_ms: read_opt_u32(r)?,
@@ -801,7 +923,29 @@ pub(crate) fn read_update(r: &mut Reader<'_>) -> Result<AlertConfigUpdate, Proto
             2 => Some(true),
             _ => return Err(ProtocolError::Malformed),
         },
-    })
+        ..AlertConfigUpdate::default()
+    };
+    // The server tail, present only when a server field changes.
+    if !r.is_empty() {
+        let flags = r.u8()?;
+        if flags & !(TAIL_DESTINATION | TAIL_HOST | TAIL_PORT | TAIL_HEARTBEAT) != 0 {
+            return Err(ProtocolError::Malformed);
+        }
+        if flags & TAIL_DESTINATION != 0 {
+            u.destination =
+                Some(AlertDestination::from_code(r.u8()?).ok_or(ProtocolError::Malformed)?);
+        }
+        if flags & TAIL_HOST != 0 {
+            u.server_host = Some(read_text(r)?);
+        }
+        if flags & TAIL_PORT != 0 {
+            u.server_port = Some(r.u16_le()?);
+        }
+        if flags & TAIL_HEARTBEAT != 0 {
+            u.heartbeat_s = Some(r.u32_le()?);
+        }
+    }
+    Ok(u)
 }
 
 pub(crate) fn write_status(w: &mut Writer<'_>, s: &AlertStatus) -> Result<(), CodecError> {
@@ -884,7 +1028,13 @@ pub(crate) fn write_status(w: &mut Writer<'_>, s: &AlertStatus) -> Result<(), Co
         None => w.u8(0)?,
     }
     w.u8(s.channel.unwrap_or(0))?;
-    w.u8(u8::from(s.wpa3_only))
+    w.u8(u8::from(s.wpa3_only))?;
+    // The server fields (absent in a status from older firmware).
+    w.u8(s.destination.code())?;
+    write_text(w, &s.server_host)?;
+    w.u16_le(s.server_port)?;
+    w.u32_le(s.heartbeat_s)?;
+    write_opt_u32(w, s.next_heartbeat_ms)
 }
 
 pub(crate) fn read_status(r: &mut Reader<'_>) -> Result<AlertStatus, ProtocolError> {
@@ -955,5 +1105,12 @@ pub(crate) fn read_status(r: &mut Reader<'_>) -> Result<AlertStatus, ProtocolErr
     };
     s.channel = Some(r.u8()?).filter(|c| *c != 0);
     s.wpa3_only = read_bool(r)?;
+    if !r.is_empty() {
+        s.destination = AlertDestination::from_code(r.u8()?).ok_or(ProtocolError::Malformed)?;
+        s.server_host = read_text(r)?;
+        s.server_port = r.u16_le()?;
+        s.heartbeat_s = r.u32_le()?;
+        s.next_heartbeat_ms = read_opt_u32(r)?;
+    }
     Ok(s)
 }

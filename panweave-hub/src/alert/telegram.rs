@@ -182,7 +182,7 @@ pub fn build_request(
     Ok(o.len)
 }
 
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
@@ -223,7 +223,7 @@ fn json_int(body: &[u8], name: &[u8]) -> Option<i64> {
     s.parse().ok()
 }
 
-fn dechunk(body: &[u8], out: &mut [u8]) -> Option<usize> {
+pub(crate) fn dechunk(body: &[u8], out: &mut [u8]) -> Option<usize> {
     let mut i = 0;
     let mut n = 0;
     loop {

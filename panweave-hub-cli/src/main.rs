@@ -108,6 +108,10 @@ commands:
   alerts configure --wifi-bssid MAC|none --wifi-channel N|none --wifi-wpa3-only|--wifi-allow-wpa2
                                           pin the access point: only this BSSID, this
                                           channel, WPA3-Personal only (Admin)
+  alerts configure --destination server --server-host H [--server-port N]
+      [--heartbeat-s N] [--server-token-stdin]
+                                          send to a notification server instead of
+                                          Telegram; heartbeat 0 or 60-86400 s (Admin)
   alerts test                             queue a test notification (Admin)
   alerts probe [--count N] [--interval S] radio-switch experiment: 802.15.4 off, Wi-Fi
                                           on, scan, join, back; downtime per stage (Admin)

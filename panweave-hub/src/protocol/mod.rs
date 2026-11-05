@@ -28,8 +28,8 @@ pub mod ota;
 pub mod security;
 
 pub use alerts::{
-    AlertConfigUpdate, AlertError, AlertKind, AlertStage, AlertState, AlertStatus, ScanEntry,
-    WifiFailure, WifiScan,
+    AlertConfigUpdate, AlertDestination, AlertError, AlertKind, AlertStage, AlertState,
+    AlertStatus, ScanEntry, WifiFailure, WifiScan,
 };
 pub use diagnostics::{
     BootReport, CapturePage, MAX_BOOT_FINDINGS, MAX_BOOT_PARTITIONS, MAX_CAPTURE_PAGE,

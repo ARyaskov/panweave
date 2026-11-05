@@ -7,13 +7,26 @@ Keep a Changelog; versions follow SemVer.
 
 Crate versions: `panweave-runtime`, `panweave`, `panweave-sim`,
 `panweave-lite`, `panweave-cli` 0.4.0 (new `StackEvent` variants),
-`panweave-hub` 0.5.0 (Hub Protocol additions, new `HubConfig` fields),
+`panweave-hub` 0.6.0 (Hub Protocol additions, new `HubConfig` fields, notification destinations),
 `panweave-zcl` 0.3.1. The other crates are unchanged since 0.3.0.
 `panweave-mqtt` (0.3.0) and `panweave-hub-cli` (0.5.0) are published for
 the first time.
 
 ### Added
 
+* `panweave-hub` (`alerts`): notification destinations. `AlertDestination`
+  (`Telegram`, the default, or `Server`) with `server_host`,
+  `server_port` and `heartbeat_s` in `AlertConfigUpdate` and
+  `AlertStatus` (an optional tail of both messages: older firmware and
+  hosts still understand the rest). `alert::uplink`: the `Uplink` trait
+  (request format and reply of a destination), `Telegram` as one
+  implementation, `http_body`. `Hub::prepare_alert_with` and
+  `finish_alert_with`: the engine is destination independent, a reply
+  can acknowledge some of the events only, and with a server destination
+  and a heartbeat an attempt is also due when nothing is queued.
+  `PreparedAlert::{host, port, heartbeat}`. CLI: `alerts configure
+  --destination server --server-host H --server-port N --heartbeat-s N
+  --server-token-stdin`.
 * `panweave-mqtt`: a host bridge from the hub (USB serial, Hub Protocol)
   to an MQTT broker with Home Assistant discovery. Lights, switches,
   contact / water / motion / tamper / battery binary sensors and
