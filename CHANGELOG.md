@@ -261,7 +261,7 @@ Crate versions: 0.3.0 for the crates on the workspace version (new:
   `MAX_LOCAL_DEFERRALS`.
 * Experimental, off by default: critical-event notifications over
   Wi-Fi from the ESP32-C6's one radio (Zigbee → Wi-Fi → Zigbee),
-  `docs/esp32c6-wifi-alerts.md`. `panweave-hub` feature `alerts`: durable
+  `examples/esp32c6-wifi-alerts`. `panweave-hub` feature `alerts`: durable
   bounded event queue with crash-safe delivery acknowledgements and
   explicit overflow accounting, delivery schedule (50 s delay that later
   events cannot postpone, bounded backoff, Telegram `retry_after`,
@@ -296,8 +296,8 @@ Crate versions: 0.3.0 for the crates on the workspace version (new:
   existing settings record. WPA3-only uses a second patch of the
   vendored esp-radio, `AuthenticationMethodConfig::Wpa3Personal`, but
   cannot join with the crates.io driver: the station side of SAE is
-  compiled out of the `esp-wifi-sys-esp32c6` 0.3.0 supplicant (reason
-  210 on a board). `hub-wifi` therefore uses a vendored
+  compiled out of the `esp-wifi-sys-esp32c6` 0.3.0 supplicant.
+  `hub-wifi` therefore uses a vendored
   `esp-wifi-sys-esp32c6`. Its supplicant is rebuilt with SAE on software
   mbedTLS: the recipe of esp-wireless-drivers-3rdparty#11 applied to the
   C6, from the same ESP-IDF, whose baseline build reproduces the shipped
@@ -308,12 +308,8 @@ Crate versions: 0.3.0 for the crates on the workspace version (new:
   budget. +118 KiB flash. A probe reports a
   directed SSID scan, which hidden networks answer. `wifi-scan-check`, a
   diagnostic image, compares Wi-Fi reception before and after
-  802.15.4: no degradation measured. On a board the join reaches SAE and
-  ends in reason 202 (authentication failed). It has not yet joined. A
-  stage that runs out of time is now reported as `budget-exhausted`, no
-  longer `stage-failed`. On a board the image boots, and a
-  probe switches the radio and back in about 1.6 s. No join has
-  succeeded yet.
+  802.15.4. A stage that runs out of time is reported as
+  `budget-exhausted`.
 * `panweave-sim`: `Simulator::node_count`.
 
 ### Changed
@@ -395,8 +391,7 @@ Crate versions: 0.3.0 for the crates on the workspace version (new:
   and it panicked in `esp_hal::init` ("stack pointer out of range") and
   rebooted in a loop. The normal `hub` had 396 KiB and, by the frame
   sizes, overran it while adding its endpoints. The frame of `main` is
-  now about 190 KiB in both, and the boot peak about 240 KiB. The fixed
-  `hub-wifi` boots on a board.
+  now about 190 KiB in both, and the boot peak about 240 KiB.
 * `panweave-aps`: a frame the NWK layer refuses for lack of buffers (its
   pending table full, typically with frames held for sleepy children) is
   offered again after 1 s, at most 8 times, acknowledged or not;

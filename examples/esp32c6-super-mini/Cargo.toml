@@ -50,7 +50,7 @@ small-tables = ["panweave/small-tables"]
 # Without it the hub engine holds no capture buffer.
 capture = ["panweave-hub/radio-capture"]
 # EXPERIMENTAL: Zigbee -> Wi-Fi -> Zigbee on the one radio
-# (docs/esp32c6-wifi-alerts.md). Builds only from
+# (examples/esp32c6-wifi-alerts/README.md). Builds only from
 # `examples/esp32c6-wifi-alerts`, whose patched esp-radio allows Wi-Fi
 # and 802.15.4 in one image for strictly sequential use; enabled here it
 # hits esp-radio's own build guard, on purpose.

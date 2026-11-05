@@ -34,7 +34,7 @@ radio-capture = ["engine"]
 # Zigbee on one radio): the durable alert queue, delivery schedule,
 # Telegram request / response handling and the attempt orchestrator.
 # Off by default; without it the alert requests answer `NotSupported`.
-# The radio switching itself is the firmware's (docs/esp32c6-wifi-alerts.md).
+# The radio switching itself is the firmware's (examples/esp32c6-wifi-alerts/README.md).
 alerts = ["engine"]
 # The hub as Green Power Combo Basic sink: Green Power Devices
 # (battery-less switches) commissioned and their commands reported.

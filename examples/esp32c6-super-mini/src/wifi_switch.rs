@@ -2,7 +2,7 @@
 //! `examples/esp32c6-wifi-alerts`): lending the one radio of the ESP32-C6
 //! from IEEE 802.15.4 to Wi-Fi and back, and the network part of a
 //! Telegram delivery, for `panweave_hub::alert::attempt`
-//! (docs/esp32c6-wifi-alerts.md).
+//! (examples/esp32c6-wifi-alerts/README.md).
 //!
 //! Contract with the patched `esp-radio` (its `PANWEAVE-PATCH.md`): the
 //! 802.15.4 driver and the Wi-Fi controller are never alive at the same
@@ -443,8 +443,7 @@ impl WifiNetwork<'_> {
     /// Directed active scan for the configured SSID (probe requests that
     /// name it, so a hidden network answers), 40–120 ms per channel, one
     /// pass: the strongest answer offering WPA3-Personal, or `None`. For
-    /// the experiment's report only (one pass missed a hidden network in
-    /// range about one time in three on a board, `wifi-scan-check`).
+    /// reporting only: a single pass can miss a network in range.
     fn find_network(&mut self, deadline: Deadline) -> Result<Option<ScanEntry>, NetError> {
         let ssid = Ssid::try_from(self.ssid).map_err(|_| NetError::Failed)?;
         let controller = self.controller.as_mut().ok_or(NetError::Failed)?;
@@ -577,10 +576,8 @@ impl Network for WifiNetwork<'_> {
         // The driver finds the network itself (probe requests naming the
         // SSID reach a hidden one). Handing it the BSSID and channel a
         // directed scan found, through `set_config` on the started
-        // station, made every join end in reason 201 on a board. Its own
-        // sweep misses an access point in range now and then (the board
-        // hears 0–6 access points from one scan to the next), hence the
-        // retries.
+        // station, makes joins fail (reason 201). Its own sweep can miss
+        // an access point in range, hence the retries.
         loop {
             let controller = self.controller.as_mut().ok_or(NetError::Failed)?;
             // A timeout drops the future, abandoning the join; `wifi_stop`
@@ -618,9 +615,8 @@ impl Network for WifiNetwork<'_> {
         let start = crate::now().as_millis();
         let controller = self.controller.as_mut().ok_or(NetError::Failed)?;
         // Active, 40–80 ms per channel: about 0.5–1 s for the 13
-        // channels. esp-radio's default (10–20 ms) heard a different
-        // handful of access points on each run on a board. Hidden
-        // networks are listed with no SSID.
+        // channels; esp-radio's default (10–20 ms) is too short to hear
+        // access points reliably. Hidden networks are listed with no SSID.
         let config =
             ScanConfig::default()
                 .with_show_hidden(true)

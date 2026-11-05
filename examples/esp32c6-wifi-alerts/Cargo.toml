@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
-description = "EXPERIMENTAL: the Panweave ESP32-C6 hub with Zigbee -> Wi-Fi -> Zigbee radio switching (docs/esp32c6-wifi-alerts.md)"
+description = "EXPERIMENTAL: the Panweave ESP32-C6 hub with Zigbee -> Wi-Fi -> Zigbee radio switching (examples/esp32c6-wifi-alerts/README.md)"
 license = "MIT OR Apache-2.0"
 
 # The same hub firmware as `examples/esp32c6-super-mini`, built with

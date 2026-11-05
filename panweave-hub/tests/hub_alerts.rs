@@ -4,7 +4,7 @@
 //! outage an attempt causes is modelled by taking the hub off the air
 //! for the attempt's downtime. These tests prove the queue, schedule,
 //! acknowledgement and recovery logic — not that an ESP32-C6 can switch
-//! its radio, which only hardware can show (docs/esp32c6-wifi-alerts.md).
+//! its radio, which only hardware can show (examples/esp32c6-wifi-alerts/README.md).
 
 #![cfg(feature = "alerts")]
 #![allow(

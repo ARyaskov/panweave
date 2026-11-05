@@ -4,7 +4,7 @@ How `vendor/esp-wifi-sys-esp32c6/libs/libwpa_supplicant.a` and
 `libmbedcrypto.a` were built. The Wi-Fi supplicant that `esp-wifi-sys-esp32c6`
 0.3.0 ships is compiled with `CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n`. Its
 `sae.c.obj` and `esp_wpa3.c.obj` hold no code, so a station cannot join a
-WPA3 network (reason 210). These two archives are the same supplicant with
+WPA3 network. These two archives are the same supplicant with
 SAE, on software mbedTLS.
 
 This applies the recipe of the upstream draft
@@ -28,8 +28,8 @@ companions are
 With the repository's own `patch/esp32c6/sdkconfig.defaults` unchanged,
 `cargo xtask esp32c6` in this environment produced libraries byte-identical
 to those of `esp-wifi-sys-esp32c6` 0.3.0. That covers `libwpa_supplicant.a`,
-`libnet80211.a`, `libregulatory.a`, `libprintf.a` and the copied blobs
-(checked 2026-10-23). So the toolchain and sources are those of the shipped
+`libnet80211.a`, `libregulatory.a`, `libprintf.a` and the copied blobs.
+So the toolchain and sources are those of the shipped
 libraries. The SAE build differs only by its configuration, and the ABI
 between the supplicant and the closed blobs is unchanged. The closed blobs
 of the SAE build are byte-identical to the shipped ones too.
@@ -93,19 +93,6 @@ initializes it in `components/mbedtls/port/esp_psa_crypto_init.c` using an
 its status before starting the Wi-Fi controller. Initialization is
 idempotent, and attempts are serialized. Without it, PSA key allocation
 returns `PSA_ERROR_BAD_STATE`; SAE cannot prepare a commit.
-
-On 2026-10-23, the previous linked image contained `psa_import_key` but
-neither `psa_crypto_init` nor `psa_initialize_key_slots`. A board found the
-hidden target as WPA3 and failed association with reason 202 in 12–15 ms.
-The explicit initialization fix builds and passes release clippy. After
-flashing with user permission, a hardware probe successfully joined the
-hidden WPA3-Personal target: 891 ms for association and 2414 ms total
-downtime, including 1417 ms of diagnostic scans and 95 ms to stop Wi-Fi.
-The successful probe used a temporary 10000 ms budget, no BSSID/channel
-pin, and the existing password; the budget was subsequently restored to
-2000 ms. This probe does not exercise DHCP, TLS or Telegram, or prove a
-2000 ms bound. The binary archives themselves have not changed for this
-fix.
 
 ## Reproduce
 

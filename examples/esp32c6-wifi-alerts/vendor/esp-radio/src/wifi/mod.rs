@@ -3608,9 +3608,8 @@ ignored."
         // Panweave patch: WPA3-Personal is strict. PMF is required (not only
         // offered) and the transition-disable indication is honoured. SAE
         // uses hash-to-element when the access point offers it and
-        // hunt-and-peck otherwise (the target access point offers no H2E: an
-        // H2E-only station was refused with reason 210). Every other method
-        // keeps the upstream values.
+        // hunt-and-peck otherwise (not every access point offers H2E).
+        // Every other method keeps the upstream values.
         let wpa3_only = matches!(
             config.authentication,
             AuthenticationMethodConfig::Wpa3Personal(_)

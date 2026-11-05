@@ -1,5 +1,5 @@
 //! `alerts …`: the experimental Zigbee → Wi-Fi → Zigbee notifications
-//! (docs/esp32c6-wifi-alerts.md): status, configuration, a test message.
+//! (examples/esp32c6-wifi-alerts/README.md): status, configuration, a test message.
 //!
 //! Secrets (the Wi-Fi password, the bot token) are read from standard
 //! input, never from the command line (shell history, process lists),
