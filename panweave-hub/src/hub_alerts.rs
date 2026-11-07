@@ -17,7 +17,7 @@ use crate::alert::attempt::{Outcome, Report};
 use crate::alert::message::Sensor;
 use crate::alert::queue::{self, EventId, Queue};
 use crate::alert::schedule::{MIN_ZIGBEE_MS, Schedule};
-use crate::alert::uplink::{self, Acked, Pending, Telegram, Uplink};
+use crate::alert::uplink::{self, Acked, DeviceSnapshot, Pending, Telegram, Uplink};
 use crate::hub::Hub;
 use crate::model::{ContactState, DeviceState, Flag, LeakState};
 use crate::protocol::alerts::{MAX_SERVER_HOST, STAGES};
@@ -384,12 +384,34 @@ impl<HS: Storage> Hub<HS> {
                     },
                 })
                 .collect();
+            // Borrowed from the registry: no copies on the stack.
+            let devices: Vec<DeviceSnapshot<'_>, { uplink::MAX_DEVICES }> = registry
+                .iter()
+                .take(uplink::MAX_DEVICES)
+                .map(|d| DeviceSnapshot {
+                    ieee: d.ieee,
+                    model: core::str::from_utf8(&d.model).unwrap_or(""),
+                    category: d.category.name(),
+                    present: d.present,
+                    silent_s: d.last_seen.map(|t| {
+                        u32::try_from(self.now.saturating_duration_since(t).as_secs())
+                            .unwrap_or(u32::MAX)
+                    }),
+                    battery_pct: d.state.battery_percent,
+                    battery_mv: d.state.battery_mv,
+                    battery_low: d.state.battery_low == Flag::Set,
+                    state: sensor_state(d.state.water_leak, d.state.contact),
+                    sleepy: d.rx_on_when_idle == Some(false),
+                    lqi: d.lqi,
+                })
+                .collect();
             let ctx = uplink::Context {
                 config: &self.alerts.config,
                 boot: q.boot(),
                 uptime_ms: now,
                 overflow: q.overflow(),
                 firmware: self.config.firmware,
+                devices: &devices,
             };
             uplink.build(&ctx, &items, out).map(|b| {
                 let ids: Vec<EventId, { queue::CAPACITY }> =

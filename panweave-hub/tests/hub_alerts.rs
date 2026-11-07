@@ -868,11 +868,18 @@ struct ListUplink;
 impl Uplink for ListUplink {
     fn build(
         &mut self,
-        _ctx: &uplink::Context<'_>,
+        ctx: &uplink::Context<'_>,
         pending: &[uplink::Pending<'_>],
         out: &mut [u8],
     ) -> Result<uplink::Built, uplink::BuildError> {
         let mut s = String::from("POST /r HTTP/1.1\r\n\r\n");
+        for d in ctx.devices {
+            let _ = write!(
+                s,
+                "dev:{:016x}:{}:{}:{};",
+                d.ieee, d.category, d.present, d.state
+            );
+        }
         for p in pending {
             let _ = write!(s, "{}.{},", p.event.id.boot, p.event.id.seq);
         }
@@ -1095,6 +1102,15 @@ fn a_server_acknowledging_some_events_keeps_the_others_queued() {
     let boot = status(&mut sim, c).boot_id;
     let (prepared, sent) = server_attempt(&mut sim, c, None, http_ok(&format!("{boot}.0,")));
     assert!(!prepared.heartbeat);
+    // Every registered device rides along, with its category and state.
+    assert!(
+        sent.contains(&format!("dev:{LEAK:016x}:water-leak-sensor:true:leak;")),
+        "{sent}"
+    );
+    assert!(
+        sent.contains(&format!("dev:{CONTACT:016x}:contact-sensor:true:open;")),
+        "{sent}"
+    );
     assert!(sent.contains(&format!("{boot}.0,")) && sent.contains(&format!("{boot}.1,")));
     let s = status(&mut sim, c);
     assert_eq!((s.queue_depth, s.successes), (1, 1));

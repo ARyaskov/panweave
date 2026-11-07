@@ -29,6 +29,39 @@ pub struct Pending<'a> {
     pub sensor: Sensor<'a>,
 }
 
+/// Most devices described in one request ([`Context::devices`]).
+pub const MAX_DEVICES: usize = 32;
+
+/// A device as the hub sees it when a request is built: what a server
+/// keeps as history and watches for silence and flat batteries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceSnapshot<'a> {
+    /// IEEE address.
+    pub ieee: u64,
+    /// Basic `ModelIdentifier` as the device reported it (may hold
+    /// control characters).
+    pub model: &'a str,
+    /// Category name (`water-leak-sensor`, …).
+    pub category: &'static str,
+    /// On the network (has not left).
+    pub present: bool,
+    /// Seconds since the device was last heard (`None`: not since the
+    /// hub started).
+    pub silent_s: Option<u32>,
+    /// BatteryPercentageRemaining, percent.
+    pub battery_pct: Option<u8>,
+    /// BatteryVoltage, millivolts.
+    pub battery_mv: Option<u16>,
+    /// The device reports its battery as low.
+    pub battery_low: bool,
+    /// Its state (`leak`, `dry`, `open`, `closed`, `unknown`).
+    pub state: &'static str,
+    /// A sleepy end device (receiver off when idle).
+    pub sleepy: bool,
+    /// Link quality from the neighbour table.
+    pub lqi: Option<u8>,
+}
+
 /// Everything besides the events that a request may need.
 #[derive(Clone, Copy, Debug)]
 pub struct Context<'a> {
@@ -43,6 +76,9 @@ pub struct Context<'a> {
     pub overflow: Overflow,
     /// The firmware version.
     pub firmware: &'a str,
+    /// Every registered device (an uplink may send as many as fit; a
+    /// destination without history ignores them).
+    pub devices: &'a [DeviceSnapshot<'a>],
 }
 
 /// A request built into the caller's buffer.
@@ -252,6 +288,7 @@ mod tests {
             uptime_ms: 10_000,
             overflow: Overflow::default(),
             firmware: "0",
+            devices: &[],
         };
         let mut out = [0u8; 2048];
         assert_eq!(
