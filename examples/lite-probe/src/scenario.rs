@@ -16,7 +16,9 @@ use panweave_storage::MemoryStorage;
 use panweave_storage::nor_flash::NorFlashStore;
 use panweave_testkit::TestRng;
 use panweave_types::time::Instant;
-use panweave_types::{Channel, DeviceId, Endpoint, ExtendedAddress, Key128, LogicalDeviceType, ProfileId};
+use panweave_types::{
+    Channel, DeviceId, Endpoint, ExtendedAddress, Key128, LogicalDeviceType, ProfileId,
+};
 use panweave_zcl::Role;
 use panweave_zcl::clusters::{ias_zone, power_configuration};
 use panweave_zdo::descriptor::SimpleDescriptor;
@@ -51,8 +53,15 @@ const PHASES: [&str; 6] = [
     "restart from flash",
 ];
 const ENTRIES: [&str; 9] = [
-    "new", "initialize", "commission", "on_radio_frame", "on_tx_complete",
-    "next_radio_action", "poll", "set_inputs", "next_event",
+    "new",
+    "initialize",
+    "commission",
+    "on_radio_frame",
+    "on_tx_complete",
+    "next_radio_action",
+    "poll",
+    "set_inputs",
+    "next_event",
 ];
 
 struct World {
@@ -100,7 +109,8 @@ impl World {
                 match a {
                     MacAction::Transmit { frame, .. } => {
                         if self.reaches() {
-                            self.coord.on_radio_frame(&frame, Self::meta(self.coord_channel));
+                            self.coord
+                                .on_radio_frame(&frame, Self::meta(self.coord_channel));
                         }
                         let lite = &mut *self.lite;
                         let ((), d) = measure(|| {
@@ -193,7 +203,8 @@ fn coordinator() -> &'static mut Coord {
             panweave_security::trust_center::InstallCodePolicy::OptionalWithAnonymousNegotiation;
     }
     // SAFETY: built once, before any other access.
-    let slot = unsafe { &mut *(&raw mut COORDINATOR) };
+    let slot_ptr = &raw mut COORDINATOR;
+    let slot = unsafe { &mut *slot_ptr };
     let c = slot.write(Coord::new(
         cfg,
         MacServiceConfig::default(),
@@ -218,7 +229,8 @@ fn coordinator() -> &'static mut Coord {
 fn storage() -> NorFlashStore<RamFlash> {
     // SAFETY: the emulated flash is handed out once per (re)start; the
     // previous store was dropped with the device it belonged to.
-    let flash = unsafe { &mut *(&raw mut FLASH) };
+    let flash_ptr = &raw mut FLASH;
+    let flash = unsafe { &mut *flash_ptr };
     match NorFlashStore::new(RamFlash(flash), 0, STORE_LEN) {
         Ok(s) => s,
         Err(_) => crate::halt(),
@@ -226,10 +238,17 @@ fn storage() -> NorFlashStore<RamFlash> {
 }
 
 pub fn run() -> ! {
+    // .bigram is NOLOAD, so its initializers are not copied at reset.
+    // Erase the emulated flash only at cold boot; the later restart must
+    // reuse its programmed bytes to exercise durable restoration.
+    // SAFETY: run is entered once before any flash-backed store exists.
+    let flash_ptr = &raw mut FLASH;
+    unsafe { (*flash_ptr).fill(0xff) };
     let coord = coordinator();
     let _ = coord.form_network_with_key(Key128::from_bytes([0x5A; 16]));
     // SAFETY: main runs once; the slot is (re)written only by lite_build.
-    let slot = unsafe { &mut *(&raw mut DEVICE) };
+    let slot_ptr = &raw mut DEVICE;
+    let slot = unsafe { &mut *slot_ptr };
     let (lite, construction) = measure(|| crate::lite_build(slot, SENSOR, storage()));
     let mut w = World {
         coord,
@@ -293,7 +312,8 @@ pub fn run() -> ! {
     });
     w.phase = 5;
     // Power loss: a new device over the same flash.
-    let slot = unsafe { &mut *(&raw mut DEVICE) };
+    let slot_ptr = &raw mut DEVICE;
+    let slot = unsafe { &mut *slot_ptr };
     // SAFETY: the old device is not used again; its store is replaced.
     unsafe { slot.assume_init_drop() };
     let (lite, d) = measure(|| crate::lite_build(slot, SENSOR, storage()));
