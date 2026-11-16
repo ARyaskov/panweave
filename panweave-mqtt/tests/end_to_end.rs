@@ -618,3 +618,55 @@ fn rejected_install_codes_never_enter_error_publications() {
         assert!(!text.contains("99, 114, 101, 100"));
     }
 }
+
+#[test]
+fn lost_probe_responses_and_outcomes_expire_and_allow_another_probe() {
+    use panweave_hub::protocol::Response;
+    for accepted in [false, true] {
+        let mut host = host(Config {
+            mains_check_s: 10,
+            ..Config::default()
+        });
+        let actions = host.bridge.tick(100);
+        let request = actions
+            .into_iter()
+            .find_map(|a| match a {
+                Action::Request(r @ Request::ReadAttribute { ieee: BULB, .. }) => Some(r),
+                _ => None,
+            })
+            .expect("a public tick must request the health probe");
+        if accepted {
+            host.bridge
+                .on_response(&request, Response::Accepted { command: 123 }, 100);
+        }
+        host.bridge.tick(131);
+        assert_eq!(host.bridge.online(BULB), Some(false));
+        let actions = host.bridge.tick(142);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            Action::Request(Request::ReadAttribute { ieee: BULB, .. })
+        )));
+    }
+}
+
+#[test]
+fn a_hub_disconnect_marks_bridge_offline_and_restart_cancels_old_probes() {
+    let mut host = host(Config {
+        mains_check_s: 10,
+        ..Config::default()
+    });
+    host.bridge.tick(100);
+    let actions = host.bridge.hub_disconnected(101);
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Publish(p)
+        if p.topic == "panweave/bridge/state" && p.payload == b"offline" && p.retain))
+    );
+    host.bridge.start(102);
+    let actions = host.bridge.tick(103);
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        Action::Request(Request::ReadAttribute { ieee: BULB, .. })
+    )));
+}

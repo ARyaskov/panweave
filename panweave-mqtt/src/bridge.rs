@@ -407,6 +407,8 @@ struct Device {
     check_requested: bool,
     /// When the last check started.
     checked_at: Option<u64>,
+    /// Deadline for both the request answer and its command outcome.
+    check_deadline: Option<u64>,
 }
 
 impl Device {
@@ -421,6 +423,7 @@ impl Device {
             check: None,
             check_requested: false,
             checked_at: None,
+            check_deadline: None,
         }
     }
 
@@ -533,10 +536,31 @@ impl Bridge {
     /// the MQTT connection is up and subscribed.
     pub fn start(&mut self, now: u64) -> Vec<Action> {
         self.now = now;
+        for device in self.devices.values_mut() {
+            device.check = None;
+            device.check_requested = false;
+            device.check_deadline = None;
+            device.checked_at = None;
+        }
         self.publish(self.state_topic(), "online", true);
         self.request(Request::GetHubInfo);
         self.request(Request::GetNetworkStatus);
         self.resync();
+        self.take()
+    }
+
+    /// Cancels probes from a lost hub session and publishes bridge unavailability.
+    pub fn hub_disconnected(&mut self, now: u64) -> Vec<Action> {
+        self.now = now;
+        self.hub_clock = None;
+        for device in self.devices.values_mut() {
+            device.check = None;
+            device.check_requested = false;
+            device.check_deadline = None;
+            device.checked_at = None;
+            device.online = None;
+        }
+        self.publish(self.state_topic(), "offline", true);
         self.take()
     }
 
@@ -896,6 +920,7 @@ impl Bridge {
             d.check = None;
             d.check_requested = false;
             d.checked_at = None;
+            d.check_deadline = None;
         }
         self.set_online(ieee, true);
     }
@@ -1023,6 +1048,8 @@ impl Bridge {
             {
                 if let Some(d) = self.devices.get_mut(ieee) {
                     d.check_requested = false;
+                    d.check = None;
+                    d.check_deadline = None;
                 }
                 if matches!(e, ErrorCode::Unreachable | ErrorCode::Timeout) {
                     self.set_online(*ieee, false);
@@ -1482,6 +1509,18 @@ impl Bridge {
         self.now = now;
         let mut checks = Vec::new();
         let mut offline = Vec::new();
+        for (&ieee, device) in &mut self.devices {
+            if device
+                .check_deadline
+                .is_some_and(|deadline| now >= deadline)
+            {
+                device.check = None;
+                device.check_requested = false;
+                device.check_deadline = None;
+                device.checked_at = Some(now);
+                offline.push(ieee);
+            }
+        }
         for (&ieee, d) in &self.devices {
             if d.online != Some(true) && !d.mains() {
                 continue;
@@ -1509,6 +1548,7 @@ impl Bridge {
             if let Some(d) = self.devices.get_mut(&ieee) {
                 d.check_requested = true;
                 d.checked_at = Some(now);
+                d.check_deadline = Some(now.saturating_add(30));
             }
             self.request(Request::ReadAttribute {
                 ieee,

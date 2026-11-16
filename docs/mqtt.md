@@ -34,7 +34,14 @@ The password never appears on the command line or in the logs. The MQTT
 connection is plain TCP (MQTT 3.1.1, QoS 0): run the broker on the same
 host, or reach a remote one through a TLS tunnel. Both connections are
 re-established when they drop; after a reconnection the bridge reads the
-hub's registry again.
+hub's registry again. Reader queues and outstanding hub requests are
+bounded to 64 each. A lost hub connection marks the bridge offline and
+cancels pending requests. Commands submitted while disconnected fail
+immediately; partially written commands are never automatically replayed.
+Requests and health probes expire, so a lost answer cannot block later
+availability checks. TCP connect/write operations, MQTT handshakes and
+keep-alive responses have finite deadlines. Each connection owns and joins
+its reader; stale messages from a prior connection are ignored.
 
 ## What Home Assistant gets
 
