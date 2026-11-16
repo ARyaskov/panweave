@@ -1892,7 +1892,7 @@ impl<
 
     /// Periodic and fast MAC data polling of a sleepy end device.
     fn service_polling(&mut self, now: Instant) {
-        if !self.config.sleepy || !matches!(self.phase, Phase::Operating | Phase::AwaitingKey) {
+        if !self.sleepy_polling_active() {
             return;
         }
         match self.next_poll {
@@ -1930,7 +1930,7 @@ impl<
 
     /// Schedules a burst of fast polls (after a transmission).
     pub(crate) fn schedule_fast_polls(&mut self) {
-        if self.config.sleepy && matches!(self.phase, Phase::Operating | Phase::AwaitingKey) {
+        if self.sleepy_polling_active() {
             self.fast_polls_left = self.config.fast_polls;
             let t = self.now.saturating_add(self.config.fast_poll_interval);
             self.next_poll = Some(match self.next_poll {
@@ -1938,6 +1938,10 @@ impl<
                 _ => t,
             });
         }
+    }
+
+    fn sleepy_polling_active(&self) -> bool {
+        self.config.sleepy && matches!(self.phase, Phase::Operating | Phase::AwaitingKey)
     }
 
     /// Earliest time [`Stack::poll`] should run again.
@@ -1965,8 +1969,7 @@ impl<
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),
-            self.next_poll
-                .filter(|_| self.config.sleepy && self.phase == Phase::Operating),
+            self.next_poll.filter(|_| self.sleepy_polling_active()),
         ]
         .into_iter()
         .flatten()
