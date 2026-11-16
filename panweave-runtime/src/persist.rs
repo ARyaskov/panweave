@@ -13,7 +13,9 @@ use panweave_aps::tables::{BindingDestination, BindingEntry};
 use panweave_codec::{Reader, Writer};
 use panweave_nwk::neighbor::{NeighborEntry, Relationship};
 use panweave_security::cipher::BlockCipher;
-use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
+use panweave_security::material::{
+    InitialJoinAuthentication, KeyNegotiationState, LinkKeyEntry, LinkKeyKind, PostJoinKeyUpdate,
+};
 use panweave_storage::{Key, Kind, Storage, StorageError};
 use panweave_types::{
     Channel, ChannelMask, ChannelPage, ClusterId, CryptoRng, Endpoint, ExtendedAddress,
@@ -33,7 +35,10 @@ const NIB_FORMAT: u8 = 1;
 /// Format version of the network keys record.
 const KEYS_FORMAT: u8 = 1;
 /// Format version of link key records.
-const LINK_KEY_FORMAT: u8 = 1;
+const LINK_KEY_FORMAT: u8 = 2;
+const LINK_KEY_BYTES: usize = 64;
+/// V1 cannot prove whether a verified key came from a stronger negotiation.
+const LEGACY_NEGOTIATION_UNKNOWN: u8 = 0xff;
 /// Format version of the binding record.
 const BINDINGS_FORMAT: u8 = 1;
 /// Format version of the group record.
@@ -82,6 +87,95 @@ fn key_partners<K: Capacity>(bytes: &[u8], aib: bool) -> Result<VecOf<u64, K>, S
     })();
     parsed.map_err(|_| StorageError::Corrupt)?;
     Ok(partners)
+}
+
+fn boolean(r: &mut Reader<'_>, field: &'static str) -> Result<bool, panweave_codec::CodecError> {
+    match r.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        value => Err(panweave_codec::CodecError::InvalidField {
+            field,
+            value: u32::from(value),
+        }),
+    }
+}
+
+fn decode_link_key(
+    bytes: &[u8],
+    expected: ExtendedAddress,
+) -> Result<LinkKeyEntry, panweave_codec::CodecError> {
+    use panweave_codec::CodecError;
+    let invalid = |field, value| CodecError::InvalidField {
+        field,
+        value: u32::from(value),
+    };
+    let mut r = Reader::new(bytes);
+    let format = r.u8()?;
+    if !matches!(format, 1..=LINK_KEY_FORMAT) {
+        return Err(CodecError::Unsupported {
+            what: "link key format",
+        });
+    }
+    let partner = ExtendedAddress(r.u64_le()?);
+    if partner != expected {
+        return Err(CodecError::InvalidField {
+            field: "link key partner",
+            value: 0,
+        });
+    }
+    let key = Key128::from_bytes(r.array::<16>()?);
+    let kind = if boolean(&mut r, "link key kind")? {
+        LinkKeyKind::Global
+    } else {
+        LinkKeyKind::Unique
+    };
+    let mut e = LinkKeyEntry::provisional(partner, key, kind);
+    e.verified_frame_counter = false;
+    e.attributes = KeyAttributes::from_raw(r.u8()?);
+    e.incoming = r.u32_le()?;
+    e.outgoing = panweave_security::frame_counter::OutgoingCounter::restore(r.u32_le()?);
+    e.frame_counter_sync = boolean(&mut r, "frame counter sync")?;
+    if format == LINK_KEY_FORMAT {
+        e.initial_join_authentication = match r.u8()? {
+            0 => InitialJoinAuthentication::None,
+            1 => InitialJoinAuthentication::InstallCodeKey,
+            2 => InitialJoinAuthentication::AnonymousKeyNegotiation,
+            3 => InitialJoinAuthentication::KeyNegotiationWithAuthentication,
+            value => return Err(invalid("initial join authentication", value)),
+        };
+        e.negotiation_state = match r.u8()? {
+            0 => KeyNegotiationState::None,
+            1 => KeyNegotiationState::Started,
+            2 => KeyNegotiationState::Complete,
+            value => return Err(invalid("key negotiation state", value)),
+        };
+        e.negotiation_method = r.u8()?;
+        e.post_join_key_update = match r.u8()? {
+            0 => PostJoinKeyUpdate::NotUpdated,
+            1 => PostJoinKeyUpdate::KeyRequest,
+            2 => PostJoinKeyUpdate::UnauthenticatedNegotiation,
+            3 => PostJoinKeyUpdate::AuthenticatedNegotiation,
+            4 => PostJoinKeyUpdate::CertificateBased,
+            value => return Err(invalid("post-join key update", value)),
+        };
+        e.passphrase_update_allowed = boolean(&mut r, "passphrase update allowed")?;
+        if boolean(&mut r, "passphrase present")? {
+            e.passphrase = Some(Key128::from_bytes(r.array::<16>()?));
+        }
+    } else {
+        // Old records omitted the token and its lock. Do not reissue a token
+        // or permit downgrading a possibly negotiated established key.
+        e.passphrase_update_allowed = false;
+        if e.kind == LinkKeyKind::Unique && e.attributes != KeyAttributes::ProvisionalKey {
+            e.negotiation_method = LEGACY_NEGOTIATION_UNKNOWN;
+        }
+    }
+    if r.remaining() != 0 {
+        return Err(CodecError::LengthMismatch {
+            field: "link key record",
+        });
+    }
+    Ok(e)
 }
 
 /// Outcome of [`Stack::restore`].
@@ -532,7 +626,7 @@ impl<
         // Each record is stored as soon as it is encoded.
         let mut count = 0u8;
         for e in self.aps.security.keys().iter() {
-            let mut buf = [0u8; 48];
+            let mut buf = [0u8; LINK_KEY_BYTES];
             let mut w = Writer::new(&mut buf);
             let r = (|| -> Result<(), panweave_codec::CodecError> {
                 w.u8(LINK_KEY_FORMAT)?;
@@ -543,6 +637,19 @@ impl<
                 w.u32_le(e.incoming)?;
                 w.u32_le(e.outgoing.reserved_until())?;
                 w.u8(u8::from(e.frame_counter_sync))?;
+                w.u8(e.initial_join_authentication.raw())?;
+                w.u8(match e.negotiation_state {
+                    KeyNegotiationState::None => 0,
+                    KeyNegotiationState::Started => 1,
+                    KeyNegotiationState::Complete => 2,
+                })?;
+                w.u8(e.negotiation_method)?;
+                w.u8(e.post_join_key_update.raw())?;
+                w.u8(u8::from(e.passphrase_update_allowed))?;
+                w.u8(u8::from(e.passphrase.is_some()))?;
+                if let Some(passphrase) = &e.passphrase {
+                    w.bytes(passphrase.as_bytes())?;
+                }
                 Ok(())
             })();
             if r.is_err() {
@@ -553,7 +660,7 @@ impl<
                 &mut self.storage,
                 Key::with_id(Kind::LinkKey, e.partner.0),
                 &buf[..n],
-                &mut [0u8; 48],
+                &mut [0u8; LINK_KEY_BYTES],
             )?;
             count = count.saturating_add(1);
         }
@@ -872,56 +979,28 @@ impl<
             else {
                 continue;
             };
-            let mut r = Reader::new(&rec);
-            let parsed = (|| -> Result<LinkKeyEntry, panweave_codec::CodecError> {
-                if r.u8()? != LINK_KEY_FORMAT {
-                    return Err(panweave_codec::CodecError::Unsupported {
-                        what: "link key format",
-                    });
+            let e = decode_link_key(&rec, ExtendedAddress(p)).map_err(|_| StorageError::Corrupt)?;
+            let mut fc = [0u8; 4];
+            let mut e = e;
+            match self
+                .storage
+                .load(Key::with_id(Kind::ApsFrameCounter, p), &mut fc)?
+            {
+                Some(4) => {
+                    let bound = u32::from_le_bytes(fc).max(e.outgoing.reserved_until());
+                    e.outgoing = panweave_security::frame_counter::OutgoingCounter::restore(bound);
                 }
-                let partner = ExtendedAddress(r.u64_le()?);
-                let key = Key128::from_bytes(r.array::<16>()?);
-                let kind = if r.u8()? != 0 {
-                    LinkKeyKind::Global
-                } else {
-                    LinkKeyKind::Unique
-                };
-                let attributes = KeyAttributes::from_raw(r.u8()?);
-                let incoming = r.u32_le()?;
-                let reserved_until = r.u32_le()?;
-                let sync = r.u8()? != 0;
-                let mut e = LinkKeyEntry::provisional(partner, key, kind);
-                e.attributes = attributes;
-                e.incoming = incoming;
-                e.outgoing =
-                    panweave_security::frame_counter::OutgoingCounter::restore(reserved_until);
-                e.frame_counter_sync = sync;
-                Ok(e)
-            })();
-            if let Ok(e) = parsed {
-                let mut fc = [0u8; 4];
-                let mut e = e;
-                match self
-                    .storage
-                    .load(Key::with_id(Kind::ApsFrameCounter, p), &mut fc)?
-                {
-                    Some(4) => {
-                        let bound = u32::from_le_bytes(fc).max(e.outgoing.reserved_until());
-                        e.outgoing =
-                            panweave_security::frame_counter::OutgoingCounter::restore(bound);
-                    }
-                    Some(_) => return Err(StorageError::Corrupt),
-                    None => {
-                        // Legacy snapshots cannot prove that a subsequently
-                        // reserved window was not used. Require a new link key
-                        // before transmitting under an entry without a bound.
-                        e.outgoing =
-                            panweave_security::frame_counter::OutgoingCounter::restore(u32::MAX);
-                    }
+                Some(_) => return Err(StorageError::Corrupt),
+                None => {
+                    // Legacy snapshots cannot prove that a subsequently
+                    // reserved window was not used. Require a new link key
+                    // before transmitting under an entry without a bound.
+                    e.outgoing =
+                        panweave_security::frame_counter::OutgoingCounter::restore(u32::MAX);
                 }
-                // A persisted entry supersedes the preconfigured one.
-                let _ = self.aps.security.keys_mut().insert(e);
             }
+            // A persisted entry supersedes the preconfigured one.
+            let _ = self.aps.security.keys_mut().insert(e);
         }
         Ok(())
     }

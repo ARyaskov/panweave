@@ -18,7 +18,7 @@ a format octet so that a later layout can migrate or reject old data.
 | `Children` | end-device children: IEEE, network address, End Device Configuration, Device Timeout, rx-on flag (§3.6.9, §3.6.10.7) | every `NwkAction::Persist` | no |
 | `NetworkKeys` | active sequence number, every network key slot | every `NwkAction::Persist` | yes |
 | `NwkFrameCounter` | outgoing NWK frame-counter reservation bound | before the reservation is used | integrity-critical |
-| `LinkKey` (per partner) | key, kind (global / unique), attributes, incoming counter, outgoing reservation bound, frame-counter-sync flag | `ApsAction::Persist(LinkKeys)` | yes |
+| `LinkKey` (per partner) | key, kind (global / unique), attributes, incoming counter, outgoing reservation bound, frame-counter-sync flag, initial authentication, negotiation state/method, post-join provenance, optional authentication token and its update lock | `ApsAction::Persist(LinkKeys)` | yes |
 | `ApsFrameCounter` (per partner) | outgoing APS frame-counter reservation bound | before the reservation is used | integrity-critical |
 | `Aib` | Trust Center address and the index of `LinkKey` partners at id 0 (up to `LINK_KEYS` = 32, 8 with `small-tables`); id 1 temporarily journals new partner identifiers | with `LinkKey` | no |
 | `Bindings` | binding table (§2.2.8.1) | `ApsAction::Persist(Bindings)`, ZDO Bind / Unbind / Clear_All_Bindings | no |
@@ -33,6 +33,23 @@ a format octet so that a later layout can migrate or reject old data.
 Per R23.2 §4.4.12.1 the `Timeout` and `VerifiedFrameCounter` of a key pair
 entry are not persisted. The incoming counter is stored so that a rebooted
 Trust Center keeps rejecting replays from before its reset.
+
+Link-key format 2 stores all of the above persistent security metadata in
+at most 58 octets. Restoring it resets `VerifiedFrameCounter` to false,
+`apsChallengeFrameCounter` to zero and `Timeout` to its fresh value; none
+of those volatile fields is serialized. Invalid authentication,
+provenance, negotiation-state or boolean values,
+truncated records, trailing bytes and mismatched partner identifiers fail
+closed with `StorageError::Corrupt`.
+
+The old 36-octet format 1 remains readable. Its omitted token cannot be
+recovered, so token updates remain locked. An established unique legacy
+key gets a local unknown-provenance marker (`0xff`) that prevents a weaker
+Request Key exchange; this marker is never selected or advertised as a
+negotiation protocol. Existing keys and counter bounds remain usable, but
+recovering a lost authentication token requires trusted reprovisioning or
+recommissioning. The next key save writes format 2 without inventing the
+missing authentication history; restoring alone never writes.
 
 Records are written with `panweave_codec::Writer`, never `Debug`
 formatting, and keys are never logged: the backend is expected to be the
