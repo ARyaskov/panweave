@@ -1822,7 +1822,7 @@ mod tests {
             set_safety(&mut c, safety::REMOTE_LOCKOUT | safety::TAMPER_DETECTED).as_slice(),
             &[0, 1]
         );
-        assert!(set_safety(&mut c, safety::REMOTE_LOCKOUT).is_empty());
+        assert_eq!(set_safety(&mut c, safety::REMOTE_LOCKOUT).len(), 0);
         assert_eq!(
             handle(&mut c, CMD_GO_TO_PERCENT, &[100]),
             Outcome::Default(ZclStatus::Failure)

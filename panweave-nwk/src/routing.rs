@@ -610,7 +610,7 @@ mod tests {
         let mut out = Vec::<DiscoveryEntry, 4>::new();
         t.expire(later + panweave_types::Duration::from_secs(10), &mut out);
         assert_eq!(out.len(), 1);
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 
     #[test]
@@ -624,7 +624,7 @@ mod tests {
         assert!(t.store_from_record(ShortAddress(6), [ShortAddress(3)].into_iter()));
         assert!(t.get(ShortAddress(5)).is_none(), "oldest dropped when full");
         assert!(t.remove(ShortAddress(6)));
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
         let too_long = (0..13u16).map(ShortAddress);
         assert!(!t.store_from_record(ShortAddress(7), too_long));
     }

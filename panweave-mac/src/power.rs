@@ -321,7 +321,7 @@ mod tests {
             None
         );
         assert!(t.remove(Some(A), None));
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 
     #[test]
@@ -399,6 +399,6 @@ mod tests {
         })
         .unwrap();
         t.expire(Instant::ZERO + Duration::from_secs(11));
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 }

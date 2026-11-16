@@ -381,7 +381,7 @@ fn offers_that_do_not_suit_the_device_are_not_served() {
             "offer {i}: {events:?}"
         );
     }
-    assert!(client(&sim, d).received.is_empty());
+    assert_eq!(client(&sim, d).received.len(), 0);
 }
 
 #[test]

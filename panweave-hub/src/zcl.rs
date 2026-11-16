@@ -474,7 +474,7 @@ mod tests {
             configure_payload(reports_of(cluster::POWER_CONFIGURATION)).len(),
             18
         );
-        assert!(reports_of(cluster::IAS_ZONE).is_empty());
+        assert_eq!(reports_of(cluster::IAS_ZONE).len(), 0);
     }
 
     #[test]

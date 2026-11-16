@@ -128,7 +128,7 @@ fn neighbors_negotiate_transmit_power_through_link_power_delta() {
         sim.take_events(n);
     }
     // Joining starts at full power: nothing negotiated yet.
-    assert!(sim.stack(r).mac.power_table().is_empty());
+    assert_eq!(sim.stack(r).mac.power_table().len(), 0);
 
     // Routers: the coordinator's notification lowers the router's power
     // towards it and vice versa (§3.4.13.7 step 3).
@@ -160,7 +160,7 @@ fn neighbors_negotiate_transmit_power_through_link_power_delta() {
 
     // The router without support ignores the notifications and sends
     // none, so nobody negotiates with it.
-    assert!(sim.stack(p).mac.power_table().is_empty());
+    assert_eq!(sim.stack(p).mac.power_table().len(), 0);
     assert!(
         sim.events(p)
             .iter()

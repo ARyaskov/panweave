@@ -453,7 +453,7 @@ fn channels(set: &TlvSet<'_>) -> Result<Option<ChannelMask>, ParseError> {
         return Err(ParseError::Malformed);
     }
     let mut first = None;
-    for chunk in rest.chunks_exact(4) {
+    for chunk in rest.as_chunks::<4>().0.iter() {
         let raw = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let mask = ChannelMask(raw);
         if mask.page() == ChannelPage(0) {

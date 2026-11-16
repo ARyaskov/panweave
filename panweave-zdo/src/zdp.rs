@@ -320,7 +320,9 @@ impl<'a> U16List<'a> {
     /// Iterates the values.
     pub fn iter(&self) -> impl Iterator<Item = u16> + 'a {
         self.0
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
     }
 
@@ -368,7 +370,7 @@ impl<'a> Eui64List<'a> {
 
     /// Iterates the addresses.
     pub fn iter(&self) -> impl Iterator<Item = ExtendedAddress> + 'a {
-        self.0.chunks_exact(8).map(|c| {
+        self.0.as_chunks::<8>().0.iter().map(|c| {
             let mut b = [0u8; 8];
             b.copy_from_slice(c);
             ExtendedAddress::from_le_bytes(b)

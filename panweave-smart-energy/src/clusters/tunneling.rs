@@ -915,7 +915,7 @@ mod tests {
         let mut out = Vec::new();
         s.tick_second(&mut out);
         s.tick_second(&mut out);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         // Activity restarts the timer.
         let mut buf = [0u8; 8];
         let mut w = Writer::new(&mut buf);
@@ -929,13 +929,13 @@ mod tests {
         s.handle(PEER, CMD_TRANSFER_DATA, &buf[..n]);
         s.tick_second(&mut out);
         s.tick_second(&mut out);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         s.tick_second(&mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, PEER);
         assert_eq!(out[0].1.command, CMD_TUNNEL_CLOSURE_NOTIFICATION);
         assert_eq!(parse_tunnel_id(&out[0].1.payload).unwrap(), id);
-        assert!(s.tunnels().is_empty());
+        assert_eq!(s.tunnels().len(), 0);
     }
 
     #[test]

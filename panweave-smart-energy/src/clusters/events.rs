@@ -577,7 +577,7 @@ mod tests {
         // the end time): three total, the most recent first, minimal.
         assert_eq!((page.total_matching, page.total_commands), (3, 1));
         assert_eq!(page.events[0].time, 106);
-        assert!(page.events[0].data.is_empty());
+        assert_eq!(page.events[0].data.len(), 0);
         out.clear();
         log.query(
             &GetEventLog {
@@ -649,6 +649,6 @@ mod tests {
             log.clear(&ClearEventLogRequest { log: None }).cleared & CLEARED_ALL,
             CLEARED_ALL
         );
-        assert!(log.events().is_empty());
+        assert_eq!(log.events().len(), 0);
     }
 }

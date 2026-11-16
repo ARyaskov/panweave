@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(buf.dropped(), 0);
         buf.offer(150, 11, &[0x02, 0x00, 0x07], 0, None, None);
         buf.discard();
-        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
         buf.stop();
         assert!(!buf.stopped_by_limit());
     }

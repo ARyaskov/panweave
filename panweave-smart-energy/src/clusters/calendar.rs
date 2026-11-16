@@ -1249,7 +1249,7 @@ mod tests {
         // Stale calendar refused, newer replaces and empties the tables.
         assert_eq!(publish_calendar(&mut store, 9, 99), Err(Refusal::Stale));
         publish_calendar(&mut store, 12, 101).unwrap();
-        assert!(store.calendar(0).unwrap().day_profiles.is_empty());
+        assert_eq!(store.calendar(0).unwrap().day_profiles.len(), 0);
         assert_eq!(store.calendar(0).unwrap().calendar_id, 101);
         assert_eq!(
             store.on_publish_seasons(&PublishSeasons {
@@ -1267,7 +1267,7 @@ mod tests {
             calendar_id: 101,
             calendar_type: 0,
         }));
-        assert!(store.calendars.is_empty());
+        assert_eq!(store.calendars.len(), 0);
     }
 
     #[test]
@@ -1305,7 +1305,7 @@ mod tests {
         store
             .on_publish_special_days(&table(21, CANCEL, 0))
             .unwrap();
-        assert!(store.calendar(0).unwrap().special_days.is_empty());
+        assert_eq!(store.calendar(0).unwrap().special_days.len(), 0);
         assert_eq!(
             store.on_publish_special_days(&PublishSpecialDays {
                 calendar_type: calendar_type::FRIENDLY_CREDIT,

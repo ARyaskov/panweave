@@ -186,7 +186,7 @@ mod tests {
     fn generic_translation_table() {
         let (c, cmd, p) = command(translate(command::TOGGLE, &[], 0));
         assert_eq!((c, cmd), (ON_OFF_CLUSTER, CommandId(0x02)));
-        assert!(p.is_empty());
+        assert_eq!(p.len(), 0);
         let (c, cmd, p) = command(translate(command::IDENTIFY, &[], 0));
         assert_eq!(
             (c, cmd, p.as_slice()),

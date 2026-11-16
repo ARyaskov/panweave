@@ -226,7 +226,7 @@ mod tests {
         let p = ChannelMask::BDB_PRIMARY;
         let s = ChannelMask::BDB_SECONDARY;
         assert_eq!(p.or(s), ChannelMask::ALL_2_4GHZ);
-        assert!(p.and(s).is_empty());
+        assert_eq!(p.and(s).len(), 0);
         let primary: [u8; 4] = [11, 15, 20, 25];
         for c in primary {
             assert!(p.contains(Channel(c)));

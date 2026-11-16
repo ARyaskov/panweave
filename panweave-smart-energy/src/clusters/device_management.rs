@@ -1372,7 +1372,7 @@ mod tests {
 
         let mut due = Vec::new();
         p.poll(4999, &mut due);
-        assert!(due.is_empty());
+        assert_eq!(due.len(), 0);
         p.poll(5600, &mut due);
         assert_eq!(due.len(), 2);
         assert!(matches!(due[0], Due::Tenancy { provider_id: 1, .. }));

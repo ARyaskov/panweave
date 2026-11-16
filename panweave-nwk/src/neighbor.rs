@@ -658,7 +658,7 @@ mod tests {
         t.insert(unauth, 3).unwrap();
         let mut expired = Vec::<ExtendedAddress, 4>::new();
         t.age_children(5, &mut expired);
-        assert!(expired.is_empty());
+        assert_eq!(expired.len(), 0);
         assert_eq!(
             t.by_extended(ExtendedAddress(1))
                 .unwrap()
@@ -667,7 +667,7 @@ mod tests {
         );
         t.age_children(5, &mut expired);
         assert_eq!(expired.len(), 2);
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 
     #[test]

@@ -287,7 +287,7 @@ fn factory_reset_erases_network_state() {
             .iter()
             .any(|e| matches!(e, StackEvent::NetworkFormed { .. }))
     }));
-    assert!(!sim.stack(c).storage.is_empty());
+    assert_ne!(sim.stack(c).storage.len(), 0);
     let counter_before = sim.stack(c).nwk.security.keys.outgoing.peek();
     sim.stack(c).erase_persisted().unwrap();
     // Everything but the outgoing NWK frame counter is gone (BDB 3.1

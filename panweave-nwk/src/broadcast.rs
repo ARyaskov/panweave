@@ -177,7 +177,7 @@ mod tests {
         );
         assert!(t.get(ShortAddress(1), 1).is_none());
         t.expire(exp + Duration::from_secs(9));
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 
     #[test]

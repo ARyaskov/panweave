@@ -960,7 +960,7 @@ mod tests {
         )
         .unwrap();
         handle(&mut c, CMD_RESET_STARTUP_PARAMETERS, &buf[..n]);
-        assert!(saved(&c).is_empty());
+        assert_eq!(saved(&c).len(), 0);
     }
 
     #[test]
@@ -1013,7 +1013,7 @@ mod tests {
         // A truncated record keeps what could be read.
         let partial = State::decode(&buf[..n - 1]);
         assert_eq!(partial.saved.len(), 1);
-        assert!(State::decode(&[]).saved.is_empty());
+        assert_eq!(State::decode(&[]).saved.len(), 0);
         // Restored into a server.
         let mut c = cs();
         restore_saved(&mut c, back);

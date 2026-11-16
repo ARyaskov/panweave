@@ -181,7 +181,7 @@ fn registry_overflow_keeps_the_known_devices() {
         )),
         "{events:?}"
     );
-    assert!(joined_events(&events).is_empty());
+    assert_eq!(joined_events(&events).len(), 0);
     let Response::Diagnostics(d) = request(&mut sim, c, &Request::GetDiagnostics) else {
         panic!()
     };

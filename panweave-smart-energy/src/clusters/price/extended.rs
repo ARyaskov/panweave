@@ -2199,7 +2199,7 @@ mod tests {
             6000,
             &mut out,
         );
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         s.expire(10_000);
         assert_eq!(s.items().len(), 1);
         assert_eq!(s.items()[0].issuer_event_id, 5);

@@ -225,9 +225,9 @@ impl Queue {
         }
         if let Some(ack) = q.last_ack.clone() {
             // An acknowledgement written before its slots were erased.
-            for i in 0..CAPACITY {
-                if q.slots[i].is_some_and(|e| ack.ids.contains(&e.id)) {
-                    q.slots[i] = None;
+            for (i, slot) in q.slots.iter_mut().enumerate() {
+                if slot.is_some_and(|e| ack.ids.contains(&e.id)) {
+                    *slot = None;
                     let _ = storage.erase(slot_key(i));
                 }
             }
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(q.overflow().count, 2);
         q.acknowledge(&mut s, 1, &ids, 2);
         assert_eq!(q.overflow(), Overflow::default());
-        assert!(q.is_empty());
+        assert_eq!(q.len(), 0);
         assert_eq!(Queue::open(&mut s).overflow().count, 0);
     }
 

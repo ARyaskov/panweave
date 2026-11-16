@@ -489,7 +489,7 @@ mod tests {
         g.remove_all(Endpoint(1));
         assert!(g.is_member(GroupAddress(1)));
         g.remove_all(Endpoint(5));
-        assert!(g.is_empty());
+        assert_eq!(g.len(), 0);
     }
 
     #[test]

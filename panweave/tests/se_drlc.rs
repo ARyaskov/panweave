@@ -272,7 +272,7 @@ fn load_control_events_are_scheduled_reported_and_cancelled() {
     assert!(sim.run_until(Duration::from_secs(10), |x| {
         reported(x, e).contains(&EventStatus::Cancelled)
     }));
-    assert!(
+    assert_eq!(
         sim.app::<Lcd>(l)
             .unwrap()
             .driver
@@ -280,6 +280,7 @@ fn load_control_events_are_scheduled_reported_and_cancelled() {
             .unwrap()
             .scheduler
             .events()
-            .is_empty()
+            .len(),
+        0
     );
 }

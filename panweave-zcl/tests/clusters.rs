@@ -590,7 +590,7 @@ fn poll_control_server_checks_in_and_fast_polls() {
     );
     let now = T0 + Duration::from_secs(2);
     zcl.poll_timers(now + Duration::from_millis(999));
-    assert!(events(&mut zcl).is_empty());
+    assert_eq!(events(&mut zcl).len(), 0);
     zcl.poll_timers(now + Duration::from_millis(1000));
     assert_eq!(
         events(&mut zcl),

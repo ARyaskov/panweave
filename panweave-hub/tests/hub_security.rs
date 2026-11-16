@@ -160,7 +160,7 @@ fn an_exemption_admits_its_device_and_survives_a_restart() {
     let s = security(&mut sim, c);
     assert_eq!(s.exemptions.len(), 1);
     assert_eq!(s.exemptions[0].remaining_s, None, "kept with the device");
-    assert!(s.unauthorized.is_empty());
+    assert_eq!(s.unauthorized.len(), 0);
     // Restart: the persisted exemption is applied to the stack again.
     let storage = {
         let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
@@ -193,7 +193,7 @@ fn an_exemption_admits_its_device_and_survives_a_restart() {
         Response::Done
     );
     let s = security(&mut sim, c);
-    assert!(s.exemptions.is_empty());
+    assert_eq!(s.exemptions.len(), 0);
     assert_eq!(
         s.unauthorized.as_slice(),
         &[(LEGACY, DeviceAuthorization::KeyExchangeIncomplete)]
@@ -226,7 +226,7 @@ fn an_unused_exemption_expires() {
             .commissioning_exemption(ExtendedAddress(LEGACY))
             .is_none()
     );
-    assert!(security(&mut sim, c).exemptions.is_empty());
+    assert_eq!(security(&mut sim, c).exemptions.len(), 0);
     assert!(trace_has(
         &mut sim,
         c,
@@ -324,7 +324,7 @@ fn a_repeated_grant_never_extends_the_window() {
     assert_eq!(s.exemptions.len(), 1);
     assert!(s.exemptions[0].remaining_s.is_some_and(|r| r <= 10));
     sim.run_for(Duration::from_secs(15));
-    assert!(security(&mut sim, c).exemptions.is_empty());
+    assert_eq!(security(&mut sim, c).exemptions.len(), 0);
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn an_unused_grant_does_not_survive_a_restart() {
             .commissioning_exemption(ExtendedAddress(LEGACY))
             .is_none()
     );
-    assert!(security(&mut sim, c).exemptions.is_empty());
+    assert_eq!(security(&mut sim, c).exemptions.len(), 0);
     // The legacy device is now refused.
     legacy_device(&mut sim, c);
     assert!(sim.run_until(Duration::from_secs(60), |x| {
@@ -391,5 +391,5 @@ fn a_replayed_grant_for_an_admitted_device_opens_no_new_join_window() {
         Response::Done
     );
     assert!(!sim.stack(c).key_exchange_exempt(ExtendedAddress(LEGACY)));
-    assert!(security(&mut sim, c).exemptions.is_empty());
+    assert_eq!(security(&mut sim, c).exemptions.len(), 0);
 }

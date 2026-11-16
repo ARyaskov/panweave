@@ -110,7 +110,7 @@ fn only_sleepy_sensors_for_an_hour() {
         CONTACT,
     );
     let mut sup = supervisor(&mut sim, c);
-    assert!(supervise(&mut sim, c, &mut sup, 3600, |_, _| {}).is_empty());
+    assert_eq!(supervise(&mut sim, c, &mut sup, 3600, |_, _| {}).len(), 0);
 }
 
 #[test]
@@ -213,5 +213,5 @@ fn a_supervisor_reset_is_reported_once_by_the_next_boot() {
     let storage = rebooted.hub.storage().clone();
     let mut again = HubApp::new(storage);
     assert_eq!(again.hub.restore().unwrap(), 1);
-    assert!(previous(&again.hub).is_empty());
+    assert_eq!(previous(&again.hub).len(), 0);
 }

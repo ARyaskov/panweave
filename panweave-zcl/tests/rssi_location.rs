@@ -281,7 +281,7 @@ fn pings_rssi_reports_and_anchors() {
     zcl.rssi_request(EP).unwrap();
     let (h, p, _) = sent(&mut zcl);
     assert_eq!(h.command, rssi::CMD_RSSI_REQUEST);
-    assert!(p.is_empty());
+    assert_eq!(p.len(), 0);
     let info = rssi::NeighborInfo {
         neighbor: ExtendedAddress(2),
         x: 1,

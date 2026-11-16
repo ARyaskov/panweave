@@ -1200,7 +1200,7 @@ mod tests {
         .unwrap();
         assert_eq!(count, 0);
         assert_eq!(calls, 1);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
     }
 
     #[test]

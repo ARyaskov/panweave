@@ -329,12 +329,12 @@ fn unidirectional_commissioning_with_a_protected_oob_key() {
     assert!(evs.contains(&SinkEvent::TableChanged));
     assert_eq!(s.table.find(&GPD).unwrap().frame_counter, 0x11);
     feed(&mut s, &toggle(4, 0x11, &OOB_KEY));
-    assert!(events(&mut s).is_empty());
+    assert_eq!(events(&mut s).len(), 0);
     s.poll(T0 + Duration::from_secs(5));
     feed(&mut s, &toggle(5, 0x11, &OOB_KEY));
-    assert!(events(&mut s).is_empty());
+    assert_eq!(events(&mut s).len(), 0);
     feed(&mut s, &toggle(6, 0x12, &NWK_KEY));
-    assert!(events(&mut s).is_empty());
+    assert_eq!(events(&mut s).len(), 0);
     feed(
         &mut s,
         &data_gpdf(
@@ -346,7 +346,7 @@ fn unidirectional_commissioning_with_a_protected_oob_key() {
             None,
         ),
     );
-    assert!(events(&mut s).is_empty());
+    assert_eq!(events(&mut s).len(), 0);
     // A commissioning attempt in operational mode changes nothing.
     feed(
         &mut s,
@@ -359,7 +359,8 @@ fn unidirectional_commissioning_with_a_protected_oob_key() {
             None,
         ),
     );
-    assert!(events(&mut s).is_empty() && frames(&mut s).is_empty());
+    assert_eq!(events(&mut s).len(), 0);
+    assert_eq!(frames(&mut s).len(), 0);
     // Decommissioning, protected as agreed, removes the pairing and
     // tells the proxies.
     feed(
@@ -387,7 +388,7 @@ fn unidirectional_commissioning_with_a_protected_oob_key() {
     assert_eq!(out.len(), 1);
     let p = Pairing::decode_exact(&out[0].payload).unwrap();
     assert!(p.remove_gpd && !p.add_sink);
-    assert!(s.table.is_empty());
+    assert_eq!(s.table.len(), 0);
 }
 
 #[test]
@@ -424,7 +425,7 @@ fn bidirectional_commissioning_hands_out_the_derived_group_key() {
         ),
     );
     assert!(events(&mut s).is_empty(), "no pairing before Success");
-    assert!(s.table.is_empty());
+    assert_eq!(s.table.len(), 0);
     // The Commissioning Reply goes out gpTxOffset later, unprotected,
     // from the sink to the GPD, carrying the PAN ID and the NWK-key
     // derived group key under the gpLinkKey.
@@ -656,7 +657,7 @@ fn multi_hop_commissioning_through_a_proxy() {
         ..toggle
     };
     s.on_notification(&wrong, PROXY, true);
-    assert!(commands(&events(&mut s)).is_empty());
+    assert_eq!(commands(&events(&mut s)).len(), 0);
     let out = frames(&mut s);
     assert_eq!(out.len(), 2);
     let add = Pairing::decode_exact(&out[0].payload).unwrap();
@@ -681,7 +682,7 @@ fn direct_channel_request_and_sink_table_request() {
     .encode_to_slice(&mut buf)
     .unwrap();
     feed(&mut s, &buf[..n]);
-    assert!(gpdfs(&mut s).is_empty());
+    assert_eq!(gpdfs(&mut s).len(), 0);
     s.enter_commissioning_mode(false, None).unwrap();
     feed(&mut s, &buf[..n]);
     let tx = gpdfs(&mut s);
@@ -700,10 +701,10 @@ fn direct_channel_request_and_sink_table_request() {
     .encode_to_slice(&mut buf)
     .unwrap();
     feed(&mut s, &buf[..n]);
-    assert!(gpdfs(&mut s).is_empty());
+    assert_eq!(gpdfs(&mut s).len(), 0);
     // Sink Table Request on an empty table: NOT_FOUND only in unicast.
     s.on_sink_table_request(&SinkTableRequest::ByIndex(0), PROXY, false);
-    assert!(frames(&mut s).is_empty());
+    assert_eq!(frames(&mut s).len(), 0);
     s.on_sink_table_request(&SinkTableRequest::ByIndex(0), PROXY, true);
     let out = frames(&mut s);
     assert_eq!(out[0].destination, Destination::Unicast(PROXY));
@@ -929,7 +930,7 @@ fn pairing_configuration_manages_the_sink_table() {
         PairedEndpoints::None,
     );
     assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
-    assert!(s.table.is_empty());
+    assert_eq!(s.table.len(), 0);
     let out = frames(&mut s);
     assert!(Pairing::decode_exact(&out[0].payload).unwrap().remove_gpd);
     assert_eq!(
@@ -944,7 +945,7 @@ fn pairing_configuration_manages_the_sink_table() {
         PairedEndpoints::None,
     );
     assert_eq!(s.on_pairing_configuration(&c, true), Ok(()));
-    assert!(frames(&mut s).is_empty());
+    assert_eq!(frames(&mut s).len(), 0);
 }
 
 #[test]
@@ -1008,7 +1009,7 @@ fn multi_sensor_commissioning_waits_for_the_application_description() {
         events(&mut s).is_empty(),
         "no pairing before the description"
     );
-    assert!(s.table.is_empty());
+    assert_eq!(s.table.len(), 0);
     // The description: report 0 = Temperature Measurement MeasuredValue
     // (int16) at offset 0.
     let mut records = [0u8; 16];

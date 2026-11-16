@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(light.class, DeviceClass::Simple);
         assert!(light.servers.contains(&ClusterId(0x0006)));
         assert!(light.servers.contains(&ClusterId(0x0004)));
-        assert!(light.clients.is_empty());
+        assert_eq!(light.clients.len(), 0);
         let switch = DeviceType::lookup(DeviceId(0x0103)).unwrap();
         assert!(switch.clients.contains(&ClusterId(0x0006)));
         assert!(DeviceType::lookup(DeviceId(0xFFFF)).is_none());

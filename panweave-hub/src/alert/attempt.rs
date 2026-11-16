@@ -596,7 +596,7 @@ pub(crate) mod tests {
                 },
                 "{stage:?}"
             );
-            assert!(net.sent.is_empty());
+            assert_eq!(net.sent.len(), 0);
             assert_eq!(net.stops, 1, "Wi-Fi stopped after {stage:?}");
             assert!(r.restored && radio.zigbee_on);
             assert_eq!(r.stage_ms[stage.index()], Some(50));

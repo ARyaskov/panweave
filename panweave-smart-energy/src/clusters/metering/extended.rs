@@ -3083,7 +3083,7 @@ mod tests {
             ns::flag_numbers(0x7654_3210).as_slice(),
             &[7, 6, 5, 4, 3, 2, 1, 0]
         );
-        assert!(ns::flag_numbers(0xFFFF_FFFF).is_empty());
+        assert_eq!(ns::flag_numbers(0xFFFF_FFFF).len(), 0);
         let flags = [0x11u32, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let r =
             MirrorReportAttributeResponse::for_order(ns::B, ns::ORDER_B, |n| flags[usize::from(n)]);

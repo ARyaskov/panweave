@@ -1099,7 +1099,7 @@ mod tests {
         // Reading from the end yields nothing and stays at the end.
         all.clear();
         assert_eq!(log.read(10, None, usize::MAX, &mut all), 10);
-        assert!(all.is_empty());
+        assert_eq!(all.len(), 0);
         assert_eq!(log.clear(), 10);
         assert_eq!(log.first_seq(), 10);
     }

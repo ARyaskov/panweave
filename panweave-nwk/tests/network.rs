@@ -562,7 +562,7 @@ fn sleepy_end_device_receives_via_indirect_delivery() {
         !net.nodes[ci].indirect.is_empty(),
         "frame is held for the sleepy child"
     );
-    assert!(net.nodes[ei].received.is_empty());
+    assert_eq!(net.nodes[ei].received.len(), 0);
     // A broadcast the child overhears meanwhile must not make the held
     // frame stale: it is secured only when the child polls (§3.6.2.2).
     net.nodes[ci]
@@ -588,7 +588,7 @@ fn sleepy_end_device_receives_via_indirect_delivery() {
             .contains(&(ShortAddress::COORDINATOR, b"wake".to_vec()))
     );
     assert_eq!(net.nodes[ei].nwk.stats.replays, replays);
-    assert!(net.nodes[ci].indirect.is_empty());
+    assert_eq!(net.nodes[ci].indirect.len(), 0);
     let evs = net.take_events(ci);
     assert!(evs.iter().any(|e| matches!(
         e,

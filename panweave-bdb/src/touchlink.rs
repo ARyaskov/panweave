@@ -947,7 +947,7 @@ impl Initiator {
 
 fn random_key(node: &mut impl TouchlinkNode) -> [u8; 16] {
     let mut k = [0u8; 16];
-    for chunk in k.chunks_exact_mut(4) {
+    for chunk in k.as_chunks_mut::<4>().0 {
         chunk.copy_from_slice(&node.random_u32().to_le_bytes());
     }
     k

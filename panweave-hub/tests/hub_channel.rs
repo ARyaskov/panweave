@@ -22,9 +22,7 @@ fn the_network_moves_to_the_quietest_channel_with_its_routers() {
     let (mut sim, c) = network();
     join(&mut sim, c, "bulb", bulb(), BULB);
     // Busy everywhere but channel 20.
-    for ch in 11..=26 {
-        sim.channel_energy[ch] = 200;
-    }
+    sim.channel_energy[11..=26].fill(200);
     sim.channel_energy[20] = 5;
     take_hub_events(&mut sim, c);
 

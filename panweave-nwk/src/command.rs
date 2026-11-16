@@ -459,7 +459,9 @@ impl<'a> RouteRecord<'a> {
     /// the originator first).
     pub fn relays(&self) -> impl Iterator<Item = ShortAddress> + '_ {
         self.relays
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| ShortAddress(u16::from_le_bytes([c[0], c[1]])))
     }
 }
@@ -587,11 +589,15 @@ impl<'a> LinkStatus<'a> {
 
     /// Iterates entries.
     pub fn entries(&self) -> impl Iterator<Item = LinkStatusEntry> + '_ {
-        self.entries.chunks_exact(3).map(|c| LinkStatusEntry {
-            address: ShortAddress(u16::from_le_bytes([c[0], c[1]])),
-            incoming_cost: c[2] & 0x7,
-            outgoing_cost: (c[2] >> 4) & 0x7,
-        })
+        self.entries
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| LinkStatusEntry {
+                address: ShortAddress(u16::from_le_bytes([c[0], c[1]])),
+                incoming_cost: c[2] & 0x7,
+                outgoing_cost: (c[2] >> 4) & 0x7,
+            })
     }
 
     /// Serialises one entry into three octets.
@@ -659,7 +665,9 @@ impl NetworkReport<'_> {
     /// Iterates conflicting PAN identifiers (for `PAN_ID_CONFLICT`).
     pub fn pan_ids(&self) -> impl Iterator<Item = PanId> + '_ {
         self.info
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| PanId(u16::from_le_bytes([c[0], c[1]])))
     }
 }
@@ -945,7 +953,7 @@ impl<'a> LinkPowerDelta<'a> {
 
     /// Iterates `(address, power delta dB)` pairs.
     pub fn entries(&self) -> impl Iterator<Item = (ShortAddress, i8)> + '_ {
-        self.entries.chunks_exact(3).map(|c| {
+        self.entries.as_chunks::<3>().0.iter().map(|c| {
             (
                 ShortAddress(u16::from_le_bytes([c[0], c[1]])),
                 i8::from_le_bytes([c[2]]),

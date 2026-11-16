@@ -453,7 +453,7 @@ fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
             .iter()
             .any(|e| matches!(e, StackEvent::GreenPowerDecommissioned { gpd } if *gpd == GPD))
     }));
-    assert!(sim.stack(c).green_power_sink().unwrap().table.is_empty());
+    assert_eq!(sim.stack(c).green_power_sink().unwrap().table.len(), 0);
     assert!(sim.run_until(Duration::from_secs(5), |x| {
         x.stack_ref(r)
             .green_power_proxy_ref()
@@ -568,7 +568,7 @@ fn bidirectional_commissioning_through_a_proxy_delivers_the_key() {
             .green_power_proxy_ref()
             .is_some_and(|p| p.is_first_to_forward())
     }));
-    assert!(sim.stack(c).green_power_sink().unwrap().table.is_empty());
+    assert_eq!(sim.stack(c).green_power_sink().unwrap().table.len(), 0);
     // Second attempt: the GPD's receive window is answered by the proxy
     // with the Commissioning Reply prepared for the first attempt
     // (§A.3.9.1 step 13.d), carrying the PAN ID and the NWK-key derived

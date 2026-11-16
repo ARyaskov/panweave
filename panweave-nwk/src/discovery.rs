@@ -311,7 +311,7 @@ mod tests {
             3,
             &mut out,
         );
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
         t.add(c, 0, None);
         let mut out = Vec::<usize, 4>::new();
         t.ranked(None, true, true, 75, true, 0, None, 3, &mut out);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         t.ranked(None, false, false, 75, true, 0, None, 3, &mut out);
         let shorts: Vec<u16, 4> = out.iter().map(|i| t.get(*i).unwrap().short.0).collect();
         assert_eq!(shorts.as_slice(), &[1, 2]);

@@ -360,7 +360,7 @@ fn lost_acknowledgements_trigger_retries_then_no_ack() {
         )
         .unwrap();
     net.run();
-    assert!(net.events(TC_SHORT).is_empty());
+    assert_eq!(net.events(TC_SHORT).len(), 0);
     for _ in 0..4 {
         net.advance(Duration::from_millis(1600));
     }
@@ -396,8 +396,8 @@ fn a_frame_the_nwk_cannot_buffer_is_offered_again_later() {
         .unwrap();
     net.run();
     // Not retried in the same turn, not failed.
-    assert!(net.events(TC_SHORT).is_empty());
-    assert!(net.log.is_empty());
+    assert_eq!(net.events(TC_SHORT).len(), 0);
+    assert_eq!(net.log.len(), 0);
     assert_eq!(
         net.node(TC_SHORT).next_deadline(),
         Some(net.now.saturating_add(Duration::from_millis(1000)))
@@ -434,14 +434,14 @@ fn local_refusals_are_bounded() {
         .unwrap();
     net.run();
     for _ in 0..8 {
-        assert!(net.events(TC_SHORT).is_empty());
+        assert_eq!(net.events(TC_SHORT).len(), 0);
         net.advance(Duration::from_millis(1000));
     }
     // apscMaxFrameRetries more immediate attempts (the retry path of a
     // NWK failure), then the request fails; nothing was ever sent.
     let ev = net.events(TC_SHORT);
     assert_eq!(confirm_status(&ev), Some(ApsStatus::from_raw(0xD3)));
-    assert!(net.log.is_empty());
+    assert_eq!(net.log.len(), 0);
     assert_eq!(net.node(TC_SHORT).stats.deferrals, 8);
     assert_eq!(net.node(TC_SHORT).next_deadline(), None);
 }
@@ -673,7 +673,7 @@ fn group_delivery_and_loopback() {
         )
         .unwrap();
     net.run();
-    assert!(take_indications().is_empty());
+    assert_eq!(take_indications().len(), 0);
 }
 
 #[test]
@@ -994,7 +994,7 @@ fn unauthorized_joiner_ignores_data_and_unencrypted_key() {
         )
         .unwrap();
     net.run();
-    assert!(take_indications().is_empty());
+    assert_eq!(take_indications().len(), 0);
     assert_eq!(net.node(JOINER_SHORT).stats.policy_dropped, 1);
     // A broadcast (APS-unencrypted) network key is refused while
     // unauthorized because the policy requires link-key encryption.
@@ -1007,7 +1007,7 @@ fn unauthorized_joiner_ignores_data_and_unencrypted_key() {
         )
         .unwrap();
     net.run();
-    assert!(net.events(JOINER_SHORT).is_empty());
+    assert_eq!(net.events(JOINER_SHORT).len(), 0);
     assert_eq!(
         net.node(JOINER_SHORT).state(),
         DeviceState::JoinedUnauthorized

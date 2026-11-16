@@ -265,7 +265,7 @@ fn unauthorized_sources_cannot_raise_alarms() {
         .remove(panweave_types::ExtendedAddress(AQARA));
     set_zone(&mut t.sim, t.aqara, ALARM1);
     t.sim.run_for(Duration::from_secs(20));
-    assert!(sensor_events(&t.sim, t.c, AQARA).is_empty());
+    assert_eq!(sensor_events(&t.sim, t.c, AQARA).len(), 0);
     assert_eq!(
         device(&mut t.sim, t.c, AQARA).state.water_leak,
         LeakState::Dry,

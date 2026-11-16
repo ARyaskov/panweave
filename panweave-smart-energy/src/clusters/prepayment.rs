@@ -2404,7 +2404,7 @@ mod tests {
             records: 0,
             debt_type: debt_type::DEBT_2,
         });
-        assert!(log.records.is_empty());
+        assert_eq!(log.records.len(), 0);
         let log = a.debt_log(&GetDebtRepaymentLog {
             latest_end: 100,
             records: 0,
@@ -2506,7 +2506,7 @@ mod tests {
             Scheduling::Cancelled
         );
         // Due commands apply on poll.
-        assert!(pending.poll(&mut account, 4999).is_empty());
+        assert_eq!(pending.poll(&mut account, 4999).len(), 0);
         let due = pending.poll(&mut account, 5000);
         assert_eq!(due.len(), 1);
         assert_eq!(account.emergency_limit, 600);

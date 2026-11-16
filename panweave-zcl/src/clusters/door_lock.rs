@@ -2628,8 +2628,8 @@ mod tests {
         let o = handle(&mut c, CMD_CLEAR_PIN_CODE, &[1, 0], T0, NO_TIME);
         assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
         assert!(users(&c)[1].occupied());
-        assert!(users(&c)[1].pin.is_empty());
-        assert!(!users(&c)[1].rfid.is_empty());
+        assert_eq!(users(&c)[1].pin.len(), 0);
+        assert_ne!(users(&c)[1].rfid.len(), 0);
         let o = handle(&mut c, CMD_CLEAR_RFID_CODE, &[1, 0], T0, NO_TIME);
         assert_eq!(o.response.unwrap().payload.as_slice(), &[0]);
         assert!(!users(&c)[1].occupied());
@@ -2840,7 +2840,7 @@ mod tests {
         c.set(RF_OPERATION_EVENT_MASK.id, &bits16(0xffff));
         c.set(RF_PROGRAMMING_EVENT_MASK.id, &bits16(0xffff));
         set_pin(&mut c, 0, user_status::OCCUPIED_ENABLED, 0, b"2468");
-        assert!(log_records(&c).is_empty());
+        assert_eq!(log_records(&c).len(), 0);
         c.set_bool(ENABLE_LOGGING.id, true);
         set_pin(&mut c, 1, user_status::OCCUPIED_ENABLED, 0, b"1357");
         let _ = operate(&mut c, CMD_UNLOCK_DOOR, b"2468", T0);

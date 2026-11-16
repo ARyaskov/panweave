@@ -173,7 +173,7 @@ fn router_proxy_tunnels_gpdfs_to_the_sink() {
     sim.take_events(c);
     sim.inject(&gpdf(1, command::TOGGLE));
     sim.run_for(Duration::from_secs(1));
-    assert!(notifications(&sim, c).is_empty());
+    assert_eq!(notifications(&sim, c).len(), 0);
     // GP Pairing (broadcast): derived groupcast for the GPD.
     let pairing = Pairing {
         gpd: GPD,

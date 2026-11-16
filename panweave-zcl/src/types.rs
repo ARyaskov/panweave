@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(f32_to_semi(1e6), 0x7c00);
         assert!(semi_to_f32(0x7c00).is_infinite());
         assert!(semi_to_f32(0x7e00).is_nan());
-        assert!(f32_to_semi(f32::NAN) & 0x7c00 == 0x7c00);
+        assert_eq!(f32_to_semi(f32::NAN) & 0x7c00, 0x7c00);
         assert_eq!(f32_to_semi(1.0 + 1.0 / 2048.0), 0x3c00);
         assert_eq!(f32_to_semi(1.0 + 3.0 / 2048.0), 0x3c02);
         assert_eq!(

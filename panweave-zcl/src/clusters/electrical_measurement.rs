@@ -1312,7 +1312,7 @@ mod tests {
             Some(u64::from(measurement_type::DC))
         );
         assert_eq!(c.i16(dc::VOLTAGE.id), Some(dc::UNKNOWN));
-        assert!(set_dc(&mut c, Some(120), Some(5), Some(600)).is_empty());
+        assert_eq!(set_dc(&mut c, Some(120), Some(5), Some(600)).len(), 0);
         set_dc(&mut c, Some(110), Some(7), None);
         assert_eq!(
             (c.i16(dc::VOLTAGE_MIN.id), c.i16(dc::VOLTAGE_MAX.id)),
@@ -1330,7 +1330,7 @@ mod tests {
         );
         // Thresholds only alarm when enabled by the mask.
         set_threshold(&mut c, dc::VOLTAGE_OVERLOAD.id, 125);
-        assert!(set_dc(&mut c, Some(130), None, None).is_empty());
+        assert_eq!(set_dc(&mut c, Some(130), None, None).len(), 0);
         c.set(
             dc::OVERLOAD_ALARMS_MASK.id,
             &Value::Bits {
@@ -1391,7 +1391,7 @@ mod tests {
             c.attributes.value(ac::POWER_FACTOR.id).unwrap().as_i64(),
             Some(100)
         );
-        assert!(set_ac(&mut c, AcReading::default()).is_empty());
+        assert_eq!(set_ac(&mut c, AcReading::default()).len(), 0);
         assert_eq!(c.u16(ac::FREQUENCY.id), Some(ac::UNKNOWN_U16));
     }
 
@@ -1451,7 +1451,7 @@ mod tests {
             apparent_power: Some(0),
             power_factor: 100,
         };
-        assert!(set_ac(&mut c, read(230, 10, 2300)).is_empty());
+        assert_eq!(set_ac(&mut c, read(230, 10, 2300)).len(), 0);
         set_ac(&mut c, read(231, 12, 2500));
         set_ac(&mut c, read(229, 8, 1800));
         assert_eq!(c.u16(ac::RMS_CURRENT_MIN.id), Some(8));

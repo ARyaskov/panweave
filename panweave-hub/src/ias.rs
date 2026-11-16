@@ -223,6 +223,6 @@ mod tests {
             &[QUIRK],
         );
         assert_eq!(m, standard_map(zone_type::WATER_SENSOR));
-        assert!(OVERRIDES.is_empty());
+        assert_eq!(OVERRIDES.len(), 0);
     }
 }

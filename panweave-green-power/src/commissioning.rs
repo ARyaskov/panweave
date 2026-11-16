@@ -75,7 +75,9 @@ pub struct ClusterList<'a> {
 impl ClusterList<'_> {
     fn ids(&self, skip: usize, n: usize) -> impl Iterator<Item = ClusterId> + '_ {
         self.bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .skip(skip)
             .take(n)
             .map(|c| ClusterId(u16::from_le_bytes([c[0], c[1]])))

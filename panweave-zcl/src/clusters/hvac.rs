@@ -2008,7 +2008,7 @@ mod tests {
             handle(&mut c, CMD_CLEAR_WEEKLY_SCHEDULE, &[]),
             Outcome::Scheduled
         );
-        assert!(schedule(&c).unwrap().transitions.is_empty());
+        assert_eq!(schedule(&c).unwrap().transitions.len(), 0);
         assert_eq!(
             handle(
                 &mut c,
@@ -2089,7 +2089,7 @@ mod tests {
         assert_eq!(c.tick, None);
         // A factory reset wipes the transitions and keeps the capacity.
         c.reset_to_defaults(now);
-        assert!(schedule(&c).unwrap().transitions.is_empty());
+        assert_eq!(schedule(&c).unwrap().transitions.len(), 0);
         assert_eq!(schedule(&c).unwrap().weekly, 12);
     }
 

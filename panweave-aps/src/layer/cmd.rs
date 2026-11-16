@@ -736,7 +736,7 @@ impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
             return Err(ApsError::IllegalRequest);
         }
         let (partner, status) = match self.link_key_for(device) {
-            Some(p) => (Some(p).filter(|_| status.is_success()), status),
+            Some(p) => (status.is_success().then_some(p), status),
             None => (None, ApsStatus::SecurityFail),
         };
         let id = self.alloc_request();
@@ -806,7 +806,7 @@ impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
             return Err(ApsError::InvalidParameter);
         }
         let (partner, status) = match self.link_key_for(device) {
-            Some(p) => (Some(p).filter(|_| status.is_success()), status),
+            Some(p) => (status.is_success().then_some(p), status),
             None => (None, ApsStatus::SecurityFail),
         };
         let id = self.alloc_request();

@@ -637,6 +637,6 @@ mod tests {
             ..AlertConfigUpdate::default()
         })
         .unwrap();
-        assert!(c.token.is_empty());
+        assert_eq!(c.token.len(), 0);
     }
 }

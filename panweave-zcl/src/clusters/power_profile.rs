@@ -835,7 +835,7 @@ mod tests {
         assert_eq!(&buf[..n], &[1, 1, 1, 90, 0]);
         assert_eq!(Schedule::parse(&buf[..n]).unwrap(), s);
         let empty = Schedule::parse(&[1, 0]).unwrap();
-        assert!(empty.phases.is_empty());
+        assert_eq!(empty.phases.len(), 0);
         let c = Constraints {
             id: 1,
             start_after: 30,
@@ -943,7 +943,7 @@ mod tests {
         else {
             panic!("no schedule");
         };
-        assert!(s.phases.is_empty());
+        assert_eq!(s.phases.len(), 0);
         assert_eq!(
             handle(&mut c, CMD_SCHEDULE_CONSTRAINTS_REQUEST, &[1]),
             Outcome::Constraints(Constraints {

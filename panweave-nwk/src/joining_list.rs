@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(j.entries(), &[b, a]);
         assert!(!j.apply(JoiningPolicy::IeeeListJoin, 5, 4, &[b]), "gap");
         assert!(j.apply(JoiningPolicy::IeeeListJoin, 0, 0, &[]));
-        assert!(j.entries().is_empty());
+        assert_eq!(j.entries().len(), 0);
         assert!(!j.remove(a));
         assert_eq!(JoiningPolicy::from_raw(2), Some(JoiningPolicy::NoJoin));
         assert_eq!(JoiningPolicy::from_raw(3), None);

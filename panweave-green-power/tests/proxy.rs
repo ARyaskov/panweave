@@ -119,7 +119,7 @@ fn unsecured_gpdf_is_tunnelled_to_every_paired_sink() {
     let mut buf = [0u8; 40];
     let n = unsecured_gpdf(&mut buf, 1, 0x8765_4321, command::TOGGLE, &[]);
     feed(&mut p, &buf[..n]);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     // Pair: derived groupcast and lightweight unicast.
     p.on_pairing(
         &pairing(
@@ -177,7 +177,7 @@ fn unsecured_gpdf_is_tunnelled_to_every_paired_sink() {
     // A duplicate within gpDuplicateTimeout is dropped; after it, it is a
     // new frame.
     feed(&mut p, &buf[..n]);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     p.poll(T0 + DUPLICATE_TIMEOUT);
     feed(&mut p, &buf[..n]);
     assert_eq!(drain(&mut p).len(), 2);
@@ -190,7 +190,7 @@ fn unsecured_gpdf_is_tunnelled_to_every_paired_sink() {
     rm.add_sink = false;
     rm.device_id = None;
     p.on_pairing(&rm, false);
-    assert!(p.table.find(&GPD).unwrap().lightweight_sinks.is_empty());
+    assert_eq!(p.table.find(&GPD).unwrap().lightweight_sinks.len(), 0);
     let mut rm = pairing(
         CommunicationMode::DerivedGroupcast,
         SinkAddress::Group(0x4321),
@@ -257,18 +257,18 @@ fn secured_gpdf_needs_matching_security_and_freshness() {
     // Replayed later: not fresh any more (counter 2 ≤ stored 2).
     p.poll(T0 + Duration::from_secs(5));
     feed(&mut p, &LEVEL2);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     // A tampered MIC fails; nothing is forwarded in operational mode.
     let mut bad = LEVEL2;
     bad[13] = 0x03; // counter 3, MIC no longer valid
     feed(&mut p, &bad);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     assert_eq!(p.table.find(&GPD).unwrap().frame_counter, 2);
     // An unprotected frame from a GPD paired with security is dropped.
     let mut buf = [0u8; 40];
     let n = unsecured_gpdf(&mut buf, 9, 0x8765_4321, command::TOGGLE, &[]);
     feed(&mut p, &buf[..n]);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn commissioning_mode_forwards_commissioning_frames() {
         &[0x02, 0x80, 0x00],
     );
     feed(&mut p, &buf[..n]);
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     // Enter commissioning mode (broadcast notifications, 60 s window,
     // exit on first pairing).
     p.on_commissioning_mode(
@@ -462,7 +462,7 @@ fn proxy_table_request_by_index_and_by_gpd() {
         SINK_SHORT,
         false,
     );
-    assert!(drain(&mut p).is_empty());
+    assert_eq!(drain(&mut p).len(), 0);
     p.on_proxy_table_request(&ProxyTableRequest::ByIndex(5), SINK_SHORT, true);
     let out = drain(&mut p);
     let r = ProxyTableResponse::decode_exact(&out[0].payload).unwrap();

@@ -644,8 +644,7 @@ impl<C: BlockCipher, R: Rng, D: NwkDims> Nwk<C, R, D> {
         let mut w = panweave_codec::Writer::new(&mut appendix);
         let _ = w.bytes(&self.network_wide_beacon_appendix);
         let has_router_info = TlvSet::validate(&self.network_wide_beacon_appendix, |_| false)
-            .ok()
-            .is_some_and(|set| set.find(tlv::tag::ROUTER_INFORMATION).is_some());
+            .is_ok_and(|set| set.find(tlv::tag::ROUTER_INFORMATION).is_some());
         let appendix_len = if self.config.r23_beacon_appendix && !has_router_info {
             let mut bits = 0u16;
             if self.nib.hub_connectivity {

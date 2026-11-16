@@ -354,7 +354,7 @@ fn zdd_keeps_past_network_keys_for_limited_authorization() {
             .iter()
             .any(|e| matches!(e, Event::Stack(StackEvent::NetworkFormed { .. })))
     }));
-    assert!(w.nodes[c].0.direct.past_network_keys.is_empty());
+    assert_eq!(w.nodes[c].0.direct.past_network_keys.len(), 0);
     // A first rotation gives the network a non-zero sequence number
     // (the session TLV treats 0 as "none").
     let old_key = Key128::from_bytes([0xa5; 16]);
@@ -562,7 +562,7 @@ fn zvd_joins_and_talks_through_the_tunnel() {
         } else {
             assert_eq!(r, Err(TunnelError::Dropped));
             w.settle();
-            assert!(w.nodes[c].2.is_empty());
+            assert_eq!(w.nodes[c].2.len(), 0);
             assert!(w.nodes[c].0.stack.nwk.neighbors.by_extended(zvd).is_none());
         }
     }
@@ -1462,7 +1462,7 @@ fn a_zvd_acting_as_trust_center_attaches_behind_the_trusted_link() {
     // Unsecured: dropped. From another device: refused. Not as 0x0000:
     // refused.
     write(&mut w, &request(1, ShortAddress::COORDINATOR, zvd), false);
-    assert!(responses(&w).is_empty());
+    assert_eq!(responses(&w).len(), 0);
 
     let other = ExtendedAddress(0x00AA_0000_0000_0002);
     write(&mut w, &request(2, ShortAddress::COORDINATOR, other), true);
@@ -1524,7 +1524,7 @@ fn a_zvd_acting_as_trust_center_attaches_behind_the_trusted_link() {
         })
         .collect();
     // (APS retries the unanswered request.)
-    assert!(!out.is_empty());
+    assert_ne!(out.len(), 0);
     assert!(out.iter().all(|o| *o == (ShortAddress::COORDINATOR, true)));
     let n = w.nodes[r].0.stack.nwk.neighbors.by_extended(zvd).unwrap();
     assert_eq!(n.outgoing_cost, 1);

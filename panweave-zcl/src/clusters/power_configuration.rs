@@ -547,7 +547,7 @@ mod tests {
                 ),
             },
         );
-        assert!(set_battery(&mut c, Some(29), Some(180)).is_empty());
+        assert_eq!(set_battery(&mut c, Some(29), Some(180)).len(), 0);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(0));
         // Below threshold 2 and 1: state bits 1 and 2; only alarm 1 is
         // masked in.
@@ -555,13 +555,13 @@ mod tests {
         assert_eq!(a.as_slice(), &[(0x11, 1 << 1)]);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(0b110));
         // Unchanged: no new alarms.
-        assert!(set_battery(&mut c, Some(21), Some(100)).is_empty());
+        assert_eq!(set_battery(&mut c, Some(21), Some(100)).len(), 0);
         // Below the minimum and the percentage threshold 3.
         let a = set_battery(&mut c, Some(19), Some(30));
         assert_eq!(a.as_slice(), &[(0x10, 1), (0x13, 1 << 3)]);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(0b1111));
         // Recovery clears the bits.
-        assert!(set_battery(&mut c, Some(29), None).is_empty());
+        assert_eq!(set_battery(&mut c, Some(29), None).len(), 0);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(0));
         assert_eq!(c.u8(BATTERY_PERCENTAGE_REMAINING.id), Some(UNKNOWN));
         // Mains lost with the mask set.
@@ -688,9 +688,9 @@ mod tests {
         assert_eq!(c.u8(battery_attr(2, BATTERY_VOLTAGE).id), Some(25));
         assert_eq!(c.u8(BATTERY_VOLTAGE.id), Some(UNKNOWN));
         c.set_u8(battery_attr(3, BATTERY_PERCENTAGE_THRESHOLD_2).id, 50);
-        assert!(set_battery_source(&mut c, 3, None, Some(20)).is_empty());
+        assert_eq!(set_battery_source(&mut c, 3, None, Some(20)).len(), 0);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some((1 << 10) | (1 << 22)));
-        assert!(set_battery_source(&mut c, 2, Some(31), None).is_empty());
+        assert_eq!(set_battery_source(&mut c, 2, Some(31), None).len(), 0);
         assert_eq!(c.u64(BATTERY_ALARM_STATE.id), Some(1 << 22));
     }
 }

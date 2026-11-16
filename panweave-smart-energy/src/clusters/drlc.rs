@@ -1155,7 +1155,7 @@ mod tests {
         store.expire(now + 1801);
         assert_eq!(store.events().len(), 2);
         store.cancel_all();
-        assert!(store.events().is_empty());
+        assert_eq!(store.events().len(), 0);
         assert_eq!(report_delay_ms(|n| n - 1), REPORT_DELAY_MAX_MS);
         assert_eq!(report_delay_ms(|_| 0), 0);
     }
@@ -1297,7 +1297,7 @@ mod tests {
         let e = s.get(3).unwrap();
         assert_eq!((e.start, e.end), (1180, 1780));
         assert_eq!(s.next_deadline(), Some(1180));
-        assert!(s.poll(1179).is_empty());
+        assert_eq!(s.poll(1179).len(), 0);
         let r = s.poll(1180);
         assert_eq!(r[0].status, EventStatus::Started);
         assert!(s.active().is_some());
@@ -1322,7 +1322,7 @@ mod tests {
         assert!(s.active().is_none());
         let r = s.poll(2100);
         assert_eq!(r[0].status, EventStatus::CompletedNoParticipation);
-        assert!(s.events().is_empty());
+        assert_eq!(s.events().len(), 0);
         // Cancel: unknown, wrong class, then immediate.
         let _ = s.on_event(&event(5, 3000, 10, device_class::HVAC, 0), 2200, |_| 0);
         let c = CancelLoadControlEvent {
@@ -1353,7 +1353,7 @@ mod tests {
             s.on_cancel(&c, 2300).unwrap().status,
             EventStatus::Cancelled
         );
-        assert!(s.events().is_empty());
+        assert_eq!(s.events().len(), 0);
         // Cancel all with randomization on an active randomized event
         // ends it early at the randomized moment.
         let _ = s.on_event(
@@ -1368,7 +1368,7 @@ mod tests {
             |_| 2,
         );
         let _ = s.poll(4120);
-        assert!(s.on_cancel_all(true, 4200).is_empty());
+        assert_eq!(s.on_cancel_all(true, 4200).len(), 0);
         assert_eq!(s.get(7).unwrap().end, 4320);
         assert_eq!(s.poll(4320)[0].status, EventStatus::Completed);
     }

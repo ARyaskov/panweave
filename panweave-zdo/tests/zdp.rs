@@ -631,7 +631,7 @@ fn binding_and_restricted_mode() {
             .status,
         ZdpStatus::Success
     );
-    assert!(p.cb.bindings.is_empty());
+    assert_eq!(p.cb.bindings.len(), 0);
     p.b.restricted_mode = false;
     // Binding on behalf of another device is NOT_SUPPORTED on a router.
     let other = BindReq {
@@ -1024,5 +1024,5 @@ fn security_services() {
     p.run_with(SecurityStatus::LinkKey);
     let rsp = StartKeyNegotiationRsp::decode_exact(&p.last_response().3).unwrap();
     assert_eq!(rsp.status, ZdpStatus::Success);
-    assert!(rsp.tlvs.is_empty());
+    assert_eq!(rsp.tlvs.len(), 0);
 }

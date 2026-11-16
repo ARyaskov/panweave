@@ -889,7 +889,7 @@ mod tests {
         assert!(!r.is_authorized(D));
         let mut out = Vec::new();
         r.backup(&mut out);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         // Restore from backup on a replacement Trust Center.
         let mut fresh: Registry<4> = Registry::new();
         fresh

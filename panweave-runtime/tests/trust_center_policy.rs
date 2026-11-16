@@ -356,7 +356,7 @@ fn duplicate_and_replayed_messages_change_nothing() {
         .filter(|t| t.node == d)
         .map(|t| t.frame.clone())
         .collect();
-    assert!(!sent.is_empty());
+    assert_ne!(sent.len(), 0);
     let replays_before = sim.stack(c).nwk.stats.replays;
     let _ = stages(&mut sim, c, DEV);
     for f in &sent {

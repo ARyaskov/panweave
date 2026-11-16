@@ -132,7 +132,7 @@ fn joins_and_rejoins_through_enhanced_beacons() {
     assert_eq!(e.tx_power_dbm, -17);
     assert!(e.nwk_negotiated);
     assert_eq!(e.short, joiner_short);
-    assert!(sim.stack(p).mac.power_table().is_empty());
+    assert_eq!(sim.stack(p).mac.power_table().len(), 0);
 
     // Rejoin: the Rejoin IE names the extended PAN ID; a coordinator of
     // another network with enhanced beaconing does not answer it.

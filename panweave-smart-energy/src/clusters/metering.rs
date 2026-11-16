@@ -957,7 +957,9 @@ impl<'a> GetProfileResponse<'a> {
     /// The intervals, most recent first.
     pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
         self.intervals
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], 0]))
     }
 }
@@ -1154,7 +1156,7 @@ mod tests {
             number_of_periods: 2,
         });
         assert_eq!(status, ProfileStatus::InvalidEndTime);
-        assert!(iv.is_empty());
+        assert_eq!(iv.len(), 0);
         // Other channels.
         assert_eq!(
             log.get(&GetProfile {

@@ -786,9 +786,9 @@ mod tests {
         assert!(ep.cluster(on_off::ID, Role::Client).is_some());
         assert!(ep.cluster(identify::ID, Role::Client).is_some());
         let light = DeviceType::lookup(DeviceId(0x0100)).unwrap();
-        assert!(unsupported_clusters(light).is_empty());
+        assert_eq!(unsupported_clusters(light).len(), 0);
         let color = DeviceType::lookup(DeviceId(0x0102)).unwrap();
-        assert!(unsupported_clusters(color).is_empty());
+        assert_eq!(unsupported_clusters(color).len(), 0);
         let (d, ep) = color_dimmable_light(Endpoint(4)).unwrap();
         assert!(d.has_input(color_control::ID) && d.has_input(level::ID));
         assert!(ep.cluster(color_control::ID, Role::Server).is_some());
@@ -813,7 +813,10 @@ mod tests {
             assert_eq!(d.device, DeviceId(id));
             assert!(d.has_input(cluster));
             assert!(ep.cluster(cluster, Role::Server).is_some());
-            assert!(unsupported_clusters(DeviceType::lookup(DeviceId(id)).unwrap()).is_empty());
+            assert_eq!(
+                unsupported_clusters(DeviceType::lookup(DeviceId(id)).unwrap()).len(),
+                0
+            );
         }
         let (d, ep) = dimmable_light(Endpoint(3)).unwrap();
         assert!(d.has_input(level::ID));
@@ -836,14 +839,14 @@ mod tests {
         assert!(d.has_input(power_profile::ID) && d.has_input(appliance_control::ID));
         assert!(ep.cluster(power_profile::ID, Role::Server).is_some());
         assert!(ep.cluster(events_alerts::ID, Role::Server).is_some());
-        assert!(validate(&d, &ep).is_empty());
+        assert_eq!(validate(&d, &ep).len(), 0);
         #[cfg(feature = "smart-energy")]
         {
             let (d, ep) = home_gateway(Endpoint(2)).unwrap();
             assert!(d.has_output(power_profile::ID));
             assert!(d.has_output(panweave_smart_energy::cluster::METERING));
             assert!(ep.cluster(appliance_statistics::ID, Role::Client).is_some());
-            assert!(validate(&d, &ep).is_empty());
+            assert_eq!(validate(&d, &ep).len(), 0);
             for (build, id) in [
                 (smart_plug as fn(Endpoint) -> Option<Built>, 0x0051),
                 (meter_interface, 0x0053),
@@ -855,7 +858,7 @@ mod tests {
                     ep.cluster(panweave_smart_energy::cluster::METERING, Role::Server)
                         .is_some()
                 );
-                assert!(validate(&d, &ep).is_empty());
+                assert_eq!(validate(&d, &ep).len(), 0);
             }
         }
         #[cfg(not(feature = "smart-energy"))]
@@ -946,7 +949,7 @@ mod tests {
             .retain(|c| *c != groups::ID && *c != scenes::ID);
         ep.clusters
             .retain(|c| c.def.id != groups::ID && c.def.id != scenes::ID);
-        assert!(validate_for(&d, &ep, true).is_empty());
+        assert_eq!(validate_for(&d, &ep, true).len(), 0);
         assert_eq!(validate_for(&d, &ep, false).len(), 2);
         // An unknown device type: clusters are still checked.
         let (mut d, ep) = on_off_light(Endpoint(3)).unwrap();

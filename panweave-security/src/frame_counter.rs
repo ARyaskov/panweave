@@ -395,6 +395,6 @@ mod tests {
         t.remove(b);
         assert_eq!(t.len(), 1);
         t.reset_all();
-        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
     }
 }

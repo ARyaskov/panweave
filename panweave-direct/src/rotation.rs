@@ -110,7 +110,12 @@ impl<const N: usize> PastNetworkKeys<N> {
     pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
         let n = self.keys.len() * Self::ENTRY_LEN;
         let out = out.get_mut(..n)?;
-        for (chunk, e) in out.chunks_exact_mut(Self::ENTRY_LEN).zip(self.keys.iter()) {
+        for (chunk, e) in out
+            .as_chunks_mut::<{ PastNetworkKeys::<0>::ENTRY_LEN }>()
+            .0
+            .iter_mut()
+            .zip(self.keys.iter())
+        {
             chunk[0] = e.sequence.0;
             chunk[1..].copy_from_slice(e.key.as_bytes());
         }
@@ -121,7 +126,7 @@ impl<const N: usize> PastNetworkKeys<N> {
     /// dropped, a trailing partial entry is ignored).
     pub fn decode(bytes: &[u8]) -> Self {
         let mut s = Self::new();
-        for chunk in bytes.chunks_exact(Self::ENTRY_LEN) {
+        for chunk in bytes.as_chunks::<{ PastNetworkKeys::<0>::ENTRY_LEN }>().0 {
             let mut k = [0u8; 16];
             k.copy_from_slice(&chunk[1..]);
             s.record(KeySequenceNumber(chunk[0]), Key128::from_bytes(k));
@@ -256,7 +261,7 @@ mod tests {
     #[test]
     fn past_keys_are_kept_and_derive_basic_keys() {
         let mut past: PastNetworkKeys<2> = PastNetworkKeys::new();
-        assert!(past.is_empty());
+        assert_eq!(past.len(), 0);
         let k1 = Key128::from_bytes([1; 16]);
         let k2 = Key128::from_bytes([2; 16]);
         let k3 = Key128::from_bytes([3; 16]);

@@ -354,7 +354,7 @@ mod tests {
     fn a_new_network_with_no_devices_idles_for_an_hour() {
         let mut w = World::new(false);
         // No transmission at all (not even Link Status) for an hour.
-        assert!(w.run(HOUR, |_| {}).is_empty());
+        assert_eq!(w.run(HOUR, |_| {}).len(), 0);
         assert_eq!(w.sup.health(w.o.now_ms), Health::HealthyIdle);
         assert_eq!(w.sup.radio_idle_ms(w.o.now_ms), HOUR);
     }
@@ -372,7 +372,7 @@ mod tests {
                 o.tx_completed += 1;
             }
         });
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         assert!(matches!(
             w.sup.health(w.o.now_ms),
             Health::HealthyActive | Health::HealthyIdle
@@ -389,7 +389,7 @@ mod tests {
             o.tx_unacknowledged += 1;
             o.queue_full += 1;
         });
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         assert_eq!(w.sup.health(w.o.now_ms), Health::Degraded);
     }
 
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(out, vec![Supervision::Recover(StallCause::RadioDriver)]);
         // After the recovery the radio completes transmissions again.
         let out = w.run(CONFIRM_MS * 2, |o| o.tx_completed += 1);
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         assert_eq!(w.sup.health(w.o.now_ms), Health::HealthyActive);
     }
 
@@ -435,8 +435,8 @@ mod tests {
     fn stack_work_that_stays_overdue_is_a_stall() {
         let mut w = World::new(false);
         // Overdue for less than the limit: a long flash write, fine.
-        assert!(w.run(5_000, |o| o.stack_overdue = true).is_empty());
-        assert!(w.run(1_000, |o| o.stack_overdue = false).is_empty());
+        assert_eq!(w.run(5_000, |o| o.stack_overdue = true).len(), 0);
+        assert_eq!(w.run(1_000, |o| o.stack_overdue = false).len(), 0);
         let out = w.run(STACK_OVERDUE_MS + CONFIRM_MS + 1_000, |o| {
             o.stack_overdue = true;
         });
