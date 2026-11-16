@@ -269,11 +269,19 @@ impl Simulator {
 
     /// Adds a node built from `config` with a deterministic seed and the
     /// default On/Off application.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the medium has no free radio slots.
     pub fn add_node(&mut self, name: &str, config: StackConfig, seed: u64) -> usize {
         self.add_node_with_app(name, config, seed, Box::new(OnOffApp::default()))
     }
 
     /// Adds a node with a custom application.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the medium has no free radio slots.
     pub fn add_node_with_app(
         &mut self,
         name: &str,
@@ -291,6 +299,11 @@ impl Simulator {
     }
 
     /// Adds a prepared stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics before adding or polling the stack when the medium has no
+    /// free radio slots. Existing nodes keep their distinct radios.
     pub fn add_stack(&mut self, name: &str, mut stack: SimStack, app: Box<dyn App>) -> usize {
         let radio = self.medium.add_radio();
         stack.poll(self.clock.now());
@@ -306,6 +319,11 @@ impl Simulator {
 
     /// Adds a [`Device`]; returns its index among the devices (not the
     /// nodes).
+    ///
+    /// # Panics
+    ///
+    /// Panics before adding or polling the device when the medium has no
+    /// free radio slots.
     pub fn add_device(&mut self, name: &str, mut device: Box<dyn Device>) -> usize {
         let radio = self.medium.add_radio();
         device.poll(self.clock.now());
@@ -440,6 +458,11 @@ impl Simulator {
     }
 
     /// Blocks the link between two nodes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either node does not exist or the medium cannot hold
+    /// another blocked link. Neither direction changes on capacity failure.
     pub fn block(&mut self, a: usize, b: usize) {
         let (ra, rb) = (self.nodes[a].radio, self.nodes[b].radio);
         self.medium.block(ra, rb);
@@ -694,5 +717,27 @@ impl Simulator {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use panweave_testkit::MAX_RADIOS;
+    use panweave_types::{ExtendedAddress, LogicalDeviceType};
+
+    #[test]
+    fn an_exhausted_medium_cannot_add_an_aliased_stack() {
+        let mut simulator = Simulator::new();
+        for _ in 0..MAX_RADIOS {
+            simulator.medium.add_radio();
+        }
+        let config = StackConfig::new(LogicalDeviceType::EndDevice, ExtendedAddress(1));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            simulator.add_node("overflow", config, 1);
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(simulator.node_count(), 0);
+        assert!(simulator.medium.radio(MAX_RADIOS).is_none());
     }
 }

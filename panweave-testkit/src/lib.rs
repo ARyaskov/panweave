@@ -76,6 +76,30 @@ pub const MAX_PHY_FRAME: usize = 125;
 /// Maximum radios on a medium.
 pub const MAX_RADIOS: usize = 16;
 
+/// Configuration errors that would make the simulated topology invalid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediumError {
+    /// Every radio slot is occupied.
+    RadioCapacity,
+    /// There is no room for both directions of another blocked link.
+    LinkCapacity,
+    /// A referenced radio does not exist.
+    InvalidRadio,
+}
+
+impl core::fmt::Display for MediumError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::RadioCapacity => "virtual medium radio capacity exceeded",
+            Self::LinkCapacity => "virtual medium blocked-link capacity exceeded",
+            Self::InvalidRadio => "virtual medium radio does not exist",
+        })
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for MediumError {}
+
 /// A frame in flight on the medium.
 #[derive(Clone, Debug)]
 pub struct AirFrame {
@@ -131,13 +155,33 @@ impl VirtualMedium {
     }
 
     /// Adds a radio; returns its index.
+    ///
+    /// # Panics
+    ///
+    /// Panics when every radio slot is occupied. Use
+    /// [`Self::try_add_radio`] for a recoverable configuration error.
+    #[track_caller]
     pub fn add_radio(&mut self) -> usize {
-        let _ = self.radios.push(RadioState {
-            channel: Channel::DEFAULT_2_4GHZ,
-            listening: true,
-            lqi: 200,
-        });
-        self.radios.len() - 1
+        let index = self.radios.len();
+        assert!(
+            self.try_add_radio().is_ok(),
+            "virtual medium radio capacity exceeded"
+        );
+        index
+    }
+
+    /// Adds a radio, or returns [`MediumError::RadioCapacity`] without
+    /// changing the medium when every slot is occupied.
+    pub fn try_add_radio(&mut self) -> Result<usize, MediumError> {
+        let index = self.radios.len();
+        self.radios
+            .push(RadioState {
+                channel: Channel::DEFAULT_2_4GHZ,
+                listening: true,
+                lqi: 200,
+            })
+            .map_err(|_| MediumError::RadioCapacity)?;
+        Ok(index)
     }
 
     /// Radio state.
@@ -158,9 +202,37 @@ impl VirtualMedium {
     }
 
     /// Blocks frames from `a` to `b` and from `b` to `a`.
+    /// Repeating the same block does not consume additional capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics for an unknown radio or insufficient blocked-link capacity.
+    /// Use [`Self::try_block`] to handle these errors explicitly.
+    #[track_caller]
     pub fn block(&mut self, a: usize, b: usize) {
-        let _ = self.blocked.push((a, b));
-        let _ = self.blocked.push((b, a));
+        let result = self.try_block(a, b);
+        assert!(result.is_ok(), "cannot block virtual link: {result:?}");
+    }
+
+    /// Atomically blocks both directions of a link. Unknown radios or
+    /// insufficient capacity leave every existing link unchanged.
+    /// Blocking an already blocked link, or a radio from itself, is a
+    /// no-op.
+    pub fn try_block(&mut self, a: usize, b: usize) -> Result<(), MediumError> {
+        if self.radios.get(a).is_none() || self.radios.get(b).is_none() {
+            return Err(MediumError::InvalidRadio);
+        }
+        if a == b {
+            return Ok(());
+        }
+        let mut blocked = self.blocked.clone();
+        for link in [(a, b), (b, a)] {
+            if !blocked.contains(&link) {
+                blocked.push(link).map_err(|_| MediumError::LinkCapacity)?;
+            }
+        }
+        self.blocked = blocked;
+        Ok(())
     }
 
     /// Restores the link between `a` and `b`.
@@ -177,12 +249,32 @@ impl VirtualMedium {
     }
 
     /// Drops the next `n` frames transmitted by radio `i`.
+    ///
+    /// # Panics
+    ///
+    /// Panics for an unknown radio. Use [`Self::try_drop_next_from`] for
+    /// a recoverable configuration error.
+    #[track_caller]
     pub fn drop_next_from(&mut self, i: usize, n: u32) {
+        let result = self.try_drop_next_from(i, n);
+        assert!(result.is_ok(), "cannot configure virtual loss: {result:?}");
+    }
+
+    /// Configures loss injection for an existing radio. Unknown radios
+    /// do not occupy the bounded loss table.
+    pub fn try_drop_next_from(&mut self, i: usize, n: u32) -> Result<(), MediumError> {
+        if self.radios.get(i).is_none() {
+            return Err(MediumError::InvalidRadio);
+        }
         if let Some(e) = self.drop_next.iter_mut().find(|(r, _)| *r == i) {
             e.1 = n;
         } else {
-            let _ = self.drop_next.push((i, n));
+            // One entry per valid radio fits exactly in MAX_RADIOS slots.
+            self.drop_next
+                .push((i, n))
+                .map_err(|_| MediumError::RadioCapacity)?;
         }
+        Ok(())
     }
 
     /// Transmits `bytes` from radio `from`; returns the indices of the
@@ -254,6 +346,77 @@ mod tests {
         let mut clk = VirtualClock::new();
         clk.advance(Duration::from_millis(5));
         assert_eq!(clk.now(), Instant::from_millis(1005));
+    }
+
+    #[test]
+    fn seventeenth_radio_is_rejected_without_aliasing() {
+        let mut medium = VirtualMedium::new();
+        for index in 0..MAX_RADIOS {
+            assert_eq!(medium.try_add_radio(), Ok(index));
+        }
+        assert_eq!(medium.try_add_radio(), Err(MediumError::RadioCapacity));
+        medium.set_channel(MAX_RADIOS - 1, Channel::new_2_4ghz(20).unwrap());
+        let (frame, targets) = medium.transmit(MAX_RADIOS - 1, &[1]);
+        assert_eq!(frame.unwrap().channel.raw(), 20);
+        assert!(targets.is_empty());
+        assert!(medium.radio(MAX_RADIOS).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "virtual medium radio capacity exceeded")]
+    fn adding_a_radio_past_capacity_fails_fast() {
+        let mut medium = VirtualMedium::new();
+        for _ in 0..=MAX_RADIOS {
+            medium.add_radio();
+        }
+    }
+
+    #[test]
+    fn blocking_is_idempotent_and_capacity_failure_is_atomic() {
+        let mut medium = VirtualMedium::new();
+        for _ in 0..MAX_RADIOS {
+            medium.add_radio();
+        }
+        for peer in 1..MAX_RADIOS {
+            medium.try_block(0, peer).unwrap();
+        }
+        medium.try_block(1, 2).unwrap();
+        for _ in 0..MAX_RADIOS {
+            assert_eq!(medium.try_block(1, 2), Ok(()));
+            assert_eq!(medium.try_block(2, 1), Ok(()));
+        }
+        assert_eq!(medium.try_block(2, 3), Err(MediumError::LinkCapacity));
+        assert!(medium.reachable(2, 3));
+        assert!(medium.reachable(3, 2));
+        assert!(!medium.reachable(1, 2));
+        assert!(!medium.reachable(2, 1));
+        for peer in 1..MAX_RADIOS {
+            assert!(!medium.reachable(0, peer));
+            assert!(!medium.reachable(peer, 0));
+        }
+        medium.unblock(1, 2);
+        assert_eq!(medium.try_block(2, 3), Ok(()));
+        assert!(!medium.reachable(2, 3));
+        assert!(!medium.reachable(3, 2));
+    }
+
+    #[test]
+    fn invalid_loss_and_link_configuration_do_not_consume_capacity() {
+        let mut medium = VirtualMedium::new();
+        assert_eq!(medium.try_block(0, 1), Err(MediumError::InvalidRadio));
+        for index in 0..MAX_RADIOS {
+            assert_eq!(
+                medium.try_drop_next_from(MAX_RADIOS + index, 1),
+                Err(MediumError::InvalidRadio)
+            );
+            medium.add_radio();
+            assert_eq!(medium.try_drop_next_from(index, 1), Ok(()));
+        }
+        for index in 0..MAX_RADIOS {
+            let (frame, _) = medium.transmit(index, &[1]);
+            assert!(frame.is_none());
+        }
+        assert_eq!(medium.frames_dropped, u32::try_from(MAX_RADIOS).unwrap());
     }
 }
 
