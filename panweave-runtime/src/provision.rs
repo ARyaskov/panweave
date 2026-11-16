@@ -110,7 +110,7 @@ impl<
     /// Centralized networks need the coordinator role, distributed ones
     /// a router configured for distributed security.
     pub fn form_network_params(&mut self, p: &FormationParams) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle {
+        if self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         let key = match &p.key {
@@ -147,7 +147,7 @@ impl<
     /// rejoin to find a parent. Returns `InvalidRequest` when the stack
     /// is not idle.
     pub fn adopt_network(&mut self, p: &AdoptParams) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle {
+        if self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         let short = match (self.config.role, p.network_address) {

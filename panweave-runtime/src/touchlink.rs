@@ -169,6 +169,9 @@ impl<
     /// Starts the initiator touchlink procedure (§12.1): `extended` also
     /// scans the secondary channels, `reset` resets the chosen target.
     pub fn touchlink_start(&mut self, extended: bool, reset: bool) -> Result<(), NwkStatus> {
+        if self.persistence_reset_pending() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let mut m = self.take_machines().ok_or(NwkStatus::InvalidRequest)?;
         if m.initiator.is_busy() || !matches!(self.phase, Phase::Idle | Phase::Operating) {
             self.put_machines(m);
@@ -279,6 +282,9 @@ impl<
 
     /// An inter-PAN frame from the MAC.
     pub(crate) fn on_inter_pan(&mut self, frame: &MacFrame<'_>, rssi: i8, channel: Channel) {
+        if self.persistence_reset_pending() {
+            return;
+        }
         let Some(src) = frame.header.src.extended() else {
             return;
         };

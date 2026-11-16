@@ -20,7 +20,7 @@ a format octet so that a later layout can migrate or reject old data.
 | `NwkFrameCounter` | outgoing NWK frame-counter reservation bound | before the reservation is used | integrity-critical |
 | `LinkKey` (per partner) | key, kind (global / unique), attributes, incoming counter, outgoing reservation bound, frame-counter-sync flag | `ApsAction::Persist(LinkKeys)` | yes |
 | `ApsFrameCounter` (per partner) | outgoing APS frame-counter reservation bound | before the reservation is used | integrity-critical |
-| `Aib` | Trust Center address and the index of `LinkKey` partners (up to `LINK_KEYS` = 32, 8 with `small-tables`) | with `LinkKey` | no |
+| `Aib` | Trust Center address and the index of `LinkKey` partners at id 0 (up to `LINK_KEYS` = 32, 8 with `small-tables`); id 1 temporarily journals new partner identifiers | with `LinkKey` | no |
 | `Bindings` | binding table (§2.2.8.1) | `ApsAction::Persist(Bindings)`, ZDO Bind / Unbind / Clear_All_Bindings | no |
 | `Groups` | group table | `ApsAction::Persist(Groups)` | no |
 | `GreenPower` | one Proxy Table entry per `id` (index 0–19) in the OTA format of GP Basic §A.3.4.2.2.1; one Sink Table entry per `id` 0x100 + index in the format of §A.3.3.2.2.1 | `ProxyEvent::TableChanged` / `SinkEvent::TableChanged` (pairings, forwarded and accepted frames update the counter) | counter: monotonic per GPD, never rolled back |
@@ -67,6 +67,38 @@ store header fails instead of automatically formatting it.
 
 There is deliberately no enumeration primitive (it is expensive on
 journaled flash). Per-partner records are indexed from the `Aib` record.
+
+Link-key persistence updates only changed partner records, removes only
+departed partners and commits the `Aib` membership index last. A failed
+save does not erase unrelated partners. An interrupted removal may leave
+the old index referring to an absent key, which restores as unauthorized;
+an interrupted addition cannot expose its key until its index commits.
+The pending-identifier journal is durable before any unindexed key is
+created. The next save reclaims unfinished additions, so repeated power
+losses cannot accumulate unindexed records. APS counter reservations also
+require the partner to be indexed before their separate record is written.
+These are independent atomic partner updates, not a transaction covering
+every partner in the table.
+
+Stack-state save failures retain dirty state, emit
+`StackEvent::PersistenceFailed` once per changed error and schedule a
+100-millisecond retry through `Stack::next_deadline`. They are not requeued
+into the immediate pump loop. `Stack::persistence_pending()` and
+`Stack::persistence_error(kind)` expose recovery state. Counter reservations
+retain the protocol layers' fail-closed retry rules and also report storage
+errors. An incomplete factory reset retries exclusively and blocks forming,
+adopting or joining another network until its erasure completes.
+
+Green Power retains each exact GPD identity in its existing storage slot,
+independent of the table's in-memory order. Only changed entries are
+written and removed entries are erased. After accepting a command, the
+runtime saves the replay counter before executing the command or publishing
+pairing success. A failed save emits `StackEvent::PersistenceFailed`, keeps
+the bounded effects batch pending and retries after 100 milliseconds.
+Further GP input is refused until persistence recovers. Commands execute
+at most once across resets; power loss after durable acceptance but before
+execution can lose that command. Malformed GP records fail enabling the
+subsystem instead of silently restoring an empty table.
 
 ## Frame-counter reservation
 

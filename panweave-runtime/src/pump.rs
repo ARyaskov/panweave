@@ -756,12 +756,12 @@ impl<
                     let _ = self.persist_network_keys();
                 }
                 NwkAction::CounterReservation(r) => {
+                    let stored = self.storage.store(
+                        Key::single(Kind::NwkFrameCounter),
+                        &r.reserved_until.to_le_bytes(),
+                    );
                     let ok = self
-                        .storage
-                        .store(
-                            Key::single(Kind::NwkFrameCounter),
-                            &r.reserved_until.to_le_bytes(),
-                        )
+                        .note_persistence_result(Kind::NwkFrameCounter, stored)
                         .is_ok();
                     if ok {
                         self.nwk.commit_counter_reservation(r);
@@ -2065,12 +2065,14 @@ impl<
                     partner,
                     reservation,
                 } => {
-                    let ok = self
-                        .storage
-                        .store(
+                    let stored = self.ensure_link_key_indexed(partner).and_then(|()| {
+                        self.storage.store(
                             Key::with_id(Kind::ApsFrameCounter, partner.0),
                             &reservation.reserved_until.to_le_bytes(),
                         )
+                    });
+                    let ok = self
+                        .note_persistence_result(Kind::ApsFrameCounter, stored)
                         .is_ok();
                     if ok {
                         self.aps.commit_counter_reservation(partner, reservation);

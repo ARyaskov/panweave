@@ -42,6 +42,47 @@ const GROUPS_FORMAT: u8 = 1;
 const AIB_FORMAT: u8 = 3;
 /// Format version of the children record.
 const CHILDREN_FORMAT: u8 = 1;
+const PENDING_LINK_KEYS: Key = Key::with_id(Kind::Aib, 1);
+
+#[derive(Default)]
+pub(crate) struct PersistenceState {
+    dirty: u16,
+    startup: [u8; 32],
+    erase_pending: bool,
+    pub(crate) retry_at: Option<panweave_types::Instant>,
+    errors: [Option<StorageError>; 16],
+}
+
+fn key_partners<K: Capacity>(bytes: &[u8], aib: bool) -> Result<VecOf<u64, K>, StorageError> {
+    let mut r = Reader::new(bytes);
+    let mut partners = K::vec();
+    let parsed = (|| -> Result<(), panweave_codec::CodecError> {
+        let format = r.u8()?;
+        if (aib && !matches!(format, 1..=AIB_FORMAT)) || (!aib && format != 1) {
+            return Err(panweave_codec::CodecError::Unsupported {
+                what: "link-key index",
+            });
+        }
+        if aib {
+            let _ = r.u64_le()?;
+        }
+        for _ in 0..r.u8()? {
+            partners
+                .push(r.u64_le()?)
+                .map_err(|_| panweave_codec::CodecError::LengthMismatch {
+                    field: "link-key index",
+                })?;
+        }
+        if !aib && r.remaining() != 0 {
+            return Err(panweave_codec::CodecError::LengthMismatch {
+                field: "pending link keys",
+            });
+        }
+        Ok(())
+    })();
+    parsed.map_err(|_| StorageError::Corrupt)?;
+    Ok(partners)
+}
 
 /// Outcome of [`Stack::restore`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -123,6 +164,20 @@ fn record<S: Storage, K: Capacity>(
     Ok(Some(buf))
 }
 
+pub(crate) fn store_if_changed<S: Storage>(
+    storage: &mut S,
+    key: Key,
+    bytes: &[u8],
+    previous: &mut [u8],
+) -> Result<(), StorageError> {
+    if let Some(n) = storage.load(key, previous)?
+        && previous.get(..n) == Some(bytes)
+    {
+        return Ok(());
+    }
+    storage.store(key, bytes)
+}
+
 impl<
     C: BlockCipher,
     R: CryptoRng,
@@ -133,9 +188,143 @@ impl<
     const A: usize,
 > Stack<C, R, S, P, E, CL, A>
 {
+    /// Whether a failed stack-state save is waiting for its timed retry.
+    /// Green Power has its own durable effects gate.
+    pub fn persistence_pending(&self) -> bool {
+        self.persistence.dirty != 0 || self.persistence.erase_pending
+    }
+
+    pub(crate) fn persistence_reset_pending(&self) -> bool {
+        self.persistence.erase_pending
+    }
+
+    /// Last write error for a record kind, cleared when that write recovers.
+    pub fn persistence_error(&self, kind: Kind) -> Option<StorageError> {
+        self.persistence.errors[usize::from(kind.code())]
+    }
+
+    pub(crate) fn note_persistence_result(
+        &mut self,
+        kind: Kind,
+        result: Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        let slot = usize::from(kind.code());
+        if let Err(error) = result {
+            if self.persistence.errors[slot] != Some(error) {
+                self.push_event(crate::StackEvent::PersistenceFailed { kind, error });
+            }
+            self.persistence.errors[slot] = Some(error);
+        } else {
+            self.persistence.errors[slot] = None;
+        }
+        result
+    }
+
+    fn finish_persistence(
+        &mut self,
+        kind: Kind,
+        result: Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        let bit = 1u16 << kind.code();
+        if result.is_err() {
+            self.persistence.dirty |= bit;
+            self.persistence
+                .retry_at
+                .get_or_insert(self.now + panweave_types::Duration::from_millis(100));
+        } else {
+            self.persistence.dirty &= !bit;
+            if self.persistence.dirty == 0 && !self.persistence.erase_pending {
+                self.persistence.retry_at = None;
+            }
+        }
+        self.note_persistence_result(kind, result)
+    }
+
+    pub(crate) fn poll_persistence(&mut self) {
+        if self
+            .persistence
+            .retry_at
+            .is_none_or(|at| !self.now.has_reached(at))
+        {
+            return;
+        }
+        self.persistence.retry_at = None;
+        if self.persistence.erase_pending {
+            let _ = self.erase_persisted();
+            return;
+        }
+        let dirty = self.persistence.dirty;
+        for kind in [
+            Kind::Nib,
+            Kind::Children,
+            Kind::NetworkKeys,
+            Kind::LinkKey,
+            Kind::Bindings,
+            Kind::Groups,
+            Kind::StartupSets,
+        ] {
+            if dirty & (1u16 << kind.code()) == 0 {
+                continue;
+            }
+            // Each public save retains its own error and schedules the next
+            // bounded retry; no failed write is requeued into the pump loop.
+            let _ = match kind {
+                Kind::Nib => self.persist_nib(),
+                Kind::Children => self.persist_children(),
+                Kind::NetworkKeys => self.persist_network_keys(),
+                Kind::LinkKey => self.persist_link_keys(),
+                Kind::Bindings => self.persist_bindings(),
+                Kind::Groups => self.persist_groups(),
+                Kind::StartupSets => {
+                    for endpoint in 0..=u8::MAX {
+                        if self.persistence.startup[usize::from(endpoint / 8)]
+                            & (1 << (endpoint % 8))
+                            != 0
+                        {
+                            let _ = self.persist_startup_sets(Endpoint(endpoint));
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+        }
+    }
+
+    pub(crate) fn ensure_link_key_indexed(
+        &mut self,
+        partner: ExtendedAddress,
+    ) -> Result<(), StorageError> {
+        if self.aps.security.entry(partner).is_none() {
+            return Err(StorageError::Corrupt);
+        }
+        if let Some(bytes) = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Aib))?
+            && key_partners::<<P::Aps as panweave_aps::layer::ApsDims>::Keys>(&bytes, true)?
+                .contains(&partner.0)
+        {
+            return Ok(());
+        }
+        self.persist_link_keys()
+    }
+
     /// Stores the saved startup sets of the Commissioning server on
     /// `endpoint` (ZCL8 §13.2.2.3.2: non-volatile).
     pub fn persist_startup_sets(&mut self, endpoint: Endpoint) -> Result<(), StorageError> {
+        let result = self.persist_startup_sets_inner(endpoint);
+        let slot = usize::from(endpoint.0 / 8);
+        let bit = 1 << (endpoint.0 % 8);
+        if result.is_err() {
+            self.persistence.startup[slot] |= bit;
+        } else {
+            self.persistence.startup[slot] &= !bit;
+            if self.persistence.startup.iter().any(|bits| *bits != 0) {
+                return result;
+            }
+        }
+        self.finish_persistence(Kind::StartupSets, result)
+    }
+
+    fn persist_startup_sets_inner(&mut self, endpoint: Endpoint) -> Result<(), StorageError> {
         use panweave_zcl::clusters::commissioning;
         let Some(state) = self
             .zcl
@@ -185,6 +374,11 @@ impl<
 
     /// Persists the NIB items needed to resume the network.
     pub fn persist_nib(&mut self) -> Result<(), StorageError> {
+        let result = self.persist_nib_inner();
+        self.finish_persistence(Kind::Nib, result)
+    }
+
+    fn persist_nib_inner(&mut self) -> Result<(), StorageError> {
         let nib = &self.nwk.nib;
         let mut buf = [0u8; 64];
         let mut w = Writer::new(&mut buf);
@@ -222,6 +416,11 @@ impl<
     /// address, End Device Configuration and Device Timeout of every
     /// end-device neighbor).
     pub fn persist_children(&mut self) -> Result<(), StorageError> {
+        let result = self.persist_children_inner();
+        self.finish_persistence(Kind::Children, result)
+    }
+
+    fn persist_children_inner(&mut self) -> Result<(), StorageError> {
         let mut buf = P::Record::vec();
         let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
@@ -244,6 +443,11 @@ impl<
 
     /// Persists the network keys and the active sequence number.
     pub fn persist_network_keys(&mut self) -> Result<(), StorageError> {
+        let result = self.persist_network_keys_inner();
+        self.finish_persistence(Kind::NetworkKeys, result)
+    }
+
+    fn persist_network_keys_inner(&mut self) -> Result<(), StorageError> {
         let mut buf = [0u8; 64];
         let mut w = Writer::new(&mut buf);
         let keys = &self.nwk.security.keys;
@@ -270,7 +474,61 @@ impl<
     /// Persists every link-key entry (one record per partner) and the
     /// scalar AIB attributes.
     pub fn persist_link_keys(&mut self) -> Result<(), StorageError> {
-        self.storage.erase_kind(Kind::LinkKey)?;
+        let result = self.persist_link_keys_inner();
+        self.finish_persistence(Kind::LinkKey, result)
+    }
+
+    fn persist_link_keys_inner(&mut self) -> Result<(), StorageError> {
+        let previous = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Aib))?;
+        let partners = match &previous {
+            Some(bytes) => {
+                key_partners::<<P::Aps as panweave_aps::layer::ApsDims>::Keys>(bytes, true)?
+            }
+            None => <P::Aps as panweave_aps::layer::ApsDims>::Keys::vec(),
+        };
+        let pending = record::<S, P::Record>(&mut self.storage, PENDING_LINK_KEYS)?;
+        if let Some(bytes) = &pending {
+            for partner in
+                key_partners::<<P::Aps as panweave_aps::layer::ApsDims>::Keys>(bytes, false)?
+                    .iter()
+                    .copied()
+            {
+                if !partners.contains(&partner) {
+                    self.storage.erase(Key::with_id(Kind::LinkKey, partner))?;
+                    self.storage
+                        .erase(Key::with_id(Kind::ApsFrameCounter, partner))?;
+                }
+            }
+        }
+        let mut additions: VecOf<u64, <P::Aps as panweave_aps::layer::ApsDims>::Keys> =
+            <P::Aps as panweave_aps::layer::ApsDims>::Keys::vec();
+        for e in self.aps.security.keys().iter() {
+            if !partners.contains(&e.partner.0) {
+                additions
+                    .push(e.partner.0)
+                    .map_err(|_| StorageError::Full)?;
+            }
+        }
+        // Journal new identifiers before creating records that the committed
+        // AIB does not yet own. Recovery can reclaim every interrupted addition.
+        if !additions.is_empty() {
+            let mut buf = P::Record::vec();
+            buf.resize_default(P::Record::N)
+                .map_err(|_| StorageError::Full)?;
+            let mut w = Writer::new(&mut buf);
+            w.u8(1).map_err(|_| StorageError::Full)?;
+            w.u8(u8::try_from(additions.len()).map_err(|_| StorageError::Full)?)
+                .map_err(|_| StorageError::Full)?;
+            for partner in additions.iter() {
+                w.u64_le(*partner).map_err(|_| StorageError::Full)?;
+            }
+            let n = w.position();
+            if pending.as_ref().map(|bytes| bytes.as_slice()) != Some(&buf[..n]) {
+                self.storage.store(PENDING_LINK_KEYS, &buf[..n])?;
+            }
+        } else if pending.is_some() {
+            self.storage.erase(PENDING_LINK_KEYS)?;
+        }
         // Each record is stored as soon as it is encoded.
         let mut count = 0u8;
         for e in self.aps.security.keys().iter() {
@@ -291,9 +549,23 @@ impl<
                 return Err(StorageError::Full);
             }
             let n = w.position();
-            self.storage
-                .store(Key::with_id(Kind::LinkKey, e.partner.0), &buf[..n])?;
+            store_if_changed(
+                &mut self.storage,
+                Key::with_id(Kind::LinkKey, e.partner.0),
+                &buf[..n],
+                &mut [0u8; 48],
+            )?;
             count = count.saturating_add(1);
+        }
+        // Remove only departed partners. The old index may temporarily
+        // reference an absent entry after a cut, which restore denies;
+        // untouched partners retain their own atomic records.
+        for partner in partners.iter().copied() {
+            if self.aps.security.entry(ExtendedAddress(partner)).is_none() {
+                self.storage.erase(Key::with_id(Kind::LinkKey, partner))?;
+                self.storage
+                    .erase(Key::with_id(Kind::ApsFrameCounter, partner))?;
+            }
         }
         // The AIB record doubles as the index of link-key records: the
         // storage trait has no enumeration. Format 2 appends the startup
@@ -319,11 +591,22 @@ impl<
             let _ = w.u32_le(m.0);
         }
         let n = w.position();
-        self.storage.store(Key::single(Kind::Aib), &buf[..n])
+        if previous.as_ref().map(|bytes| bytes.as_slice()) != Some(&buf[..n]) {
+            self.storage.store(Key::single(Kind::Aib), &buf[..n])?;
+        }
+        if !additions.is_empty() {
+            self.storage.erase(PENDING_LINK_KEYS)?;
+        }
+        Ok(())
     }
 
     /// Persists the binding table.
     pub fn persist_bindings(&mut self) -> Result<(), StorageError> {
+        let result = self.persist_bindings_inner();
+        self.finish_persistence(Kind::Bindings, result)
+    }
+
+    fn persist_bindings_inner(&mut self) -> Result<(), StorageError> {
         let mut buf = P::Record::vec();
         let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
@@ -354,6 +637,11 @@ impl<
 
     /// Persists the group table.
     pub fn persist_groups(&mut self) -> Result<(), StorageError> {
+        let result = self.persist_groups_inner();
+        self.finish_persistence(Kind::Groups, result)
+    }
+
+    pub(crate) fn persist_groups_inner(&mut self) -> Result<(), StorageError> {
         let mut buf = P::Record::vec();
         let _ = buf.resize_default(<P::Record as Capacity>::N);
         let mut w = Writer::new(&mut buf);
@@ -366,7 +654,16 @@ impl<
             }
         }
         let n = w.position();
-        self.storage.store(Key::single(Kind::Groups), &buf[..n])
+        let mut previous = P::Record::vec();
+        previous
+            .resize_default(P::Record::N)
+            .map_err(|_| StorageError::Full)?;
+        store_if_changed(
+            &mut self.storage,
+            Key::single(Kind::Groups),
+            &buf[..n],
+            &mut previous,
+        )
     }
 
     /// Persists everything.
@@ -399,8 +696,14 @@ impl<
             Kind::DirectAdminKey,
             Kind::StartupSets,
         ] {
-            self.storage.erase_kind(k)?;
+            if let Err(error) = self.storage.erase_kind(k) {
+                self.persistence.erase_pending = true;
+                self.persistence.retry_at =
+                    Some(self.now + panweave_types::Duration::from_millis(100));
+                return self.note_persistence_result(k, Err(error));
+            }
         }
+        self.persistence = PersistenceState::default();
         Ok(())
     }
 

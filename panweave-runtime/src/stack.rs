@@ -253,6 +253,13 @@ pub struct ZclFrame {
 /// Application-level events.
 #[derive(Clone, Debug)]
 pub enum StackEvent {
+    /// A persistent state update failed and requires recovery or retry.
+    PersistenceFailed {
+        /// Record category that could not be committed.
+        kind: panweave_storage::Kind,
+        /// Storage failure.
+        error: panweave_storage::StorageError,
+    },
     /// The coordinator formed a network.
     NetworkFormed {
         /// PAN identifier.
@@ -1096,6 +1103,7 @@ macro_rules! stack_literal {
             join_trace_dropped: 0,
             authorization: crate::authorization::AuthorizationState::default(),
             restore_detail: crate::persist::RestoreDetail::NotRun,
+            persistence: crate::persist::PersistenceState::default(),
         }
     };
 }
@@ -1246,6 +1254,7 @@ pub struct Stack<
     pub(crate) authorization: crate::authorization::AuthorizationState<P>,
     /// Why the last [`Stack::restore`] found no usable network.
     pub(crate) restore_detail: crate::persist::RestoreDetail,
+    pub(crate) persistence: crate::persist::PersistenceState,
 }
 
 impl<
@@ -1539,7 +1548,7 @@ impl<
         channels: ChannelMask,
         scan_duration: u8,
     ) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle {
+        if self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         self.network_key_sequence = KeySequenceNumber(0);
@@ -1615,6 +1624,9 @@ impl<
         scan_duration: u8,
         attempts: u8,
     ) -> Result<(), NwkStatus> {
+        if self.persistence_reset_pending() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         if !matches!(self.phase, Phase::Idle) && mode == JoinMode::Association {
             return Err(NwkStatus::InvalidRequest);
         }
@@ -1833,6 +1845,7 @@ impl<
             self.now = now;
         }
         let now = self.now;
+        self.poll_persistence();
         self.mac.poll_timers(now);
         self.nwk.poll_timers(now);
         self.aps.poll_timers(now);
@@ -1948,6 +1961,7 @@ impl<
             self.pending_restart.map(|(at, _, _)| at),
             self.parent_annce.map(|(at, _)| at),
             self.rejoin_due,
+            self.persistence.retry_at,
             #[cfg(feature = "green-power")]
             self.green_power.as_ref().and_then(|g| g.next_deadline()),
             self.touchlink_deadline(),

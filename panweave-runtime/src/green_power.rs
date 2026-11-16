@@ -120,6 +120,21 @@ pub struct GreenPower<C: BlockCipher> {
     /// (§A.3.9.1 step 8.a): the channel and when to return to the
     /// operational channel.
     excursion: Option<(u8, Instant)>,
+    proxy_dirty: bool,
+    sink_dirty: bool,
+    groups_dirty: bool,
+    persistence_retry: Option<Instant>,
+    persistence_error: Option<StorageError>,
+    effects: Option<PendingEffects>,
+}
+
+#[derive(Default)]
+struct PendingEffects {
+    events: Vec<StackEvent, 8>,
+    commands: Vec<GpdCommand, 4>,
+    announce: Vec<ShortAddress, 4>,
+    join: Vec<u16, 4>,
+    leave: Vec<u16, 4>,
 }
 
 /// The longest delay before an alias conflict announcement (Dmax,
@@ -153,6 +168,7 @@ impl<C: BlockCipher> GreenPower<C> {
             consider(Some(*at));
         }
         consider(self.excursion.map(|(_, at)| at));
+        consider(self.persistence_retry);
         consider(self.proxy.next_deadline());
         if let Some(s) = &self.sink {
             consider(s.next_deadline());
@@ -210,6 +226,24 @@ impl<
     }
 
     fn enable_green_power(&mut self, sink: Option<SinkOptions>) -> Result<(), EndpointError> {
+        let proxy_table = restore_proxy_table(&mut self.storage).map_err(|error| {
+            self.push_event(StackEvent::PersistenceFailed {
+                kind: Kind::GreenPower,
+                error,
+            });
+            EndpointError
+        })?;
+        let sink_table = if sink.is_some() {
+            Some(restore_sink_table(&mut self.storage).map_err(|error| {
+                self.push_event(StackEvent::PersistenceFailed {
+                    kind: Kind::GreenPower,
+                    error,
+                });
+                EndpointError
+            })?)
+        } else {
+            None
+        };
         let (device, servers): (DeviceId, &[ClusterId]) = if sink.is_some() {
             (COMBO_BASIC_DEVICE, &[gp_cluster::ID])
         } else {
@@ -330,10 +364,14 @@ impl<
             pairings: Vec::new(),
             alias_conflicts: Vec::new(),
             excursion: None,
+            proxy_dirty: false,
+            sink_dirty: false,
+            groups_dirty: false,
+            persistence_retry: None,
+            persistence_error: None,
+            effects: None,
         };
-        if let Ok(table) = restore_proxy_table(&mut self.storage) {
-            gp.proxy.table = table;
-        }
+        gp.proxy.table = proxy_table;
         if let Some(o) = sink {
             let mut cfg = SinkConfig::new(
                 self.nwk.nib.network_address,
@@ -349,7 +387,7 @@ impl<
             cfg.commissioning_window = o.commissioning_window;
             let mut s = GpSink::new(cfg);
             s.poll(self.now);
-            if let Ok(table) = restore_sink_table(&mut self.storage) {
+            if let Some(table) = sink_table {
                 s.table = table;
             }
             gp.proxy.config.shared_key_type = o.shared_key_type;
@@ -380,6 +418,18 @@ impl<
     /// The sink, when enabled (shared access).
     pub fn green_power_sink_ref(&self) -> Option<&GpSink<C>> {
         self.green_power.as_ref().and_then(|g| g.sink.as_ref())
+    }
+
+    /// Last Green Power persistence error, cleared after a successful retry.
+    pub fn green_power_persistence_error(&self) -> Option<StorageError> {
+        self.green_power.as_ref().and_then(|g| g.persistence_error)
+    }
+
+    /// Whether Green Power input is waiting for durable table state.
+    pub fn green_power_persistence_pending(&self) -> bool {
+        self.green_power
+            .as_ref()
+            .is_some_and(|g| g.proxy_dirty || g.sink_dirty || g.groups_dirty)
     }
 
     /// Puts the sink in commissioning mode for `window` (its
@@ -428,6 +478,9 @@ impl<
         if self.phase != Phase::Operating {
             return;
         }
+        if self.green_power_persistence_pending() {
+            return;
+        }
         let Ok(gpdf) = Gpdf::decode(mac) else {
             return;
         };
@@ -446,6 +499,10 @@ impl<
     pub(crate) fn on_green_power_command(&mut self, origin: &Origin, payload: &[u8]) -> bool {
         if origin.endpoint != gp_cluster::ENDPOINT || origin.cluster != gp_cluster::ID {
             return false;
+        }
+        if self.green_power_persistence_pending() {
+            let _ = self.zcl.default_response(origin, ZclStatus::Failure);
+            return true;
         }
         let Some(gp) = self.green_power.as_mut() else {
             return false;
@@ -562,10 +619,11 @@ impl<
         }
         // Pairing errors are reported as Default Responses (§A.3.5.2.3).
         let mut rejected = None;
-        self.pump_green_power_events(&mut rejected);
+        let persisted = self.pump_green_power_events(&mut rejected);
         let status = match rejected {
             Some(PairingError::InvalidField) => ZclStatus::InvalidField,
             Some(PairingError::InsufficientSpace) => ZclStatus::InsufficientSpace,
+            None if !persisted => ZclStatus::Failure,
             None => status,
         };
         let _ = self.zcl.default_response(origin, status);
@@ -575,108 +633,152 @@ impl<
 
     /// Drains the proxy's and sink's events into stack events,
     /// persistence, group membership, announcements and local execution.
-    fn pump_green_power_events(&mut self, rejected: &mut Option<PairingError>) {
+    fn pump_green_power_events(&mut self, rejected: &mut Option<PairingError>) -> bool {
         let mut persist_proxy = false;
         let mut persist_sink = false;
-        let mut events: Vec<StackEvent, 8> = Vec::new();
-        let mut commands: Vec<GpdCommand, 4> = Vec::new();
-        let mut announce: Vec<ShortAddress, 4> = Vec::new();
-        let mut join: Vec<u16, 4> = Vec::new();
-        let mut leave: Vec<u16, 4> = Vec::new();
+        let pending = self.green_power.as_mut().and_then(|g| g.effects.take());
+        let deferred = pending.is_some();
+        let PendingEffects {
+            mut events,
+            mut commands,
+            mut announce,
+            mut join,
+            mut leave,
+        } = pending.unwrap_or_default();
         if let Some(gp) = self.green_power.as_mut() {
-            while let Some(e) = gp.proxy.next_event() {
-                match e {
-                    ProxyEvent::TableChanged => persist_proxy = true,
-                    ProxyEvent::CommissioningMode(until) => {
-                        let _ = events.push(StackEvent::GreenPowerCommissioningMode { until });
-                    }
-                    ProxyEvent::PairingRejected(err) => *rejected = Some(err),
-                }
-            }
-            if let Some(s) = gp.sink.as_mut() {
-                while let Some(e) = s.next_event() {
+            if !deferred {
+                while let Some(e) = gp.proxy.next_event() {
                     match e {
-                        SinkEvent::TableChanged => persist_sink = true,
-                        SinkEvent::CommissioningMode(until) => {
+                        ProxyEvent::TableChanged => persist_proxy = true,
+                        ProxyEvent::CommissioningMode(until) => {
                             let _ = events.push(StackEvent::GreenPowerCommissioningMode { until });
                         }
-                        SinkEvent::Paired {
-                            gpd,
-                            device_id,
-                            mode,
-                            alias,
-                            group,
-                            announce: a,
-                        } => {
-                            if let Some(g) = group {
-                                let _ = join.push(g);
+                        ProxyEvent::PairingRejected(err) => *rejected = Some(err),
+                    }
+                }
+                if let Some(s) = gp.sink.as_mut() {
+                    while let Some(e) = s.next_event() {
+                        match e {
+                            SinkEvent::TableChanged => persist_sink = true,
+                            SinkEvent::CommissioningMode(until) => {
+                                let _ =
+                                    events.push(StackEvent::GreenPowerCommissioningMode { until });
                             }
-                            if a {
-                                let _ = announce.push(alias);
-                            }
-                            let _ = events.push(StackEvent::GreenPowerPaired {
+                            SinkEvent::Paired {
                                 gpd,
                                 device_id,
                                 mode,
                                 alias,
-                            });
-                        }
-                        SinkEvent::Decommissioned { gpd, group } => {
-                            gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
-                            if let Some(g) = group
-                                && !s.table.iter().any(|e| {
-                                    e.mode == CommunicationMode::DerivedGroupcast
-                                        && panweave_green_power::proxy_table::derived_alias(&e.gpd)
-                                            .0
-                                            == g
-                                        || e.groups.iter().any(|(x, _)| *x == g)
-                                })
-                            {
-                                let _ = leave.push(g);
+                                group,
+                                announce: a,
+                            } => {
+                                if let Some(g) = group {
+                                    let _ = join.push(g);
+                                }
+                                if a {
+                                    let _ = announce.push(alias);
+                                }
+                                let _ = events.push(StackEvent::GreenPowerPaired {
+                                    gpd,
+                                    device_id,
+                                    mode,
+                                    alias,
+                                });
                             }
-                            let _ = events.push(StackEvent::GreenPowerDecommissioned { gpd });
-                        }
-                        SinkEvent::Refused { gpd, reason } => {
-                            let _ = events.push(StackEvent::GreenPowerRefused { gpd, reason });
-                        }
-                        SinkEvent::Command(c) => {
-                            let _ = commands.push(c);
-                        }
-                        SinkEvent::LocalEndpoints { gpd, endpoints } => {
-                            gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
-                            if let Some(list) = endpoints
-                                && gp.pairings.push((gpd, list)).is_err()
-                            {
-                                gp.pairings.remove(0);
+                            SinkEvent::Decommissioned { gpd, group } => {
+                                gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
+                                if let Some(g) = group
+                                    && !s.table.iter().any(|e| {
+                                        e.mode == CommunicationMode::DerivedGroupcast
+                                            && panweave_green_power::proxy_table::derived_alias(
+                                                &e.gpd,
+                                            )
+                                            .0 == g
+                                            || e.groups.iter().any(|(x, _)| *x == g)
+                                    })
+                                {
+                                    let _ = leave.push(g);
+                                }
+                                let _ = events.push(StackEvent::GreenPowerDecommissioned { gpd });
+                            }
+                            SinkEvent::Refused { gpd, reason } => {
+                                let _ = events.push(StackEvent::GreenPowerRefused { gpd, reason });
+                            }
+                            SinkEvent::Command(c) => {
+                                let _ = commands.push(c);
+                            }
+                            SinkEvent::LocalEndpoints { gpd, endpoints } => {
+                                gp.pairings.retain(|(g, _)| !g.same_device(&gpd));
+                                if let Some(list) = endpoints
+                                    && gp.pairings.push((gpd, list)).is_err()
+                                {
+                                    gp.pairings.remove(0);
+                                }
                             }
                         }
                     }
                 }
             }
+            gp.proxy_dirty |= persist_proxy;
+            gp.sink_dirty |= persist_sink;
+        }
+        if !self.flush_green_power_persistence() {
+            if let Some(gp) = self.green_power.as_mut() {
+                gp.effects = Some(PendingEffects {
+                    events,
+                    commands,
+                    announce,
+                    join,
+                    leave,
+                });
+            }
+            return false;
         }
         let mut groups_changed = false;
-        for g in join {
+        for g in &join {
+            if !self
+                .aps
+                .groups
+                .contains(GroupAddress(*g), gp_cluster::ENDPOINT)
+                && self
+                    .aps
+                    .groups
+                    .add(GroupAddress(*g), gp_cluster::ENDPOINT)
+                    .is_ok()
+            {
+                groups_changed = true;
+            }
+        }
+        for g in &leave {
             if self
                 .aps
                 .groups
-                .add(GroupAddress(g), gp_cluster::ENDPOINT)
+                .remove(GroupAddress(*g), gp_cluster::ENDPOINT)
                 .is_ok()
             {
                 groups_changed = true;
             }
         }
-        for g in leave {
-            if self
-                .aps
-                .groups
-                .remove(GroupAddress(g), gp_cluster::ENDPOINT)
-                .is_ok()
-            {
-                groups_changed = true;
-            }
-        }
+        // These idempotent membership edits are already applied in RAM.
+        // A retry must persist them once, without replaying the edits.
+        join.clear();
+        leave.clear();
         if groups_changed {
-            let _ = self.persist_groups();
+            if let Some(gp) = self.green_power.as_mut() {
+                gp.groups_dirty = true;
+            }
+            if !self.flush_green_power_persistence() {
+                if let Some(gp) = self.green_power.as_mut() {
+                    gp.effects = Some(PendingEffects {
+                        events,
+                        commands,
+                        announce,
+                        join,
+                        leave,
+                    });
+                }
+                return false;
+            }
         }
         for alias in announce {
             self.announce_alias(alias);
@@ -687,12 +789,62 @@ impl<
         for c in commands {
             self.execute_gpd_command(&c);
         }
-        if persist_proxy {
-            let _ = self.persist_proxy_table();
+        true
+    }
+
+    fn flush_green_power_persistence(&mut self) -> bool {
+        let Some(gp) = self.green_power.as_ref() else {
+            return true;
+        };
+        if gp
+            .persistence_retry
+            .is_some_and(|at| !self.now.has_reached(at))
+        {
+            return false;
         }
-        if persist_sink {
-            let _ = self.persist_sink_table();
+        for kind in [0u8, 1, 2] {
+            let Some(gp) = self.green_power.as_ref() else {
+                return true;
+            };
+            let dirty = match kind {
+                0 => gp.proxy_dirty,
+                1 => gp.sink_dirty,
+                _ => gp.groups_dirty,
+            };
+            if !dirty {
+                continue;
+            }
+            let result = match kind {
+                0 => self.persist_proxy_table(),
+                1 => self.persist_sink_table(),
+                _ => self.persist_groups_inner(),
+            };
+            let record_kind = if kind == 2 {
+                Kind::Groups
+            } else {
+                Kind::GreenPower
+            };
+            let result = self.note_persistence_result(record_kind, result);
+            if let Err(error) = result {
+                if let Some(gp) = self.green_power.as_mut() {
+                    gp.persistence_error = Some(error);
+                    gp.persistence_retry = Some(self.now + Duration::from_millis(100));
+                }
+                return false;
+            }
+            if let Some(gp) = self.green_power.as_mut() {
+                match kind {
+                    0 => gp.proxy_dirty = false,
+                    1 => gp.sink_dirty = false,
+                    _ => gp.groups_dirty = false,
+                }
+            }
         }
+        if let Some(gp) = self.green_power.as_mut() {
+            gp.persistence_error = None;
+            gp.persistence_retry = None;
+        }
+        true
     }
 
     /// Device_annce on behalf of a GPD (§A.3.6.3.4.2): NWK source and
@@ -892,7 +1044,9 @@ impl<
     /// whose delay elapsed.
     pub(crate) fn pump_green_power(&mut self) {
         let mut rejected = None;
-        self.pump_green_power_events(&mut rejected);
+        if !self.pump_green_power_events(&mut rejected) {
+            return;
+        }
         let now = self.now;
         let Some(gp) = self.green_power.as_mut() else {
             return;
@@ -1187,21 +1341,9 @@ impl<
         let Some(gp) = self.green_power.as_ref() else {
             return Ok(());
         };
-        for i in 0..PROXY_TABLE_ENTRIES {
-            self.storage
-                .erase(Key::with_id(Kind::GreenPower, i as u64))?;
-        }
-        for (i, e) in gp.proxy.table.iter().enumerate() {
-            let mut buf = [0u8; 128];
-            let mut w = Writer::new(&mut buf);
-            e.encode(&mut w).map_err(|_| StorageError::Full)?;
-            let n = w.position();
-            self.storage.store(
-                Key::with_id(Kind::GreenPower, i as u64),
-                buf.get(..n).unwrap_or(&[]),
-            )?;
-        }
-        Ok(())
+        persist_gp_entries::<_, _, PROXY_TABLE_ENTRIES>(&mut self.storage, 0, |i| {
+            gp.proxy.table.at(i)
+        })
     }
 
     /// Persists the Sink Table (one record per entry, §A.3.3.2.2).
@@ -1209,22 +1351,110 @@ impl<
         let Some(sink) = self.green_power.as_ref().and_then(|g| g.sink.as_ref()) else {
             return Ok(());
         };
-        for i in 0..SINK_TABLE_ENTRIES {
-            self.storage
-                .erase(Key::with_id(Kind::GreenPower, SINK_RECORD_BASE + i as u64))?;
-        }
-        for (i, e) in sink.table.iter().enumerate() {
-            let mut buf = [0u8; 128];
-            let mut w = Writer::new(&mut buf);
-            e.encode(&mut w).map_err(|_| StorageError::Full)?;
-            let n = w.position();
-            self.storage.store(
-                Key::with_id(Kind::GreenPower, SINK_RECORD_BASE + i as u64),
-                buf.get(..n).unwrap_or(&[]),
-            )?;
-        }
-        Ok(())
+        persist_gp_entries::<_, _, SINK_TABLE_ENTRIES>(&mut self.storage, SINK_RECORD_BASE, |i| {
+            sink.table.at(i)
+        })
     }
+}
+
+trait TableEntry: Sized {
+    fn identity(&self) -> GpdId;
+    fn encode_record(&self, writer: &mut Writer<'_>) -> Result<(), panweave_codec::CodecError>;
+    fn decode_record(reader: &mut Reader<'_>) -> Result<Self, panweave_codec::CodecError>;
+}
+
+macro_rules! table_entry {
+    ($entry:ty) => {
+        impl TableEntry for $entry {
+            fn identity(&self) -> GpdId {
+                self.gpd
+            }
+            fn encode_record(
+                &self,
+                writer: &mut Writer<'_>,
+            ) -> Result<(), panweave_codec::CodecError> {
+                self.encode(writer)
+            }
+            fn decode_record(reader: &mut Reader<'_>) -> Result<Self, panweave_codec::CodecError> {
+                Self::decode(reader)
+            }
+        }
+    };
+}
+
+table_entry!(ProxyEntry);
+table_entry!(SinkEntry);
+
+fn read_gp_entry<S: Storage, T: TableEntry>(
+    storage: &mut S,
+    key: Key,
+) -> Result<Option<T>, StorageError> {
+    let mut buf = [0u8; 128];
+    let Some(n) = storage.load(key, &mut buf)? else {
+        return Ok(None);
+    };
+    let mut reader = Reader::new(buf.get(..n).ok_or(StorageError::Corrupt)?);
+    let entry = T::decode_record(&mut reader).map_err(|_| StorageError::Corrupt)?;
+    if reader.remaining() != 0 {
+        return Err(StorageError::Corrupt);
+    }
+    Ok(Some(entry))
+}
+
+fn persist_gp_entries<'a, S: Storage, T: TableEntry + 'a, const N: usize>(
+    storage: &mut S,
+    base: u64,
+    entry: impl Fn(usize) -> Option<&'a T>,
+) -> Result<(), StorageError> {
+    let current: [Option<GpdId>; N] = core::array::from_fn(|i| entry(i).map(TableEntry::identity));
+    let mut stored = [None; N];
+    for (i, identity) in stored.iter_mut().enumerate() {
+        let key = Key::with_id(
+            Kind::GreenPower,
+            base + u64::try_from(i).map_err(|_| StorageError::Full)?,
+        );
+        *identity = read_gp_entry::<_, T>(storage, key)?.map(|e| e.identity());
+    }
+    let mut used = [false; N];
+    for i in 0..N {
+        let Some(e) = entry(i) else { continue };
+        let identity = e.identity();
+        if current[..i].contains(&Some(identity)) {
+            return Err(StorageError::Corrupt);
+        }
+        let slot = stored
+            .iter()
+            .enumerate()
+            .find(|(slot, gpd)| !used[*slot] && **gpd == Some(identity))
+            .or_else(|| {
+                stored.iter().enumerate().find(|(slot, gpd)| {
+                    !used[*slot] && gpd.is_none_or(|g| !current.contains(&Some(g)))
+                })
+            })
+            .map(|(slot, _)| slot)
+            .ok_or(StorageError::Full)?;
+        let mut buf = [0u8; 128];
+        let mut writer = Writer::new(&mut buf);
+        e.encode_record(&mut writer)
+            .map_err(|_| StorageError::Full)?;
+        let n = writer.position();
+        let key = Key::with_id(
+            Kind::GreenPower,
+            base + u64::try_from(slot).map_err(|_| StorageError::Full)?,
+        );
+        crate::persist::store_if_changed(storage, key, &buf[..n], &mut [0u8; 128])?;
+        used[slot] = true;
+        stored[slot] = Some(identity);
+    }
+    for (i, gpd) in stored.iter().enumerate() {
+        if gpd.is_some() && !used[i] {
+            storage.erase(Key::with_id(
+                Kind::GreenPower,
+                base + u64::try_from(i).map_err(|_| StorageError::Full)?,
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 fn restore_proxy_table<S: Storage>(
@@ -1232,13 +1462,10 @@ fn restore_proxy_table<S: Storage>(
 ) -> Result<ProxyTable<PROXY_TABLE_ENTRIES>, StorageError> {
     let mut table = ProxyTable::new();
     for i in 0..PROXY_TABLE_ENTRIES {
-        let mut buf = [0u8; 128];
-        let Some(n) = storage.load(Key::with_id(Kind::GreenPower, i as u64), &mut buf)? else {
-            continue;
-        };
-        let mut r = Reader::new(buf.get(..n).unwrap_or(&[]));
-        if let Ok(e) = ProxyEntry::decode(&mut r) {
-            let _ = table.insert(e);
+        if let Some(e) =
+            read_gp_entry::<_, ProxyEntry>(storage, Key::with_id(Kind::GreenPower, i as u64))?
+        {
+            table.insert(e).map_err(|_| StorageError::Full)?;
         }
     }
     Ok(table)
@@ -1249,17 +1476,11 @@ fn restore_sink_table<S: Storage>(
 ) -> Result<SinkTable<SINK_TABLE_ENTRIES>, StorageError> {
     let mut table = SinkTable::new();
     for i in 0..SINK_TABLE_ENTRIES {
-        let mut buf = [0u8; 128];
-        let Some(n) = storage.load(
+        if let Some(e) = read_gp_entry::<_, SinkEntry>(
+            storage,
             Key::with_id(Kind::GreenPower, SINK_RECORD_BASE + i as u64),
-            &mut buf,
-        )?
-        else {
-            continue;
-        };
-        let mut r = Reader::new(buf.get(..n).unwrap_or(&[]));
-        if let Ok(e) = SinkEntry::decode(&mut r) {
-            let _ = table.insert(e);
+        )? {
+            table.insert(e).map_err(|_| StorageError::Full)?;
         }
     }
     Ok(table)
