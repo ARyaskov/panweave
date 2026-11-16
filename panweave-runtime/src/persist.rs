@@ -414,15 +414,19 @@ impl<
         // The outgoing NWK frame counter outlives a factory reset (BDB
         // 3.1 §13): continue past the last reservation either way.
         let mut fc = [0u8; 4];
-        if self
+        let counter_present = match self
             .storage
             .load(Key::single(Kind::NwkFrameCounter), &mut fc)?
-            .is_some()
         {
-            self.nwk
-                .security
-                .restore_outgoing_counter(u32::from_le_bytes(fc));
-        }
+            Some(4) => {
+                self.nwk
+                    .security
+                    .restore_outgoing_counter(u32::from_le_bytes(fc));
+                true
+            }
+            Some(_) => return Err(StorageError::Corrupt),
+            None => false,
+        };
         self.restore_startup_sets()?;
         let nib = record::<S, P::Record>(&mut self.storage, Key::single(Kind::Nib))?;
         let keys = record::<S, P::Record>(&mut self.storage, Key::single(Kind::NetworkKeys))?;
@@ -437,6 +441,12 @@ impl<
                 return Ok(Restored::FactoryNew);
             }
         };
+        if !counter_present {
+            // A saved network must never resume with a fresh counter under
+            // its old key. An interrupted initial formation also fails closed.
+            self.restore_detail = RestoreDetail::Incomplete;
+            return Err(StorageError::Corrupt);
+        }
         if nib.first() != Some(&NIB_FORMAT) || keys.first() != Some(&KEYS_FORMAT) {
             self.restore_detail = if nib.is_empty() || keys.is_empty() {
                 RestoreDetail::Malformed
@@ -588,14 +598,23 @@ impl<
             if let Ok(e) = parsed {
                 let mut fc = [0u8; 4];
                 let mut e = e;
-                if self
+                match self
                     .storage
                     .load(Key::with_id(Kind::ApsFrameCounter, p), &mut fc)?
-                    .is_some()
                 {
-                    e.outgoing = panweave_security::frame_counter::OutgoingCounter::restore(
-                        u32::from_le_bytes(fc),
-                    );
+                    Some(4) => {
+                        let bound = u32::from_le_bytes(fc).max(e.outgoing.reserved_until());
+                        e.outgoing =
+                            panweave_security::frame_counter::OutgoingCounter::restore(bound);
+                    }
+                    Some(_) => return Err(StorageError::Corrupt),
+                    None => {
+                        // Legacy snapshots cannot prove that a subsequently
+                        // reserved window was not used. Require a new link key
+                        // before transmitting under an entry without a bound.
+                        e.outgoing =
+                            panweave_security::frame_counter::OutgoingCounter::restore(u32::MAX);
+                    }
                 }
                 // A persisted entry supersedes the preconfigured one.
                 let _ = self.aps.security.keys_mut().insert(e);

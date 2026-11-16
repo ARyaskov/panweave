@@ -152,6 +152,8 @@ pub enum StorageError {
     BufferTooSmall,
     /// The backing medium failed.
     Io,
+    /// A committed record is damaged or critical persisted state is incomplete.
+    Corrupt,
 }
 
 /// Durable key/value storage.

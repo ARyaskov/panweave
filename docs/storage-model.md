@@ -56,6 +56,15 @@ journaling plus a CRC trailer; host backends use write-to-temp + rename.
 The trait is synchronous because the stack is sans-I/O; an asynchronous
 backend wraps it by completing the write before returning from `poll`.
 
+The NOR backend writes `PWS2` records with a metadata CRC and a separate
+aligned commit block programmed after the complete record. An interrupted
+append retains the previous committed value; a dirty tail is compacted
+before reuse. A committed record with damaged metadata or payload returns
+`StorageError::Corrupt`, rather than reading as absent or falling back to
+an older counter. `PWS1` records remain readable and migrate transactionally
+to `PWS2` on the first mutation. Opening a nonempty region without a valid
+store header fails instead of automatically formatting it.
+
 There is deliberately no enumeration primitive (it is expensive on
 journaled flash). Per-partner records are indexed from the `Aib` record.
 
@@ -87,7 +96,7 @@ under the new key.
 
 `Stack::restore()` runs the BDB 3.1 §7.1 "restore persistent data" step:
 
-1. `Nib` and `NetworkKeys` present → identity and keys are restored, the
+1. `Nib`, `NetworkKeys` and an exact four-octet `NwkFrameCounter` present → identity and keys are restored, the
    outgoing NWK counter resumes at the persisted bound, `Aib`, `LinkKey`,
    `Children`, `Bindings` and `Groups` follow, the NWK layer is warm
    started (§3.6.1.12) and children get a full timeout period
@@ -110,6 +119,15 @@ under the new key.
    form a network: the hub's policy is `NetworkRestore::decide`
    (`docs/esp32c6-hub.md`), tested with every state above in
    `panweave-runtime/tests/restore_detail.rs`.
+
+Saved network keys without a frame-counter record fail with
+`StorageError::Corrupt`; the old network cannot resume with a fresh
+counter. Truncated NWK or APS counter records fail the same way. APS
+restoration uses the larger of the snapshot and separate reservation
+bounds. If an APS reservation record is missing, the restored link key's
+outgoing counter is exhausted: a new key is required before transmitting
+with that partner. This also applies to legacy snapshots whose missing
+reservation cannot prove that no later counter values were used.
 
 `Stack::resume()` then continues per BDB 3.1 §10.1: the coordinator and
 routers restart routing and re-announce; end devices perform a secured

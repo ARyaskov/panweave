@@ -214,3 +214,67 @@ fn a_restart_during_a_join_keeps_the_network_and_denies_the_unfinished_device() 
     assert_eq!(tc.device_authorization(DEV), Authorization::Unknown);
     assert!(!tc.device_authorization(DEV).grants_application_access());
 }
+
+#[test]
+fn saved_network_keys_require_an_exact_outgoing_counter_record() {
+    let original = formed();
+    for damaged in [None, Some(&[7u8][..]), Some(&[7u8, 8, 9][..])] {
+        let mut storage = original.clone();
+        let key = Key::single(Kind::NwkFrameCounter);
+        if let Some(bytes) = damaged {
+            storage.store(key, bytes).unwrap();
+        } else {
+            storage.erase(key).unwrap();
+        }
+        let writes = storage.writes;
+        let mut tc = restart(storage);
+        assert_eq!(tc.restore(), Err(StorageError::Corrupt));
+        assert!(!tc.is_operating());
+        assert!(
+            !tc.nwk.security.has_key(),
+            "old keys must not become usable"
+        );
+        assert!(tc.resume().is_err());
+        assert_eq!(tc.storage.writes, writes, "a failed restore never writes");
+    }
+}
+
+#[test]
+fn a_missing_link_counter_requires_a_new_key_and_a_short_one_is_rejected() {
+    use panweave_security::frame_counter::CounterError;
+
+    let original = formed();
+    let key = Key::with_id(Kind::ApsFrameCounter, DEV.0);
+    let mut storage = original.clone();
+    storage.erase(key).unwrap();
+    let mut tc = restart(storage);
+    assert_eq!(tc.restore().unwrap(), Restored::OnNetwork);
+    let entry = tc.aps.security.keys_mut().get_mut(DEV).unwrap();
+    assert_eq!(entry.outgoing.allocate(), Err(CounterError::Exhausted));
+
+    let mut storage = original;
+    storage.store(key, &[0, 1]).unwrap();
+    let mut tc = restart(storage);
+    assert_eq!(tc.restore(), Err(StorageError::Corrupt));
+    assert!(!tc.is_operating());
+    assert!(tc.resume().is_err());
+}
+
+#[test]
+fn restoring_a_link_counter_never_reduces_the_snapshot_bound() {
+    use panweave_security::frame_counter::OutgoingCounter;
+
+    let mut tc = restart(formed());
+    assert_eq!(tc.restore().unwrap(), Restored::OnNetwork);
+    tc.aps.security.keys_mut().get_mut(DEV).unwrap().outgoing = OutgoingCounter::restore(8192);
+    tc.persist_link_keys().unwrap();
+    tc.storage
+        .store(
+            Key::with_id(Kind::ApsFrameCounter, DEV.0),
+            &4096u32.to_le_bytes(),
+        )
+        .unwrap();
+    let mut fresh = restart(tc.storage);
+    assert_eq!(fresh.restore().unwrap(), Restored::OnNetwork);
+    assert_eq!(fresh.aps.security.entry(DEV).unwrap().outgoing.peek(), 8192);
+}

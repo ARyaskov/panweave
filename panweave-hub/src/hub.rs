@@ -1867,6 +1867,7 @@ impl<HS: Storage> Hub<HS> {
             StorageError::Full => 0,
             StorageError::Io => 1,
             StorageError::BufferTooSmall => 2,
+            StorageError::Corrupt => 3,
         };
         self.counters.storage_errors = self.counters.storage_errors.saturating_add(1);
         if e == StorageError::Full {

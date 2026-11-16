@@ -7,13 +7,14 @@
 //! other half and switching to it. The switch is atomic: the new half's
 //! header — a magic and a sequence number — is written after its
 //! records, so a power loss during compaction leaves the old half
-//! active. Every record carries a CRC; a partially written record
-//! (power loss mid-write) fails it and is skipped.
+//! active. Version 2 records commit only after their metadata and payload
+//! are durable. Interrupted appends leave the previous value intact;
+//! damage to a committed record is reported instead of hiding it as absent.
 //!
 //! [`Storage::store`] returns only once the record is in flash, as the
 //! frame-counter contract requires (`docs/storage-model.md`). A store
-//! costs one write of `16 + len` octets (rounded up to the flash's
-//! alignment) and, when the half is full, a compaction: one sector erase
+//! costs an aligned metadata/payload write and a commit write and, when
+//! the half is full, a compaction: one sector erase
 //! per sector of a half plus the live records rewritten.
 
 use core::cell::RefCell;
@@ -75,8 +76,10 @@ impl<F: NorFlash> NorFlash for SharedNorFlash<'_, F> {
 /// Largest record payload.
 pub const MAX_RECORD: usize = 512;
 
-const MAGIC: [u8; 4] = *b"PWS1";
+const LEGACY_MAGIC: [u8; 4] = *b"PWS1";
+const MAGIC: [u8; 4] = *b"PWS2";
 const HEADER: usize = 16;
+const RECORD_HEADER: u32 = 20;
 const TAG_RECORD: u8 = 0xA5;
 const FLAG_SET: u8 = 0;
 const FLAG_ERASED: u8 = 1;
@@ -86,11 +89,9 @@ const FLAG_KIND_ERASED: u8 = 2;
 /// and restart at every boot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StoreStats {
-    /// The region had no valid half when opened and was formatted (blank
-    /// flash, or both headers unreadable).
+    /// The region was blank when opened and was formatted.
     pub formatted_at_open: bool,
-    /// Records whose payload failed the CRC when read (a write cut by a
-    /// power loss, or flash corruption); such a record reads as absent.
+    /// Committed records whose metadata or payload failed validation.
     pub corrupt_records: u32,
     /// Records appended.
     pub writes: u32,
@@ -113,6 +114,29 @@ pub struct NorFlashStore<F: NorFlash> {
     seq: u32,
     /// Offset of the first free octet in the active half.
     tail: u32,
+    format: Format,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Legacy,
+    Committed,
+}
+
+impl Format {
+    const fn half_header<F: NorFlash>(self) -> u32 {
+        match self {
+            Self::Legacy => HEADER_LEN,
+            Self::Committed => align::<F>() + round_up(HEADER_LEN, align::<F>()),
+        }
+    }
+
+    const fn payload_offset<F: NorFlash>(self) -> u32 {
+        match self {
+            Self::Legacy => HEADER_LEN,
+            Self::Committed => align::<F>() + round_up(RECORD_HEADER, align::<F>()),
+        }
+    }
 }
 
 impl<F: NorFlash> core::fmt::Debug for NorFlashStore<F> {
@@ -239,6 +263,7 @@ struct Record {
     id: u64,
     len: u16,
     crc: u16,
+    format: Format,
 }
 
 impl Record {
@@ -248,22 +273,32 @@ impl Record {
 
     /// Size of the record in the log.
     const fn size<F: NorFlash>(&self) -> u32 {
-        round_up(HEADER_LEN + self.len as u32, align::<F>())
+        round_up(
+            self.format.payload_offset::<F>() + self.len as u32,
+            align::<F>(),
+        )
     }
 }
 
 impl<F: NorFlash> NorFlashStore<F> {
     /// Opens the store in `len` octets at `base` (both multiples of two
-    /// sectors), formatting the region when no half carries a valid
-    /// header. Fails with `Io` for a flash whose read or write granule
-    /// exceeds 64 octets.
+    /// sectors), formatting only a fully erased region. Unknown or damaged
+    /// committed state returns `Corrupt` and is left untouched. Version 1
+    /// records remain readable and migrate on the first mutation.
+    /// Fails with `Io` for an out-of-bounds region or a flash whose read or
+    /// write granule exceeds 64 octets.
     pub fn new(flash: F, base: u32, len: u32) -> Result<Self, StorageError> {
         let sector = sector::<F>();
         // Records stream through CHUNK-octet buffers.
-        if align::<F>() as usize > CHUNK {
+        if align::<F>() as usize > CHUNK || sector == 0 {
             return Err(StorageError::Io);
         }
-        if len < 2 * sector || !len.is_multiple_of(2 * sector) || !base.is_multiple_of(sector) {
+        let region_end = base.checked_add(len).ok_or(StorageError::Io)?;
+        if !usize::try_from(region_end).is_ok_and(|end| end <= flash.capacity())
+            || len < 2 * sector
+            || !len.is_multiple_of(2 * sector)
+            || !base.is_multiple_of(sector)
+        {
             return Err(StorageError::Io);
         }
         let mut s = NorFlashStore {
@@ -273,30 +308,37 @@ impl<F: NorFlash> NorFlashStore<F> {
             half: len / 2,
             active: 0,
             seq: 0,
-            tail: HEADER_LEN,
+            tail: Format::Committed.half_header::<F>(),
+            format: Format::Committed,
         };
         let a = s.header(0)?;
         let b = s.header(1)?;
         match (a, b) {
             (None, None) => {
+                if !s.erased_from(0, 0)? || !s.erased_from(1, 0)? {
+                    return Err(StorageError::Corrupt);
+                }
                 s.stats.formatted_at_open = true;
                 s.format()?;
             }
-            (Some(sa), Some(sb)) => {
+            (Some((sa, fa)), Some((sb, fb))) => {
                 // Both valid only when a compaction's old half was not
                 // erased yet: the newer sequence wins.
                 s.active = u32::from(sb.wrapping_sub(sa) < u32::MAX / 2);
                 s.seq = if s.active == 1 { sb } else { sa };
+                s.format = if s.active == 1 { fb } else { fa };
                 s.scan_tail()?;
             }
-            (Some(sa), None) => {
+            (Some((sa, format)), None) => {
                 s.active = 0;
                 s.seq = sa;
+                s.format = format;
                 s.scan_tail()?;
             }
-            (None, Some(sb)) => {
+            (None, Some((sb, format))) => {
                 s.active = 1;
                 s.seq = sb;
+                s.format = format;
                 s.scan_tail()?;
             }
         }
@@ -309,8 +351,9 @@ impl<F: NorFlash> NorFlashStore<F> {
         self.erase_half(1)?;
         self.active = 0;
         self.seq = 1;
+        self.format = Format::Committed;
         self.write_header(0, 1)?;
-        self.tail = HEADER_LEN;
+        self.tail = self.format.half_header::<F>();
         Ok(())
     }
 
@@ -341,40 +384,91 @@ impl<F: NorFlash> NorFlashStore<F> {
     }
 
     /// The sequence number of a half with a valid header.
-    fn header(&mut self, half: u32) -> Result<Option<u32>, StorageError> {
-        let mut buf = [0u8; HEADER];
+    fn header(&mut self, half: u32) -> Result<Option<(u32, Format)>, StorageError> {
+        let mut buf = [0u8; CHUNK];
         let at = self.half_base(half);
+        let n = round_up(HEADER_LEN, align::<F>()) as usize;
         self.flash
-            .read(at, &mut buf)
+            .read(at, &mut buf[..n])
             .map_err(|_| StorageError::Io)?;
+        if buf[..4] == LEGACY_MAGIC {
+            return Ok(Some((
+                u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+                Format::Legacy,
+            )));
+        }
         if buf[..4] != MAGIC {
             return Ok(None);
         }
-        Ok(Some(u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]])))
+        self.flash
+            .read(at + align::<F>(), &mut buf[..n])
+            .map_err(|_| StorageError::Io)?;
+        if crc16(&buf[..4]) != u16::from_le_bytes([buf[4], buf[5]]) {
+            return Err(StorageError::Corrupt);
+        }
+        Ok(Some((
+            u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            Format::Committed,
+        )))
     }
 
     fn write_header(&mut self, half: u32, seq: u32) -> Result<(), StorageError> {
-        let mut buf = [0xffu8; HEADER];
-        buf[..4].copy_from_slice(&MAGIC);
-        buf[4..8].copy_from_slice(&seq.to_le_bytes());
+        let mut buf = [0xffu8; CHUNK];
+        buf[..4].copy_from_slice(&seq.to_le_bytes());
+        let crc = crc16(&buf[..4]);
+        buf[4..6].copy_from_slice(&crc.to_le_bytes());
         let at = self.half_base(half);
-        self.flash.write(at, &buf).map_err(|_| StorageError::Io)
+        let n = round_up(HEADER_LEN, align::<F>()) as usize;
+        self.flash
+            .write(at + align::<F>(), &buf[..n])
+            .map_err(|_| StorageError::Io)?;
+        // A separate write granule commits the fully copied half.
+        buf.fill(0);
+        buf[..4].copy_from_slice(&MAGIC);
+        self.flash
+            .write(at, &buf[..align::<F>() as usize])
+            .map_err(|_| StorageError::Io)
     }
 
     fn read_record(&mut self, half: u32, at: u32) -> Result<Option<Record>, StorageError> {
-        if at + HEADER_LEN > self.half {
+        let offset = self.format.payload_offset::<F>();
+        if at + offset > self.half {
             return Ok(None);
         }
-        let mut buf = [0u8; HEADER];
+        let mut buf = [0u8; CHUNK];
+        let mut metadata = self.half_base(half) + at;
+        let n = match self.format {
+            Format::Legacy => HEADER,
+            Format::Committed => {
+                let a = align::<F>() as usize;
+                self.flash
+                    .read(metadata, &mut buf[..a])
+                    .map_err(|_| StorageError::Io)?;
+                if buf[..a].iter().all(|b| *b == 0xff) {
+                    return Ok(None);
+                }
+                metadata += align::<F>();
+                round_up(RECORD_HEADER, align::<F>()) as usize
+            }
+        };
         self.flash
-            .read(self.half_base(half) + at, &mut buf)
+            .read(metadata, &mut buf[..n])
             .map_err(|_| StorageError::Io)?;
-        if buf[0] != TAG_RECORD {
+        if self.format == Format::Legacy && buf[..n].iter().all(|b| *b == 0xff) {
             return Ok(None);
+        }
+        if buf[0] != TAG_RECORD
+            || Kind::from_code(buf[1]).is_none()
+            || !matches!(buf[2], FLAG_SET | FLAG_ERASED | FLAG_KIND_ERASED)
+            || (self.format == Format::Committed
+                && crc16(&buf[..16]) != u16::from_le_bytes([buf[16], buf[17]]))
+        {
+            self.stats.corrupt_records = self.stats.corrupt_records.saturating_add(1);
+            return Err(StorageError::Corrupt);
         }
         let len = u16::from_le_bytes([buf[4], buf[5]]);
-        if usize::from(len) > MAX_RECORD {
-            return Ok(None);
+        if usize::from(len) > MAX_RECORD || at + offset + u32::from(len) > self.half {
+            return Err(StorageError::Corrupt);
         }
         let mut id = [0u8; 8];
         id.copy_from_slice(&buf[8..16]);
@@ -384,6 +478,7 @@ impl<F: NorFlash> NorFlashStore<F> {
             id: u64::from_le_bytes(id),
             len,
             crc: u16::from_le_bytes([buf[6], buf[7]]),
+            format: self.format,
         }))
     }
 
@@ -404,7 +499,7 @@ impl<F: NorFlash> NorFlashStore<F> {
         // through a chunk.
         let a = align::<F>() as usize;
         let body = n - n % a;
-        let base = self.half_base(half) + at + HEADER_LEN;
+        let base = self.half_base(half) + at + r.format.payload_offset::<F>();
         if body > 0 {
             self.flash
                 .read(base, &mut dst[..body])
@@ -427,7 +522,7 @@ impl<F: NorFlash> NorFlashStore<F> {
 
     /// Whether a record's payload matches its CRC, read chunk by chunk.
     fn payload_intact(&mut self, half: u32, at: u32, r: &Record) -> Result<bool, StorageError> {
-        let src = self.half_base(half) + at + HEADER_LEN;
+        let src = self.half_base(half) + at + r.format.payload_offset::<F>();
         let len = usize::from(r.len);
         let cap = chunk::<F>();
         let mut crc = 0xffff;
@@ -453,12 +548,34 @@ impl<F: NorFlash> NorFlashStore<F> {
 
     /// Positions `tail` after the last record of the active half.
     fn scan_tail(&mut self) -> Result<(), StorageError> {
-        let mut at = HEADER_LEN;
+        let mut at = self.format.half_header::<F>();
         while let Some(r) = self.read_record(self.active, at)? {
             at += r.size::<F>();
         }
-        self.tail = at;
+        // A failed append may have programmed its body without its commit
+        // block. Compact before reusing that NOR region.
+        self.tail = if self.erased_from(self.active, at)? {
+            at
+        } else {
+            self.half
+        };
         Ok(())
+    }
+
+    fn erased_from(&mut self, half: u32, mut at: u32) -> Result<bool, StorageError> {
+        let mut buf = [0u8; CHUNK];
+        let cap = u32::try_from(chunk::<F>()).map_err(|_| StorageError::Io)?;
+        while at < self.half {
+            let n = (self.half - at).min(cap) as usize;
+            self.flash
+                .read(self.half_base(half) + at, &mut buf[..n])
+                .map_err(|_| StorageError::Io)?;
+            if buf[..n].iter().any(|b| *b != 0xff) {
+                return Ok(false);
+            }
+            at += u32::try_from(n).map_err(|_| StorageError::Io)?;
+        }
+        Ok(true)
     }
 
     /// Walks the records of `half` in order, calling `f(offset, record)`
@@ -468,7 +585,7 @@ impl<F: NorFlash> NorFlashStore<F> {
         half: u32,
         mut f: impl FnMut(&mut Self, u32, Record) -> Result<bool, StorageError>,
     ) -> Result<(), StorageError> {
-        let mut at = HEADER_LEN;
+        let mut at = self.format.half_header::<F>();
         while let Some(r) = self.read_record(half, at)? {
             if !f(self, at, r)? {
                 break;
@@ -518,23 +635,31 @@ impl<F: NorFlash> NorFlashStore<F> {
             return Err(StorageError::Full);
         }
         let len = u16::try_from(data.len()).map_err(|_| StorageError::Full)?;
-        let size = round_up(HEADER_LEN + u32::from(len), align::<F>());
-        if self.tail + size > self.half {
+        let size = round_up(
+            Format::Committed.payload_offset::<F>() + u32::from(len),
+            align::<F>(),
+        );
+        if self.format == Format::Legacy || self.tail + size > self.half {
             self.compact()?;
             if self.tail + size > self.half {
                 return Err(StorageError::Full);
             }
         }
         let at = self.half_base(self.active) + self.tail;
-        let mut w = ChunkWriter::new(at);
+        let mut w = ChunkWriter::new(at + align::<F>());
+        let header = committed_record_header(kind, flags, id, len, crc16(data));
+        let header_len = round_up(RECORD_HEADER, align::<F>()) as usize;
         let written = w
-            .push(
-                &mut self.flash,
-                &record_header(kind, flags, id, len, crc16(data)),
-            )
+            .push(&mut self.flash, &header[..header_len])
             .and_then(|()| w.push(&mut self.flash, data))
-            .and_then(|()| w.flush(&mut self.flash));
+            .and_then(|()| w.flush(&mut self.flash))
+            .and_then(|()| {
+                self.flash
+                    .write(at, &[0u8; CHUNK][..align::<F>() as usize])
+                    .map_err(|_| StorageError::Io)
+            });
         if written.is_err() {
+            self.tail = self.half;
             self.stats.io_errors = self.stats.io_errors.saturating_add(1);
             return Err(StorageError::Io);
         }
@@ -548,17 +673,29 @@ impl<F: NorFlash> NorFlashStore<F> {
         let old = self.active;
         let new = 1 - old;
         self.erase_half(new)?;
-        let mut out = HEADER_LEN;
-        let mut at = HEADER_LEN;
+        let mut out = Format::Committed.half_header::<F>();
+        let mut at = self.format.half_header::<F>();
         while let Some(r) = self.read_record(old, at)? {
-            if self.is_live(old, at, r)? && self.payload_intact(old, at, &r)? {
-                let mut w = ChunkWriter::new(self.half_base(new) + out);
+            if self.is_live(old, at, r)? {
+                if !self.payload_intact(old, at, &r)? {
+                    return Err(StorageError::Corrupt);
+                }
+                let size = round_up(
+                    Format::Committed.payload_offset::<F>() + u32::from(r.len),
+                    align::<F>(),
+                );
+                if out + size > self.half {
+                    return Err(StorageError::Full);
+                }
+                let dst = self.half_base(new) + out;
+                let mut w = ChunkWriter::new(dst + align::<F>());
+                let header = committed_record_header(r.kind, r.flags, r.id, r.len, r.crc);
                 w.push(
                     &mut self.flash,
-                    &record_header(r.kind, r.flags, r.id, r.len, r.crc),
+                    &header[..round_up(RECORD_HEADER, align::<F>()) as usize],
                 )?;
                 // The payload, chunk by chunk.
-                let src = self.half_base(old) + at + HEADER_LEN;
+                let src = self.half_base(old) + at + r.format.payload_offset::<F>();
                 let mut done = 0usize;
                 let len = usize::from(r.len);
                 let cap = chunk::<F>();
@@ -576,7 +713,10 @@ impl<F: NorFlash> NorFlashStore<F> {
                     done += n;
                 }
                 w.flush(&mut self.flash)?;
-                out += r.size::<F>();
+                self.flash
+                    .write(dst, &[0u8; CHUNK][..align::<F>() as usize])
+                    .map_err(|_| StorageError::Io)?;
+                out += size;
             }
             at += r.size::<F>();
         }
@@ -587,6 +727,7 @@ impl<F: NorFlash> NorFlashStore<F> {
         self.active = new;
         self.seq = seq;
         self.tail = out;
+        self.format = Format::Committed;
         self.stats.compactions = self.stats.compactions.saturating_add(1);
         self.erase_half(old)
     }
@@ -605,6 +746,14 @@ fn record_header(kind: u8, flags: u8, id: u64, len: u16, crc: u16) -> [u8; HEADE
     h
 }
 
+fn committed_record_header(kind: u8, flags: u8, id: u64, len: u16, crc: u16) -> [u8; CHUNK] {
+    let mut h = [0xffu8; CHUNK];
+    h[..HEADER].copy_from_slice(&record_header(kind, flags, id, len, crc));
+    let metadata_crc = crc16(&h[..HEADER]);
+    h[16..18].copy_from_slice(&metadata_crc.to_le_bytes());
+    h
+}
+
 impl<F: NorFlash> Storage for NorFlashStore<F> {
     fn store(&mut self, key: Key, data: &[u8]) -> Result<(), StorageError> {
         self.append(key.kind.code(), FLAG_SET, key.id, data)
@@ -620,7 +769,7 @@ impl<F: NorFlash> Storage for NorFlashStore<F> {
         if self.read_payload(self.active, at, &r, buf)? {
             Ok(Some(usize::from(r.len)))
         } else {
-            Ok(None)
+            Err(StorageError::Corrupt)
         }
     }
 
@@ -659,11 +808,14 @@ mod tests {
 
     /// A NOR flash in RAM with the real rules: erase sets a whole sector
     /// to 0xFF, a write only clears bits, everything aligned.
+    #[derive(Clone)]
     struct RamFlash {
         cells: Vec<u8>,
         erases: u32,
         /// Writes left before a simulated power loss.
         fuel: Option<u32>,
+        /// Four-octet programming units left, including partial write calls.
+        word_fuel: Option<usize>,
     }
 
     impl RamFlash {
@@ -724,9 +876,22 @@ mod tests {
                 *f -= 1;
             }
             let o = offset as usize;
-            for (c, b) in self.cells[o..o + bytes.len()].iter_mut().zip(bytes) {
-                assert_eq!(*c & *b, *b, "write sets a bit at {offset:#x}");
-                *c = *b;
+            for (dst, src) in self.cells[o..o + bytes.len()]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(bytes.as_chunks::<4>().0.iter())
+            {
+                if let Some(fuel) = &mut self.word_fuel {
+                    if *fuel == 0 {
+                        return Err(E);
+                    }
+                    *fuel -= 1;
+                }
+                for (c, b) in dst.iter_mut().zip(src) {
+                    assert_eq!(*c & *b, *b, "write sets a bit at {offset:#x}");
+                    *c = *b;
+                }
             }
             Ok(())
         }
@@ -734,9 +899,10 @@ mod tests {
 
     fn flash() -> RamFlash {
         RamFlash {
-            cells: vec![0u8; 8 * SECTOR],
+            cells: vec![0xffu8; 8 * SECTOR],
             erases: 0,
             fuel: None,
+            word_fuel: None,
         }
     }
 
@@ -823,7 +989,7 @@ mod tests {
         let counter = Key::single(Kind::NwkFrameCounter);
         let nib = Key::single(Kind::Nib);
         s.store(nib, &[7; 100]).unwrap();
-        // 4-octet counters: 20 octets each, ~200 fit in a half.
+        // Repeated counter updates eventually require compaction.
         for i in 0..1000u32 {
             s.store(counter, &i.to_le_bytes()).unwrap();
         }
@@ -869,7 +1035,7 @@ mod tests {
         s.store(nib, &[1; 200]).unwrap();
         let counter = Key::single(Kind::NwkFrameCounter);
         let mut i = 0u32;
-        while s.free() >= 20 {
+        while s.free() >= 28 {
             s.store(counter, &i.to_le_bytes()).unwrap();
             i += 1;
         }
@@ -891,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn a_torn_record_is_skipped() {
+    fn a_corrupt_committed_record_is_reported() {
         let mut s = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
         let nib = Key::single(Kind::Nib);
         s.store(nib, &[1, 2, 3, 4]).unwrap();
@@ -899,10 +1065,125 @@ mod tests {
         let at = (s.tail - 4) as usize;
         s.flash.cells[at] &= 0xf0;
         let mut buf = [0u8; 8];
-        assert_eq!(s.load(nib, &mut buf).unwrap(), None);
-        assert_eq!(s.stats.corrupt_records, 1, "the torn record is counted");
+        assert_eq!(s.load(nib, &mut buf), Err(StorageError::Corrupt));
+        assert_eq!(s.stats.corrupt_records, 1, "the corrupt record is counted");
         s.store(nib, &[5]).unwrap();
         assert_eq!(s.load(nib, &mut buf).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn replacements_survive_a_cut_at_every_program_word() {
+        for len in [4usize, 301] {
+            let key = Key::single(Kind::NwkFrameCounter);
+            let old = vec![0x11; len];
+            let new = vec![0x33; len];
+            let mut original = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
+            original.store(key, &old).unwrap();
+            let image = original.flash;
+            let words = (20 + len).div_ceil(4) + 1;
+            for cut in 0..=words {
+                let mut store = NorFlashStore::new(image.clone(), 0, 2 * S).unwrap();
+                store.flash.word_fuel = Some(cut);
+                let result = store.store(key, &new);
+                store.flash.word_fuel = None;
+                let mut reopened = NorFlashStore::new(store.flash, 0, 2 * S).unwrap();
+                let mut buf = vec![0; len];
+                assert_eq!(reopened.load(key, &mut buf).unwrap(), Some(len));
+                assert_eq!(buf, if result.is_ok() { &new } else { &old }.as_slice());
+                // A dirty tail is compacted instead of programming over it.
+                reopened.store(key, &new).unwrap();
+                assert_eq!(reopened.load(key, &mut buf).unwrap(), Some(len));
+                assert_eq!(buf, new);
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_survives_a_cut_at_every_program_word() {
+        let key = Key::single(Kind::NwkFrameCounter);
+        let nib = Key::single(Kind::Nib);
+        let mut original = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
+        original.store(nib, &[0x33; 200]).unwrap();
+        let mut bound = 0u32;
+        while original.free() >= 28 {
+            bound += 1024;
+            original.store(key, &bound.to_le_bytes()).unwrap();
+        }
+        let image = original.flash;
+        let next = bound + 1024;
+        // Two live records, the new half header and the appended counter.
+        for cut in 0..=80 {
+            let mut store = NorFlashStore::new(image.clone(), 0, 2 * S).unwrap();
+            store.flash.word_fuel = Some(cut);
+            let result = store.store(key, &next.to_le_bytes());
+            store.flash.word_fuel = None;
+            let mut reopened = NorFlashStore::new(store.flash, 0, 2 * S).unwrap();
+            let mut buf = [0u8; 200];
+            assert_eq!(reopened.load(nib, &mut buf).unwrap(), Some(200));
+            assert_eq!(buf, [0x33; 200]);
+            assert_eq!(reopened.load(key, &mut buf).unwrap(), Some(4));
+            let actual = u32::from_le_bytes(buf[..4].try_into().unwrap());
+            assert_eq!(actual, if result.is_ok() { next } else { bound });
+            reopened.store(key, &next.to_le_bytes()).unwrap();
+        }
+    }
+
+    #[test]
+    fn corrupt_latest_counter_never_falls_back_or_disappears_in_compaction() {
+        let key = Key::single(Kind::NwkFrameCounter);
+        let mut store = NorFlashStore::new(flash(), 0, 2 * S).unwrap();
+        store.store(key, &1024u32.to_le_bytes()).unwrap();
+        store.store(key, &3072u32.to_le_bytes()).unwrap();
+        let at = store.tail as usize - 4;
+        store.flash.cells[at + 1] &= 0xf7;
+        let mut reopened = NorFlashStore::new(store.flash, 0, 2 * S).unwrap();
+        assert_eq!(reopened.load(key, &mut [0; 4]), Err(StorageError::Corrupt));
+        assert_eq!(reopened.compact(), Err(StorageError::Corrupt));
+    }
+
+    #[test]
+    fn legacy_records_are_read_and_migrated_before_a_new_append() {
+        let mut image = flash();
+        image.cells[..4].copy_from_slice(&LEGACY_MAGIC);
+        image.cells[4..8].copy_from_slice(&1u32.to_le_bytes());
+        let key = Key::single(Kind::NwkFrameCounter);
+        let data = 2048u32.to_le_bytes();
+        image.cells[16..32].copy_from_slice(&record_header(
+            key.kind.code(),
+            FLAG_SET,
+            0,
+            4,
+            crc16(&data),
+        ));
+        image.cells[32..36].copy_from_slice(&data);
+        let mut store = NorFlashStore::new(image, 0, 2 * S).unwrap();
+        let mut buf = [0; 4];
+        assert_eq!(store.load(key, &mut buf).unwrap(), Some(4));
+        assert_eq!(buf, data);
+        store.store(Key::single(Kind::Nib), &[7]).unwrap();
+        let mut store = NorFlashStore::new(store.flash, 0, 2 * S).unwrap();
+        assert_eq!(store.load(key, &mut buf).unwrap(), Some(4));
+        assert_eq!(buf, data);
+        assert!(store.format == Format::Committed);
+    }
+
+    #[test]
+    fn invalid_regions_are_rejected_before_any_flash_access() {
+        let image = flash();
+        assert!(matches!(
+            NorFlashStore::new(image.clone(), 7 * S, 2 * S),
+            Err(StorageError::Io)
+        ));
+        assert!(matches!(
+            NorFlashStore::new(image, u32::MAX - S + 1, 2 * S),
+            Err(StorageError::Io)
+        ));
+        let mut image = flash();
+        image.cells[0] = 0;
+        assert!(matches!(
+            NorFlashStore::new(image, 0, 2 * S),
+            Err(StorageError::Corrupt)
+        ));
     }
 
     #[test]
