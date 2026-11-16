@@ -136,7 +136,7 @@ impl<const N: usize> PriceClient<N> {
         stack: &mut Stack<C, R, S>,
         server: Destination,
     ) -> bool {
-        let rx_on_when_idle = !stack.config.sleepy;
+        let rx_on_when_idle = !stack.config().sleepy;
         send(
             stack,
             self.endpoint,

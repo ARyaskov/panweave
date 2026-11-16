@@ -404,7 +404,7 @@ impl<HS: Storage> Hub<HS> {
         Some(match request {
             Request::GetBootReport => {
                 let mut b = self.boot.clone();
-                b.ieee = stack.config.ieee.0;
+                b.ieee = stack.config().ieee.0;
                 b.registry_persistent = self.config.persistent;
                 b.network = self.network_restore;
                 Ok(Response::BootReport(b))

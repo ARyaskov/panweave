@@ -499,7 +499,7 @@ impl<HS: Storage> Hub<HS> {
     /// network is formed or resumed.
     pub fn attach<C: BlockCipher, R: CryptoRng, S: Storage>(&mut self, stack: &mut Stack<C, R, S>) {
         stack.zdo.response_timeout = self.config.response_timeout;
-        stack.config.trust_center_policy.allow_joins = false;
+        stack.trust_center_policy_mut().allow_joins = false;
         #[cfg(feature = "green-power")]
         Self::attach_green_power(stack);
         self.now = stack.now();
@@ -1497,7 +1497,7 @@ impl<HS: Storage> Hub<HS> {
         }
         if self.joins_until.is_some_and(|t| now.has_reached(t)) {
             self.joins_until = None;
-            stack.config.trust_center_policy.allow_joins = false;
+            stack.trust_center_policy_mut().allow_joins = false;
             self.log(DiagRecord::new(
                 Category::Commissioning,
                 Severity::Info,
@@ -1840,7 +1840,7 @@ impl<HS: Storage> Hub<HS> {
             src_endpoint: Endpoint(endpoint),
             cluster: ClusterId(cluster_id),
             destination: BindingDestination::Unicast {
-                address: stack.config.ieee,
+                address: stack.config().ieee,
                 endpoint: self.config.endpoint,
             },
         };
@@ -2034,7 +2034,7 @@ impl<HS: Storage> Hub<HS> {
         if seconds == 0 {
             self.permit_until = None;
             self.joins_until = None;
-            stack.config.trust_center_policy.allow_joins = false;
+            stack.trust_center_policy_mut().allow_joins = false;
             self.log(DiagRecord::new(
                 Category::Commissioning,
                 Severity::Info,
@@ -2053,7 +2053,7 @@ impl<HS: Storage> Hub<HS> {
             let until = self.now.saturating_add(window);
             self.permit_until = Some(until);
             self.joins_until = Some(until.saturating_add(self.config.join_grace));
-            stack.config.trust_center_policy.allow_joins = true;
+            stack.trust_center_policy_mut().allow_joins = true;
         }
         self.emit(Event::PermitJoinChanged { seconds });
         Ok(())
@@ -2103,7 +2103,7 @@ impl<HS: Storage> Hub<HS> {
                         .unwrap_or(&[]),
                 )
                 .unwrap_or_default(),
-                ieee: stack.config.ieee.0,
+                ieee: stack.config().ieee.0,
                 max_devices: u8::try_from(MAX_DEVICES).unwrap_or(u8::MAX),
                 uptime_s: self.uptime_s(),
                 persistent: self.config.persistent,

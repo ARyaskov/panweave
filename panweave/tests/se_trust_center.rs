@@ -110,7 +110,7 @@ fn node(cfg: StackConfig, seed: u64, clients: &[panweave::types::ClusterId]) -> 
         MemoryStorage::new(),
     );
     se::apply_profile_to_stack(&mut n);
-    let (desc, ep) = if n.config.role == LogicalDeviceType::Coordinator {
+    let (desc, ep) = if n.config().role == LogicalDeviceType::Coordinator {
         se::energy_service_interface(EP).unwrap()
     } else {
         se::in_home_display(EP, clients).unwrap()

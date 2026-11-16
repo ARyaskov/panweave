@@ -1144,8 +1144,8 @@ pub struct Stack<
     pub zcl: ProfileZcl<P, E, CL, A>,
     /// Storage backend.
     pub storage: S,
-    /// Configuration.
-    pub config: StackConfig,
+    /// Effective settings; startup identity is read through `config()`.
+    pub(crate) config: StackConfig,
     pub(crate) now: Instant,
     pub(crate) events: DequeOf<StackEvent, P::Events>,
     pub(crate) mac_handles: VecOf<(TxHandle, TxHandle), P::Handles>,

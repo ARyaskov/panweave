@@ -14,7 +14,7 @@
 
 use panweave_aps::Destination;
 use panweave_mac::service::MacServiceConfig;
-use panweave_runtime::{Authorization, JoinMode, StackConfig, StackEvent};
+use panweave_runtime::{Authorization, JoinMode, PollingPolicy, StackConfig, StackEvent};
 use panweave_security::material::LinkKeyKind;
 use panweave_sim::{OnOffApp, SimStack, Simulator};
 use panweave_storage::MemoryStorage;
@@ -270,8 +270,14 @@ fn an_originator_that_cannot_be_resolved_is_refused() {
     assert!(sim.run_until(Duration::from_secs(60), |x| authorized(x, c, CHILD)));
     sim.run_for(Duration::from_secs(10));
     // From now on it polls every two minutes.
-    sim.stack(d).config.poll_interval = Duration::from_secs(120);
-    sim.stack(d).config.fast_polls = 0;
+    let fast_interval = sim.stack(d).polling_policy().fast_interval;
+    sim.stack(d)
+        .set_polling_policy(PollingPolicy {
+            interval: Duration::from_secs(120),
+            fast_interval,
+            fast_polls: 0,
+        })
+        .unwrap();
     sim.run_for(Duration::from_secs(3));
     let short = sim.stack(d).short_address();
     sim.stack(c).nwk.address_map.remove_short(short);

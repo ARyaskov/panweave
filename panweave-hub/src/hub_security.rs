@@ -224,7 +224,7 @@ impl<HS: Storage> Hub<HS> {
         &self,
         stack: &Stack<C, R, S>,
     ) -> SecurityStatus {
-        let policy = &stack.config.trust_center_policy;
+        let policy = &stack.config().trust_center_policy;
         let mut s = SecurityStatus {
             require_key_exchange: policy.require_key_exchange,
             node_join_timeout_s: policy.node_join_timeout_s,

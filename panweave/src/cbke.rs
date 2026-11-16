@@ -121,7 +121,7 @@ impl<E: Ecmqv, I: IssuerPolicy> CbkeDriver<E, I> {
             return Err(CbkeError::Busy);
         }
         let ecmqv = self.ecmqv.take().ok_or(CbkeError::Busy)?;
-        let machine = Initiator::new(ecmqv, stack.config.ieee, partner);
+        let machine = Initiator::new(ecmqv, stack.config().ieee, partner);
         let mut buf = [0u8; 96];
         let Some(n) = machine.initiate(self.timing).encode(&mut buf) else {
             self.ecmqv = Some(machine.into_ecmqv());
@@ -157,7 +157,7 @@ impl<E: Ecmqv, I: IssuerPolicy> CbkeDriver<E, I> {
     ) -> Option<CbkeOutcome> {
         match event {
             StackEvent::Joined { rejoin: false, .. } if self.auto => {
-                if stack.config.role != LogicalDeviceType::Coordinator
+                if stack.config().role != LogicalDeviceType::Coordinator
                     && !stack.aps.aib.is_distributed()
                 {
                     let tc = stack.aps.aib.trust_center_address;
@@ -475,7 +475,7 @@ impl<E: Ecmqv, I: IssuerPolicy> CbkeDriver<E, I> {
                 );
                 return None;
             };
-            let mut machine = Responder::new(ecmqv, stack.config.ieee, partner);
+            let mut machine = Responder::new(ecmqv, stack.config().ieee, partner);
             match machine.on_initiate(&req, &self.issuers, self.timing) {
                 Ok(rsp) => {
                     let mut buf = [0u8; 96];

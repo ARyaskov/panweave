@@ -31,6 +31,7 @@ extern crate alloc;
 pub mod agility;
 pub mod authorization;
 mod bdb;
+mod configuration;
 mod context;
 mod dlk;
 pub mod fragment_cache;
@@ -49,6 +50,7 @@ pub mod swap_out;
 pub mod touchlink;
 
 pub use authorization::{Authorization, DeniedFrames, DenyReason};
+pub use configuration::{ConfigurationError, PollingPolicy};
 pub use persist::{RestoreDetail, Restored};
 pub use profile::{FullStack, SleepySensor, StackProfile};
 pub use provision::{AdoptParams, FormationParams};

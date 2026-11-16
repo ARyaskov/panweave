@@ -145,7 +145,7 @@ fn builders_form_join_and_bind() {
     let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
         .identity(b"Panweave", b"Bridge")
         .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     let (d, ep) = endpoints::on_off_light(Endpoint(1)).unwrap();
     coord.add_endpoint(d, ep).unwrap();
     let c = w.add(coord);

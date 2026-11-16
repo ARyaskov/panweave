@@ -217,7 +217,9 @@ impl Builder {
         self
     }
 
-    /// Direct access to the stack configuration.
+    /// Startup configuration before building the node. After construction,
+    /// [`Stack::config`] is read-only; use its runtime policy methods for
+    /// settings that may change while the node operates.
     pub fn stack_config(&mut self) -> &mut StackConfig {
         &mut self.stack
     }
@@ -384,7 +386,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         self.direct_power_up();
         if restored == Restored::OnNetwork {
             self.bdb.set_on_network(true);
-            if self.stack.config.role == LogicalDeviceType::EndDevice {
+            if self.stack.config().role == LogicalDeviceType::EndDevice {
                 let _ = self.bdb.rejoin(&mut self.stack, false);
             } else {
                 let _ = self.stack.resume();

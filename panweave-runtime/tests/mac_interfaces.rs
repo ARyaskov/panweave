@@ -106,8 +106,10 @@ fn interface_table_confines_channels_and_gates_routers() {
             )
             .is_err()
     );
-    sim.stack(c).config.channels = ChannelMask::ALL_2_4GHZ;
-    sim.stack(c).form_network().unwrap();
+    let scan_duration = sim.stack(c).config().scan_duration;
+    sim.stack(c)
+        .form_network_on(ChannelMask::ALL_2_4GHZ, scan_duration)
+        .unwrap();
     assert!(sim.run_until(Duration::from_secs(30), |x| {
         x.events(c)
             .iter()

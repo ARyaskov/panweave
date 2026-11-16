@@ -161,7 +161,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Trust Center configures it from there. Fails when the endpoint is
     /// unknown or full.
     pub fn enable_direct_configuration(&mut self, endpoint: Endpoint) -> Result<(), EndpointError> {
-        let centralized = !self.stack.config.distributed;
+        let centralized = !self.stack.config().distributed;
         let c = direct_configuration::server(
             self.direct.interface_enabled,
             self.direct.anonymous_join_timeout,
@@ -263,7 +263,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// `DirectState::trust_center_aware`. Distributed networks are
     /// aware by definition.
     pub fn check_direct_aware(&mut self) -> bool {
-        if self.stack.config.distributed {
+        if self.stack.config().distributed {
             self.direct.trust_center_aware = Some(true);
             return true;
         }
@@ -313,7 +313,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         if let Some(k) = &self.direct.admin_key {
             return Some(k.clone());
         }
-        if self.stack.config.distributed || !self.stack.is_operating() {
+        if self.stack.config().distributed || !self.stack.is_operating() {
             return None;
         }
         let tc = self.stack.aps.aib.trust_center_address;
@@ -689,7 +689,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         if !session.allows(Direction::ToZvd, nwk_command, from_tc, aps) {
             return false;
         }
-        if !from_tc || nwk_command || legacy::aux_source(aps) == Some(self.stack.config.ieee) {
+        if !from_tc || nwk_command || legacy::aux_source(aps) == Some(self.stack.config().ieee) {
             // Not the Trust Center's (the ZDD's own aliased Transport
             // Keys carry its address in the auxiliary header).
             return true;
@@ -926,7 +926,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         partner: Option<ExtendedAddress>,
         lk: &panweave_direct::commissioning::LinkKey,
     ) {
-        let partner = partner.unwrap_or(self.stack.config.preconfigured_link_key.0);
+        let partner = partner.unwrap_or(self.stack.config().preconfigured_link_key.0);
         let kind = if lk.unique {
             LinkKeyKind::Unique
         } else {
@@ -953,7 +953,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
             pan_id: stack.pan_id(),
             nwk_address: stack.short_address(),
             trust_center: stack.trust_center_address(),
-            device_type: match stack.config.role {
+            device_type: match stack.config().role {
                 LogicalDeviceType::Coordinator => DeviceType::Coordinator,
                 LogicalDeviceType::Router => DeviceType::Router,
                 LogicalDeviceType::EndDevice => DeviceType::EndDevice,
@@ -965,15 +965,15 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
             status: NetworkStatus {
                 joined,
                 open: stack.permit_joining_active(),
-                centralized: !stack.config.distributed,
+                centralized: !stack.config().distributed,
             },
-            ieee: stack.config.ieee,
+            ieee: stack.config().ieee,
             network,
         }
     }
 
     fn can_be_coordinator(&self) -> bool {
-        self.stack.config.role == LogicalDeviceType::Coordinator
+        self.stack.config().role == LogicalDeviceType::Coordinator
     }
 
     fn form_network(&mut self, p: &FormNetwork) -> u8 {
@@ -1009,9 +1009,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
             self.install_direct_link_key(p.trust_center, lk);
         }
         self.store_admin_key(p.admin_key.as_ref());
-        let channels = p.channels.unwrap_or(self.stack.config.channels);
-        let duration = self.stack.config.scan_duration;
-        let attempts = self.stack.config.zdo.scan_attempts;
+        let channels = p.channels.unwrap_or(self.stack.config().channels);
+        let duration = self.stack.config().scan_duration;
+        let attempts = self.stack.config().zdo.scan_attempts;
         let result = match p.method {
             JoiningMethod::Association => {
                 if let Some(e) = p.extended_pan_id {
@@ -1061,7 +1061,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
                 // updated once on the network, retried while the Trust
                 // Center is out of reach, never a reason to leave.
                 if r.is_ok()
-                    && !self.stack.config.distributed
+                    && !self.stack.config().distributed
                     && self.stack.trust_center_link_key_is_provisional()
                 {
                     self.direct_start_tclk_update();
@@ -1094,7 +1094,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn permit_joining(&mut self, seconds: u8) -> u8 {
-        if self.stack.config.role == LogicalDeviceType::EndDevice {
+        if self.stack.config().role == LogicalDeviceType::EndDevice {
             return STATUS_FAILURE;
         }
         let r = self.stack.permit_join_network(seconds);
@@ -1124,9 +1124,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
         match cmd {
             ManageJoiners::DropAll => {
                 let mut partners: heapless::Vec<ExtendedAddress, 32> = heapless::Vec::new();
-                for e in self.stack.aps.security.keys_mut().iter() {
+                for e in self.stack.aps.security.keys().iter() {
                     if e.attributes == KeyAttributes::ProvisionalKey
-                        && e.partner != self.stack.config.preconfigured_link_key.0
+                        && e.partner != self.stack.config().preconfigured_link_key.0
                         && partners.push(e.partner).is_err()
                     {
                         break;

@@ -209,7 +209,7 @@ fn end_device_and_coordinator_survive_reboots() {
     // The Table 2-24 startup attributes came back with the AIB: the
     // network to rejoin, the channel mask, not a designated coordinator.
     assert_eq!(fresh.aps.aib.use_extended_pan_id, epid);
-    assert_eq!(fresh.aps.aib.channel_mask, sim.stack(d).config.channels);
+    assert_eq!(fresh.aps.aib.channel_mask, sim.stack(d).config().channels);
     assert!(!fresh.aps.aib.designated_coordinator);
     let tclk = fresh.aps.security.entry(COORD_IEEE).unwrap();
     assert_eq!(tclk.attributes, KeyAttributes::VerifiedKey);

@@ -491,7 +491,7 @@ impl<HS: Storage> Hub<HS> {
         i: usize,
     ) -> Step {
         let now = self.now;
-        let hub = stack.config.ieee.0;
+        let hub = stack.config().ieee.0;
         let Some(d) = self.registry.at(i) else {
             return Step::Busy;
         };

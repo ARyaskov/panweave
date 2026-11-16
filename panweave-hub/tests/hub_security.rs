@@ -37,7 +37,7 @@ const PRESHARED: Key128 = Key128::from_bytes([0xA5; 16]);
 /// pre-shared-key device must run the link-key exchange.
 fn hub_network() -> (Simulator, usize) {
     let (mut sim, c) = network();
-    sim.stack(c).config.trust_center_policy.dlk_enabled = false;
+    sim.stack(c).trust_center_policy_mut().dlk_enabled = false;
     (sim, c)
 }
 

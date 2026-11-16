@@ -50,7 +50,7 @@ pub fn apply_profile_to_stack<C: BlockCipher, R: CryptoRng, S: Storage>(
     stack.aps.aib.interframe_delay_ms =
         u8::try_from(p.interframe_delay.as_millis()).unwrap_or(u8::MAX);
     stack.zdo.node.max_incoming_transfer_size = p.max_incoming_transfer_size;
-    if stack.config.role == panweave_types::LogicalDeviceType::Coordinator {
+    if stack.config().role == panweave_types::LogicalDeviceType::Coordinator {
         stack.nwk.nib.is_concentrator = true;
         stack.nwk.nib.concentrator_radius = p.concentrator_radius;
     }

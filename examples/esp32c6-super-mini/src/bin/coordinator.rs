@@ -45,7 +45,7 @@ fn main() -> ! {
         .build::<SoftwareAes, _, _>(board.rng, board.storage);
     // Any device may join while the network is open; production
     // deployments restrict this (`TrustCenterPolicy`, install codes).
-    node.stack.config.trust_center_policy.allow_joins = true;
+    node.stack.trust_center_policy_mut().allow_joins = true;
     let (descriptor, endpoint) = endpoints::on_off_light(EP).expect("endpoint");
     node.add_endpoint(descriptor, endpoint).expect("endpoint");
     let mut runner = Runner::new(board.radio);

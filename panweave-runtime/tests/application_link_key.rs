@@ -118,7 +118,7 @@ fn secured_read_answered(events: &[StackEvent]) -> bool {
 fn network(policy: AppKeyRequestPolicy) -> (Simulator, usize, usize, usize) {
     let mut sim = Simulator::new();
     let mut coord = node(LogicalDeviceType::Coordinator, COORD_IEEE, 1);
-    coord.config.trust_center_policy.app_key_requests = policy;
+    coord.trust_center_policy_mut().app_key_requests = policy;
     let c = sim.add_stack("coord", coord, Box::new(OnOffApp::default()));
     let a = sim.add_stack(
         "a",

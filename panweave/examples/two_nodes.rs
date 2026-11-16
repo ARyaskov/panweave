@@ -129,7 +129,7 @@ fn main() {
     };
     let mut coord = Coordinator::new(ExtendedAddress(0x00EE_0000_0000_0001))
         .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::<64, 128>::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     let (d, ep) = endpoints::on_off_light(Endpoint(1)).expect("light endpoint");
     coord.add_endpoint(d, ep).expect("endpoint");
     let c = w.add(coord);

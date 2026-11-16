@@ -103,7 +103,7 @@ coord: {:?}",
     assert_eq!(e.attributes, KeyAttributes::VerifiedKey);
     assert_eq!(e.negotiation_state, KeyNegotiationState::Complete);
     sim.run_for(Duration::from_secs(3));
-    sim.stack(c).config.trust_center_policy.install_codes = policy;
+    sim.stack(c).trust_center_policy_mut().install_codes = policy;
     sim.stack(c).permit_join_network(180).unwrap();
     sim.run_for(Duration::from_secs(2));
     sim.take_events(c);
@@ -422,7 +422,7 @@ fn rebooted_trust_center_synchronizes_frame_counters() {
 #[test]
 fn interview_holds_the_network_key_until_admitted() {
     let (mut sim, c, r) = network(InstallCodePolicy::OptionalWithAnonymousNegotiation);
-    sim.stack(c).config.trust_center_policy.interview_joiners = true;
+    sim.stack(c).trust_center_policy_mut().interview_joiners = true;
     let j = sim.add_stack(
         "joiner",
         stack(StackConfig::new(LogicalDeviceType::EndDevice, JOINER), 3),
@@ -452,7 +452,7 @@ fn interview_holds_the_network_key_until_admitted() {
 #[test]
 fn interview_rejection_removes_the_joiner() {
     let (mut sim, c, _r) = network(InstallCodePolicy::OptionalWithAnonymousNegotiation);
-    sim.stack(c).config.trust_center_policy.interview_joiners = true;
+    sim.stack(c).trust_center_policy_mut().interview_joiners = true;
     let j = sim.add_stack(
         "joiner",
         stack(StackConfig::new(LogicalDeviceType::EndDevice, JOINER), 3),

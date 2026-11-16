@@ -30,7 +30,7 @@ use panweave_zcl::clusters::ias_zone::EnrollMode;
 /// `hub_security.rs` here.
 fn engine_network() -> (Simulator, usize) {
     let (mut sim, c) = network();
-    sim.stack(c).config.trust_center_policy.require_key_exchange = false;
+    sim.stack(c).trust_center_policy_mut().require_key_exchange = false;
     (sim, c)
 }
 
@@ -336,7 +336,7 @@ fn removal_from_the_registry_and_from_the_network() {
 #[test]
 fn the_permit_join_window_is_bounded_and_closes_the_trust_center() {
     let (mut sim, c) = engine_network();
-    assert!(sim.stack(c).config.trust_center_policy.allow_joins);
+    assert!(sim.stack(c).config().trust_center_policy.allow_joins);
     assert_eq!(
         request(&mut sim, c, &Request::PermitJoin { seconds: 0 }),
         Response::Error(ErrorCode::InvalidArgument)
@@ -346,7 +346,7 @@ fn the_permit_join_window_is_bounded_and_closes_the_trust_center() {
         Response::Error(ErrorCode::InvalidArgument)
     );
     assert_eq!(request(&mut sim, c, &Request::CloseNetwork), Response::Done);
-    assert!(!sim.stack(c).config.trust_center_policy.allow_joins);
+    assert!(!sim.stack(c).config().trust_center_policy.allow_joins);
     assert_eq!(
         request(&mut sim, c, &Request::PermitJoin { seconds: 20 }),
         Response::Done
@@ -359,9 +359,9 @@ fn the_permit_join_window_is_bounded_and_closes_the_trust_center() {
     sim.run_for(Duration::from_secs(21));
     assert!(hub_events(&sim, c).contains(&Event::PermitJoinChanged { seconds: 0 }));
     // New devices are still admitted for the grace period, then not.
-    assert!(sim.stack(c).config.trust_center_policy.allow_joins);
+    assert!(sim.stack(c).config().trust_center_policy.allow_joins);
     sim.run_for(Duration::from_secs(31));
-    assert!(!sim.stack(c).config.trust_center_policy.allow_joins);
+    assert!(!sim.stack(c).config().trust_center_policy.allow_joins);
 }
 
 #[test]

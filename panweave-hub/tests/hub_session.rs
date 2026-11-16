@@ -376,7 +376,7 @@ fn a_host_that_stops_reading_loses_events_but_not_responses() {
     // The announces below are injected for devices the Trust Center never
     // keyed: with the key exchange required they would (rightly) be
     // ignored, and produce no events to fill the queue.
-    sim.stack(c).config.trust_center_policy.require_key_exchange = false;
+    sim.stack(c).trust_center_policy_mut().require_key_exchange = false;
     let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
     while app.hub.next_event().is_some() {}
     // A small transmit queue that nobody drains.

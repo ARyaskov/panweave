@@ -159,7 +159,7 @@ fn zdd_form_open_join_adopt_and_leave() {
 
     let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
         .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     let c = w.add(coord);
 
     // Form Network over a provisioning session: PAN ID, channel and
@@ -345,7 +345,7 @@ fn zdd_keeps_past_network_keys_for_limited_authorization() {
     let old_key = Key128::from_bytes([0x5a; 16]);
     let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
         .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     let c = w.add(coord);
     w.nodes[c].0.form_network_with_key(old_key.clone()).unwrap();
     assert!(w.run_until(Duration::from_secs(30), |w| {
@@ -502,8 +502,8 @@ fn zvd_joins_and_talks_through_the_tunnel() {
     let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
     let mut coord = Coordinator::new(zdd_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
-    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_virtual_devices = true;
     let c = w.add(coord);
     let nwk_key = Key128::from_bytes([0x5a; 16]);
     w.nodes[c]
@@ -736,12 +736,8 @@ fn zvd_joins_a_distributed_network_through_the_tunnel() {
     let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0003);
     let mut router = Router::distributed(zdd_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(9), MemoryStorage::new());
-    router.stack.config.trust_center_policy.allow_joins = true;
-    router
-        .stack
-        .config
-        .trust_center_policy
-        .allow_virtual_devices = true;
+    router.stack.trust_center_policy_mut().allow_joins = true;
+    router.stack.trust_center_policy_mut().allow_virtual_devices = true;
     let r = w.add(router);
     w.nodes[r]
         .0
@@ -877,7 +873,7 @@ fn the_trust_center_configures_the_zdd_interface() {
     // client on an endpoint.
     let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
         .build::<SoftwareAes, _, _>(TestRng::seed(21), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     let (d, ep) = endpoints::device(
         Endpoint(1),
         panweave::types::DeviceId(0x0005),
@@ -1098,7 +1094,7 @@ fn an_out_of_band_join_updates_a_provisional_link_key_when_the_trust_center_answ
     // for the source of an APS-secured frame).
     let mut coord =
         Coordinator::new(tc).build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     coord.stack.install_link_key(
         ExtendedAddress(0x00DD_0000_0000_0003),
         Key128::WELL_KNOWN_GLOBAL_TCLK,
@@ -1254,7 +1250,7 @@ fn the_zvd_chooses_the_security_model_of_a_formed_network() {
     let info = rep.network.unwrap();
     assert_eq!(info.trust_center, ExtendedAddress::BROADCAST);
     assert_ne!(info.nwk_address, ShortAddress(0));
-    assert!(w.nodes[c].0.stack.config.distributed);
+    assert!(w.nodes[c].0.stack.config().distributed);
     // No admin access without a provisioned Admin key on a distributed
     // network (§7.7.2.7.1).
     assert_eq!(
@@ -1583,8 +1579,8 @@ fn a_zvd_rejoins_through_the_tunnel() {
     let zdd_ieee = ExtendedAddress(0x00DD_0000_0000_0002);
     let mut coord = Coordinator::new(zdd_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
-    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_virtual_devices = true;
     let c = w.add(coord);
     w.nodes[c]
         .0
@@ -1823,15 +1819,15 @@ fn a_zdd_on_a_legacy_network_authorizes_the_zvd_itself() {
     let nwk_key = Key128::from_bytes([0x5a; 16]);
     // A Trust Center from before Zigbee Direct: no Configuration client,
     // network keys for everyone.
-    let mut coord = Coordinator::new(tc_ieee)
-        .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    let mut builder = Coordinator::new(tc_ieee);
+    builder.stack_config().zigbee_direct_aware = false;
+    let mut coord = builder.build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     // The scripted ZVD below advances the clock 3 s per tunnelled frame,
     // so its Request Key comes later than the BDB default 15 s
     // key-exchange window; the window itself is tested in
     // panweave-runtime/tests/trust_center_policy.rs.
-    coord.stack.config.trust_center_policy.node_join_timeout_s = 120;
-    coord.stack.config.zigbee_direct_aware = false;
+    coord.stack.trust_center_policy_mut().node_join_timeout_s = 120;
     let c = w.add(coord);
     w.nodes[c]
         .0
@@ -2278,7 +2274,7 @@ fn the_zdd_security_state_follows_the_network_and_the_sessions() {
     let zvd = ExtendedAddress(0x00AA_0000_0000_0001);
     let mut coord = Coordinator::new(ExtendedAddress(0x00DD_0000_0000_0001))
         .build::<SoftwareAes, _, _>(TestRng::seed(1), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
     coord.initialize().unwrap();
     let c = w.add(coord);
     w.settle();
@@ -2417,8 +2413,8 @@ fn a_panweave_stack_joins_as_a_virtual_device_through_the_tunnel() {
     let zvd_ieee = ExtendedAddress(0x00AD_0000_0000_0009);
     let mut coord = Coordinator::new(zdd_ieee)
         .build::<SoftwareAes, _, _>(TestRng::seed(7), MemoryStorage::new());
-    coord.stack.config.trust_center_policy.allow_joins = true;
-    coord.stack.config.trust_center_policy.allow_virtual_devices = true;
+    coord.stack.trust_center_policy_mut().allow_joins = true;
+    coord.stack.trust_center_policy_mut().allow_virtual_devices = true;
     let c = w.add(coord);
     w.nodes[c]
         .0

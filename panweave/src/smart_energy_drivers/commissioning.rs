@@ -331,7 +331,7 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
                         src_endpoint: target.endpoint,
                         cluster: cluster_id,
                         destination: panweave_aps::tables::BindingDestination::Unicast {
-                            address: stack.config.ieee,
+                            address: stack.config().ieee,
                             endpoint: self.endpoint,
                         },
                     };
@@ -644,7 +644,7 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
             }
             State::KeyEstablishmentAt(t) if now.has_reached(t) => {
                 self.state = State::KeyEstablishment;
-                if stack.config.role == LogicalDeviceType::Coordinator
+                if stack.config().role == LogicalDeviceType::Coordinator
                     || stack.aps.aib.is_distributed()
                 {
                     // Nothing to establish with: the device is the Trust
@@ -652,7 +652,7 @@ impl<E: Ecmqv, I: IssuerPolicy> SeCommissioning<E, I> {
                     return self.on_cbke(
                         stack,
                         CbkeOutcome::Established {
-                            partner: stack.config.ieee,
+                            partner: stack.config().ieee,
                         },
                     );
                 }

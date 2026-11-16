@@ -74,6 +74,20 @@ conventions every crate follows.
 
 ## Layer interfaces
 
+`StackConfig` and `Builder::stack_config` configure identity, role and
+capabilities before construction. A running stack exposes these settings
+through `Stack::config()` as a shared reference. Trust Center admission
+policy remains mutable through `trust_center_policy_mut`; polling changes
+use `set_polling_policy`, which updates the scheduled poll as well as the
+configured intervals. Per-operation channel overrides use the existing
+formation and join methods instead of mutating startup settings.
+
+The public MAC, NWK, APS, ZDO and ZCL layer fields remain available to
+advanced adapters. Direct layer mutation is an explicit escape hatch:
+callers own the associated cross-layer invariants and required
+synchronization (for example, `sync_joining_filter`). Ordinary application
+code should prefer stack operations over changing layer state directly.
+
 Every protocol layer is a **sans-I/O state machine**:
 
 * it consumes *inputs* (`handle_frame`, `handle_timer`, `request(...)`),
