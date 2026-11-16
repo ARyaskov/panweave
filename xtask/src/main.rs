@@ -11,6 +11,7 @@
 //!   conformance and codegen checks).
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -551,6 +552,16 @@ fn gate(require_no_std: bool) -> Result<(), String> {
     codegen(true)
 }
 
+fn probe_target_dir(probe: &Path, override_dir: Option<&OsStr>) -> PathBuf {
+    let directory = override_dir.map_or_else(|| Path::new("target"), Path::new);
+    if directory.is_absolute() {
+        directory.to_path_buf()
+    } else {
+        // Cargo resolves CARGO_TARGET_DIR relative to its working directory.
+        probe.join(directory)
+    }
+}
+
 /// Panweave Lite on the EFR32MG22: the link build of `examples/lite-probe`
 /// (which fails when the static RAM leaves less than the stack reserve in
 /// 32 KiB) and the footprint regression check against
@@ -568,13 +579,14 @@ fn lite_footprint(root: &Path) -> Result<(), String> {
         return Ok(());
     }
     let probe = root.join("examples").join("lite-probe");
-    let elf_dir = probe.join("target").join(target).join("release");
+    let target_dir = probe_target_dir(&probe, std::env::var_os("CARGO_TARGET_DIR").as_deref());
+    let elf_dir = target_dir.join(target).join("release");
     run(
         &probe,
         "cargo",
         &["build", "--release", "--features", "dlk"],
     )?;
-    let link = probe.join("target").join("efr32-dlk.elf");
+    let link = target_dir.join("efr32-dlk.elf");
     fs::copy(elf_dir.join("panweave-lite-probe"), &link).map_err(|e| e.to_string())?;
     let mut args = vec![
         root.join("scripts")
@@ -595,7 +607,7 @@ fn lite_footprint(root: &Path) -> Result<(), String> {
             "cargo",
             &["build", "--release", "--features", "qemu,dlk"],
         )?;
-        let log = probe.join("target").join("qemu-dlk.log");
+        let log = target_dir.join("qemu-dlk.log");
         let out = Command::new("qemu-system-arm")
             .args([
                 "-M",
@@ -612,10 +624,10 @@ fn lite_footprint(root: &Path) -> Result<(), String> {
             .map_err(|e| format!("qemu: {e}"))?;
         fs::write(&log, &out.stdout).map_err(|e| e.to_string())?;
         if !out.status.success() {
-            return Err(
-                "the Lite QEMU scenario failed (see examples/lite-probe/target/qemu-dlk.log)"
-                    .into(),
-            );
+            return Err(format!(
+                "the Lite QEMU scenario failed (see {})",
+                log.display()
+            ));
         }
         args.push("--qemu".into());
         args.push(log.display().to_string());
@@ -841,5 +853,26 @@ mod tests {
             &mut names,
         );
         assert_eq!(names, ["package::property", "property"]);
+    }
+
+    #[test]
+    fn probe_artifacts_use_the_probes_default_or_relative_target_directory() {
+        let probe = workspace_root().join("examples").join("lite-probe");
+        assert_eq!(probe_target_dir(&probe, None), probe.join("target"));
+        assert_eq!(
+            probe_target_dir(&probe, Some(OsStr::new("../shared-build"))),
+            probe.join("../shared-build")
+        );
+    }
+
+    #[test]
+    fn an_absolute_external_target_directory_is_not_rebased_under_the_probe() {
+        let probe = workspace_root().join("examples").join("lite-probe");
+        let external = std::env::temp_dir().join("panweave-probe-output");
+        assert!(external.is_absolute());
+        assert_eq!(
+            probe_target_dir(&probe, Some(external.as_os_str())),
+            external
+        );
     }
 }
