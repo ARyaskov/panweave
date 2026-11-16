@@ -1001,7 +1001,28 @@ impl<C: BlockCipher, D: ApsDims> Aps<C, D> {
                             | KeyType::BasicAuthorization
                     )
                 });
-        if !authorization_key && !self.command_allowed(id, &ctx, &sec, view) {
+        // A sleepy child's authenticated parent forwards the Trust
+        // Center's broadcast update as a NWK-secured unicast (§4.4.2.3).
+        // Only that exact network-key descriptor bypasses the ordinary
+        // Trust Center origin check; other commands retain their policy.
+        let parent_network_key = id == ApsCommandId::TransportKey
+            && self.state == DeviceState::JoinedAuthorized
+            && !self.config.is_trust_center
+            && !self.aib.is_distributed()
+            && ctx.nwk_secured
+            && ctx.dst == self.local_short
+            && sec.partner.is_none()
+            && view
+                .authenticated_parent()
+                .is_some_and(|(short, ieee)| ctx.src == short && ctx.src_ieee == Some(ieee))
+            && matches!(
+                ApsCommand::decode_exact(buf.get(start..end)?),
+                Ok(ApsCommand::TransportKey(TransportKey {
+                    descriptor: KeyDescriptor::NetworkKey { destination, source, .. },
+                })) if destination == self.local_ieee && source == self.aib.trust_center_address
+            );
+        if !authorization_key && !parent_network_key && !self.command_allowed(id, &ctx, &sec, view)
+        {
             self.stats.policy_dropped = self.stats.policy_dropped.saturating_add(1);
             return None;
         }

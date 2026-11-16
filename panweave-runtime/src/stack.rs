@@ -6,7 +6,7 @@ use panweave_aps::layer::NwkView;
 use panweave_aps::layer::{Aps, ApsConfig, DeviceState, NwkHandle, RequestId};
 use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacService, MacServiceConfig, TxHandle};
-use panweave_nwk::layer::{Nwk, NwkConfig, TxId};
+use panweave_nwk::layer::{Nwk, NwkConfig, NwkDims, TxId};
 use panweave_nwk::nib::Nib;
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
@@ -865,6 +865,16 @@ pub enum StackEvent {
         /// The key now active.
         sequence: KeySequenceNumber,
     },
+    /// A sleepy child's network-key relay exhausted APS delivery attempts
+    /// or could not be submitted for a non-capacity reason.
+    NetworkKeyRelayFailed {
+        /// Child that did not receive the key.
+        ieee: ExtendedAddress,
+        /// Network-key sequence being relayed.
+        sequence: KeySequenceNumber,
+        /// Final APS outcome.
+        status: panweave_types::ApsStatus,
+    },
     /// A Link Power Delta command from `src` was processed (§3.4.13.7);
     /// `delta_db` is what it asked of this device, when listed. The
     /// MAC's Power Control Information Table has been adjusted.
@@ -1006,6 +1016,22 @@ pub(crate) struct PendingChild {
     pub initial_join: bool,
 }
 
+/// A bounded snapshot of the sleepy children awaiting a network-key relay.
+pub(crate) struct NetworkKeyRelays<P: StackProfile> {
+    pub key: Key128,
+    pub sequence: KeySequenceNumber,
+    pub trust_center: ExtendedAddress,
+    pub children: VecOf<NetworkKeyRelay, <P::Nwk as NwkDims>::Neighbors>,
+}
+
+/// One relay remains owned by the runtime until its APS confirmation.
+#[derive(Clone, Copy)]
+pub(crate) struct NetworkKeyRelay {
+    pub ieee: ExtendedAddress,
+    pub short: ShortAddress,
+    pub request: Option<RequestId>,
+}
+
 /// The [`Stack`] literal of [`Stack::new`] and [`Stack::unstarted`]: the
 /// layers as given, every other field empty. A tail expression in both,
 /// so that the value is built in the caller's return slot.
@@ -1037,6 +1063,7 @@ macro_rules! stack_literal {
             beacon_survey: None,
             swap_out_pending: false,
             key_update: None,
+            network_key_relays: None,
             factory_reset_pending: false,
             tclk_update: None,
             ota_discovery: None,
@@ -1139,6 +1166,8 @@ pub struct Stack<
     /// A network key update in progress on the Trust Center (§4.6.3.4):
     /// the alternate key's sequence number and when to switch to it.
     pub(crate) key_update: Option<(KeySequenceNumber, Instant)>,
+    /// Network-key fan-out paced by available APS transmission slots.
+    pub(crate) network_key_relays: Option<NetworkKeyRelays<P>>,
     /// A factory reset waits for the leave to complete before clearing
     /// persistent data (BDB 3.1 §13.2).
     pub(crate) factory_reset_pending: bool,

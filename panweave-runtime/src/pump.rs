@@ -144,6 +144,7 @@ impl<
             progressed |= self.pump_aps_events();
             progressed |= self.pump_zdo();
             progressed |= self.pump_zcl_actions();
+            progressed |= self.service_network_key_relays();
             if !progressed {
                 break;
             }
@@ -2112,6 +2113,7 @@ impl<
                     }
                 }
                 ApsEvent::CommandConfirm { id, status, .. } => {
+                    self.on_network_key_relay_confirm(id, status);
                     if let Some(i) = self.pending_children.iter().position(|p| p.request == id) {
                         let child = self.pending_children.swap_remove(i);
                         let stage = if status.is_success() {
@@ -2552,17 +2554,117 @@ impl<
         sequence: KeySequenceNumber,
         trust_center: ExtendedAddress,
     ) {
-        let children: Vec<(ExtendedAddress, ShortAddress), 16> = self
+        if self
+            .network_key_relays
+            .as_ref()
+            .is_some_and(|batch| batch.sequence == sequence)
+        {
+            return;
+        }
+        let mut batch = crate::stack::NetworkKeyRelays::<P> {
+            key: key.clone(),
+            sequence,
+            trust_center,
+            children: <<P::Nwk as panweave_nwk::layer::NwkDims>::Neighbors as Capacity>::vec(),
+        };
+        for child in self
             .nwk
             .neighbors
             .end_device_children()
             .filter(|n| !n.rx_on_when_idle)
-            .map(|n| (n.extended, n.short))
-            .collect();
-        for (ieee, short) in children {
-            let _ = self
-                .aps
-                .relay_network_key_to_child(ieee, short, key, sequence, trust_center);
+        {
+            // The snapshot has exactly the neighbor table's capacity.
+            let _ = batch.children.push(crate::stack::NetworkKeyRelay {
+                ieee: child.extended,
+                short: child.short,
+                request: None,
+            });
+        }
+        self.network_key_relays = (!batch.children.is_empty()).then_some(batch);
+    }
+
+    /// Submits as many relays as APS can retain, preserving the rest on Busy.
+    fn service_network_key_relays(&mut self) -> bool {
+        if self.phase != Phase::Operating {
+            self.network_key_relays = None;
+            return false;
+        }
+        let mut progressed = false;
+        while let Some(batch) = self.network_key_relays.as_ref() {
+            let Some((index, child)) = batch
+                .children
+                .iter()
+                .enumerate()
+                .find(|(_, child)| child.request.is_none())
+                .map(|(index, child)| (index, *child))
+            else {
+                break;
+            };
+            let sequence = batch.sequence;
+            let result = self.aps.relay_network_key_to_child(
+                child.ieee,
+                child.short,
+                &batch.key,
+                sequence,
+                batch.trust_center,
+            );
+            match result {
+                Ok(request) => {
+                    if let Some(entry) = self
+                        .network_key_relays
+                        .as_mut()
+                        .and_then(|batch| batch.children.get_mut(index))
+                    {
+                        entry.request = Some(request);
+                    }
+                    progressed = true;
+                }
+                Err(panweave_aps::layer::ApsError::Busy) => break,
+                Err(error) => {
+                    if let Some(batch) = self.network_key_relays.as_mut() {
+                        batch.children.swap_remove(index);
+                    }
+                    self.push_event(StackEvent::NetworkKeyRelayFailed {
+                        ieee: child.ieee,
+                        sequence,
+                        status: error.status(),
+                    });
+                    progressed = true;
+                }
+            }
+        }
+        if self
+            .network_key_relays
+            .as_ref()
+            .is_some_and(|batch| batch.children.is_empty())
+        {
+            self.network_key_relays = None;
+        }
+        progressed
+    }
+
+    fn on_network_key_relay_confirm(&mut self, request: RequestId, status: ApsStatus) {
+        let Some(batch) = self.network_key_relays.as_mut() else {
+            return;
+        };
+        let Some(index) = batch
+            .children
+            .iter()
+            .position(|child| child.request == Some(request))
+        else {
+            return;
+        };
+        let child = batch.children.swap_remove(index);
+        let sequence = batch.sequence;
+        if batch.children.is_empty() {
+            self.network_key_relays = None;
+        }
+        if !status.is_success() {
+            self.push_event(StackEvent::NetworkKeyRelayFailed {
+                ieee: child.ieee,
+                sequence,
+                status,
+            });
         }
     }
 

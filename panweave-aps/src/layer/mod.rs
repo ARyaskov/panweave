@@ -217,6 +217,12 @@ pub trait NwkView {
     /// Network address of `ieee` if it is a joined-but-unauthenticated
     /// child of this device (neighbor relationship 0x05).
     fn unauthenticated_child(&self, ieee: ExtendedAddress) -> Option<ShortAddress>;
+    /// The local end device's parent after NWK authentication. A parent
+    /// may forward Trust Center network-key updates to its sleepy child.
+    /// Views without this relationship information deny such forwarding.
+    fn authenticated_parent(&self) -> Option<(ShortAddress, ExtendedAddress)> {
+        None
+    }
 }
 
 /// Device security state as seen by the APS (§4.6.3.2).

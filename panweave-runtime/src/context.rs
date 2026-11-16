@@ -73,6 +73,13 @@ impl<C: BlockCipher, R: Rng, D: NwkDims> NwkView for AddrView<'_, C, R, D> {
             })
             .map(|n| n.short)
     }
+
+    fn authenticated_parent(&self) -> Option<(ShortAddress, ExtendedAddress)> {
+        if !self.0.nib.is_end_device() || !self.0.nib.authenticated {
+            return None;
+        }
+        self.0.neighbors.parent().map(|n| (n.short, n.extended))
+    }
 }
 
 /// The ZDO's view of the stack.
