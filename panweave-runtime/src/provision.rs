@@ -98,19 +98,19 @@ impl<
 
     /// Whether joining is currently permitted on this device.
     pub fn permit_joining_active(&self) -> bool {
-        self.nwk.permit_joining_active()
+        !self.recovery_needed() && self.nwk.permit_joining_active()
     }
 
     /// Whether the stack is idle (not on a network and not commissioning).
     pub fn is_idle(&self) -> bool {
-        self.phase == Phase::Idle
+        !self.recovery_needed() && self.phase == Phase::Idle
     }
 
     /// Forms a network from explicit parameters (ZD 1.1 §7.7.2.5.1).
     /// Centralized networks need the coordinator role, distributed ones
     /// a router configured for distributed security.
     pub fn form_network_params(&mut self, p: &FormationParams) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle || self.persistence_reset_pending() {
+        if self.recovery_needed() || self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         let key = match &p.key {
@@ -147,7 +147,7 @@ impl<
     /// rejoin to find a parent. Returns `InvalidRequest` when the stack
     /// is not idle.
     pub fn adopt_network(&mut self, p: &AdoptParams) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle || self.persistence_reset_pending() {
+        if self.recovery_needed() || self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         let short = match (self.config.role, p.network_address) {
@@ -190,7 +190,7 @@ impl<
     /// decides through the Trust Center Address TLV). Only while idle;
     /// centralized security needs a coordinator.
     pub fn set_security_model(&mut self, distributed: bool) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle {
+        if self.recovery_needed() || self.phase != Phase::Idle {
             return Err(NwkStatus::InvalidRequest);
         }
         let coordinator = self.config.role == LogicalDeviceType::Coordinator;
@@ -249,7 +249,8 @@ impl<
     /// `LinkKeyUpdateSkipped` or `LinkKeyUpdateFailed`. Only on an
     /// operating centralized network with no update in flight.
     pub fn update_trust_center_link_key(&mut self) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Operating
+        if self.recovery_needed()
+            || self.phase != Phase::Operating
             || self.aps.aib.is_distributed()
             || self.tclk_update.is_some()
         {
@@ -264,6 +265,9 @@ impl<
     /// Leaves the network, optionally taking the children along
     /// (NLME-LEAVE.request with RemoveChildren).
     pub fn leave_with(&mut self, rejoin: bool, remove_children: bool) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         self.nwk
             .leave(None, rejoin, remove_children)
             .map_err(|_| NwkStatus::InvalidRequest)
@@ -285,7 +289,8 @@ impl<
     /// active everywhere, this device included. Returns the new sequence
     /// number. One update at a time.
     pub fn update_network_key(&mut self, key: Key128) -> Result<KeySequenceNumber, NwkStatus> {
-        if !self.aps.config.is_trust_center
+        if self.recovery_needed()
+            || !self.aps.config.is_trust_center
             || self.aps.aib.is_distributed()
             || self.phase != Phase::Operating
         {
@@ -341,6 +346,9 @@ impl<
         &mut self,
         partner: ExtendedAddress,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let tc = self.aps.aib.trust_center_address;
         let tc_short = crate::context::AddrView(&self.nwk)
             .short_of(tc)
@@ -367,6 +375,9 @@ impl<
         kind: LinkKeyKind,
         provisional: bool,
     ) {
+        if self.recovery_needed() {
+            return;
+        }
         let is_tc = self.config.role == LogicalDeviceType::Coordinator && !self.config.distributed;
         if !is_tc {
             self.config.preconfigured_link_key = (partner, key.clone(), kind);
@@ -435,6 +446,9 @@ impl<
     /// installs the preconfigured link key when given, then forms,
     /// silently adopts, rejoins or associates per `StartupControl`.
     pub fn restart_from_startup_set(&mut self, set: &StartupSet) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         if !set.is_consistent() {
             return Err(NwkStatus::InvalidParameter);
         }
@@ -610,6 +624,9 @@ impl<
 
     /// Removes the link key held for `partner`.
     pub fn remove_link_key(&mut self, partner: ExtendedAddress) -> bool {
+        if self.recovery_needed() {
+            return false;
+        }
         let removed = self.aps.security.remove(partner);
         if removed {
             let _ = self.persist_link_keys();

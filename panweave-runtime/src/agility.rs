@@ -214,7 +214,7 @@ impl<
     /// [`StackEvent::EnergyScanned`]. The radio leaves the network's
     /// channel meanwhile. `NotPermitted` while another scan runs.
     pub fn scan_energy(&mut self, channels: ChannelMask, duration: u8) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Operating {
+        if self.recovery_needed() || self.phase != Phase::Operating {
             return Err(NwkStatus::InvalidRequest);
         }
         if self.host_energy_scan || self.energy_scan.is_some() {
@@ -238,7 +238,8 @@ impl<
     /// change with `NotPermitted`. Only the network manager may call
     /// this (`InvalidRequest` otherwise).
     pub fn change_network_channel(&mut self, channel: Channel) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Operating
+        if self.recovery_needed()
+            || self.phase != Phase::Operating
             || self.nwk.nib.manager_addr != self.nwk.nib.network_address
         {
             return Err(NwkStatus::InvalidRequest);

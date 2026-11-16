@@ -25,13 +25,14 @@ use panweave_zdo::zdp::{BindReq, MgmtLeaveReq, StatusRsp, cluster as zdp};
 use crate::capture::CaptureBuffer;
 use crate::diag::{Category, DiagLog, DiagRecord, Severity, code};
 use crate::model::{
-    ContactState, DeviceState, Flag, InterviewStatus, LeakState, PowerSource, brightness_to_level,
+    ColorState, ContactState, DeviceState, Flag, InterviewStatus, LeakState, PowerSource,
+    brightness_to_level,
 };
 use crate::persist;
 use crate::protocol::{
-    AttributeData, CommandStage, DEVICE_PAGE, DeviceList, Diagnostics, ErrorCode, Event, HubInfo,
-    LightCommand, MAX_FIRMWARE, MAX_PERMIT_JOIN_SECONDS, NetworkInfo, NetworkState, NetworkStatus,
-    Request, Response, SensorEvent, TargetMetrics, VERSION,
+    Access, AttributeData, CommandStage, DEVICE_PAGE, DeviceList, Diagnostics, ErrorCode, Event,
+    HubInfo, LightCommand, MAX_FIRMWARE, MAX_PERMIT_JOIN_SECONDS, NetworkInfo, NetworkState,
+    NetworkStatus, Request, Response, SensorEvent, TargetMetrics, VERSION,
 };
 use crate::protocol::{BootReport, NetworkRestore, RadioDriverStats, StoreUsage};
 use crate::registry::{Device, MAX_DEVICES, NO_SHORT, Registry, cluster};
@@ -291,6 +292,7 @@ pub struct Hub<HS: Storage> {
     permit_until: Option<Instant>,
     joins_until: Option<Instant>,
     network: Option<NetworkInfo>,
+    recovery_required: bool,
     index_dirty: bool,
     erase_queue: Vec<u64, 4>,
     persist_due: Option<Instant>,
@@ -368,6 +370,7 @@ impl<HS: Storage> Hub<HS> {
             permit_until: None,
             joins_until: None,
             network: None,
+            recovery_required: false,
             index_dirty: false,
             erase_queue: Vec::new(),
             persist_due: None,
@@ -510,6 +513,9 @@ impl<HS: Storage> Hub<HS> {
         &mut self,
         stack: &Stack<C, R, S>,
     ) {
+        if self.recovery_required || stack.recovery_needed() {
+            return;
+        }
         let info = Self::network_info(stack);
         self.network = Some(info);
         self.emit(Event::NetworkRestored(info));
@@ -640,6 +646,13 @@ impl<HS: Storage> Hub<HS> {
         event: &StackEvent,
     ) {
         self.now = stack.now();
+        if let StackEvent::EventQueueLoss { telemetry, control } = event {
+            self.on_event_queue_loss(stack, *telemetry, *control);
+            return;
+        }
+        if self.recovery_required || stack.recovery_needed() {
+            return;
+        }
         match event {
             StackEvent::NetworkFormed { .. } => {
                 let info = Self::network_info(stack);
@@ -794,6 +807,95 @@ impl<HS: Storage> Hub<HS> {
             | StackEvent::GreenPowerCommand { .. } => self.on_green_power_event(event),
             _ => {}
         }
+    }
+
+    fn on_event_queue_loss<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        telemetry: u32,
+        control: u32,
+    ) {
+        if telemetry > 0 {
+            self.log(
+                DiagRecord::new(
+                    Category::Resources,
+                    Severity::Warning,
+                    code::STACK_EVENTS_DROPPED,
+                )
+                .arg(telemetry),
+            );
+            // Restart outstanding reads too: an unfinished synchronization
+            // must not clear the request before every cluster is read again.
+            self.pending.retain(|p| !matches!(p.owner, Owner::Sync(_)));
+            for i in 0..self.registry.len() {
+                if let Some(d) = self.registry.at_mut(i) {
+                    d.needs_sync = true;
+                    d.last_sync = None;
+                    d.sync_step = 0;
+                    d.sync_busy = false;
+                }
+            }
+        }
+        if control > 0 {
+            self.log(
+                DiagRecord::new(
+                    Category::Resources,
+                    Severity::Critical,
+                    code::STACK_EVENTS_DROPPED,
+                )
+                .status(1)
+                .arg(control),
+            );
+            stack.halt_for_event_loss();
+            self.require_recovery(stack, control);
+        }
+    }
+
+    fn require_recovery<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        lost: u32,
+    ) {
+        if self.recovery_required {
+            return;
+        }
+        self.recovery_required = true;
+        self.network = None;
+        self.permit_until = None;
+        self.joins_until = None;
+        stack.trust_center_policy_mut().allow_joins = false;
+        self.exemption_grants.clear();
+        while let Some(id) = self.commands.first().map(|c| c.id) {
+            self.finish_command_failed(id, ErrorCode::NetworkDown, 0);
+        }
+        self.pending.clear();
+        self.ota = crate::hub_ota::OtaServer::default();
+        for i in 0..self.registry.len() {
+            let Some(d) = self.registry.at_mut(i) else {
+                continue;
+            };
+            let (ieee, before) = (d.ieee, d.state);
+            d.present = false;
+            d.last_seen = None;
+            d.state = DeviceState::default();
+            d.color = ColorState::default();
+            d.needs_sync = true;
+            d.last_sync = None;
+            d.sync_step = 0;
+            d.sync_busy = false;
+            d.interview.busy = false;
+            d.interview.due = None;
+            d.fast_polling = false;
+            d.dirty = true;
+            let after = d.state;
+            self.emit_state_events(ieee, &before, &after);
+        }
+        self.schedule_persist();
+        self.emit(Event::PermitJoinChanged { seconds: 0 });
+        self.emit(Event::HubError {
+            error: ErrorCode::NetworkDown,
+            detail: u16::try_from(lost).unwrap_or(u16::MAX),
+        });
     }
 
     /// A device joined (Trust Center view) or announced itself.
@@ -1484,6 +1586,13 @@ impl<HS: Storage> Hub<HS> {
         self.now = stack.now();
         let now = self.now;
         self.poll_diagnostics(stack);
+        if stack.recovery_needed() {
+            self.require_recovery(stack, 0);
+        }
+        if self.recovery_required {
+            self.flush_storage();
+            return;
+        }
         self.poll_security(stack);
         self.expire(stack);
         if self.permit_until.is_some_and(|t| now.has_reached(t)) {
@@ -2022,6 +2131,9 @@ impl<HS: Storage> Hub<HS> {
         seconds: u8,
     ) -> Result<(), ErrorCode> {
         self.now = stack.now();
+        if self.recovery_required || stack.recovery_needed() {
+            return Err(ErrorCode::NetworkDown);
+        }
         if seconds > MAX_PERMIT_JOIN_SECONDS {
             return Err(ErrorCode::InvalidArgument);
         }
@@ -2075,6 +2187,22 @@ impl<HS: Storage> Hub<HS> {
         request: &Request,
     ) -> Response {
         self.now = stack.now();
+        if stack.recovery_needed() {
+            self.require_recovery(stack, 0);
+        }
+        if self.recovery_required
+            && request.required_access() != Access::Monitor
+            && !matches!(
+                request,
+                Request::GetWifiScan
+                    | Request::SetTraceConfiguration { .. }
+                    | Request::ClearTrace
+                    | Request::StopCapture
+                    | Request::ReadCapture { .. }
+            )
+        {
+            return Response::Error(ErrorCode::NetworkDown);
+        }
         if let Some(r) = self.handle_diagnostics(stack, request) {
             return r.unwrap_or_else(Response::Error);
         }
@@ -2109,7 +2237,9 @@ impl<HS: Storage> Hub<HS> {
                 persistent: self.config.persistent,
             })),
             Request::GetNetworkStatus => {
-                let state = if stack.is_operating() {
+                let state = if self.recovery_required || stack.recovery_needed() {
+                    NetworkState::Down
+                } else if stack.is_operating() {
                     NetworkState::Up
                 } else if self.network.is_some() {
                     NetworkState::Forming

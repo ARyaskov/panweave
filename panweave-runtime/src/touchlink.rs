@@ -142,6 +142,9 @@ impl<
     /// Enables touchlink commissioning (both roles); `false` when the
     /// stack's profile has no touchlink ([`crate::profile::NoTouchlink`]).
     pub fn enable_touchlink(&mut self, config: TouchlinkConfig) -> bool {
+        if self.recovery_needed() {
+            return false;
+        }
         let mut initiator = Initiator::new(config.key_index);
         initiator.ranges = config.ranges;
         self.touchlink.put(Touchlink {
@@ -169,7 +172,7 @@ impl<
     /// Starts the initiator touchlink procedure (§12.1): `extended` also
     /// scans the secondary channels, `reset` resets the chosen target.
     pub fn touchlink_start(&mut self, extended: bool, reset: bool) -> Result<(), NwkStatus> {
-        if self.persistence_reset_pending() {
+        if self.recovery_needed() || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         let mut m = self.take_machines().ok_or(NwkStatus::InvalidRequest)?;
@@ -197,6 +200,9 @@ impl<
 
     /// Selects a discovered target (§12.1 step 5).
     pub fn touchlink_select(&mut self, candidate: &Candidate) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let mut m = self.take_machines().ok_or(NwkStatus::InvalidRequest)?;
         let out = m.initiator.select(self, candidate);
         self.put_machines(m);
@@ -213,6 +219,9 @@ impl<
         candidate: &Candidate,
         duration: u16,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let mut m = self.take_machines().ok_or(NwkStatus::InvalidRequest)?;
         let r = m.initiator.identify_target(self, candidate, duration);
         self.put_machines(m);
@@ -226,6 +235,9 @@ impl<
         candidate: &Candidate,
         start_index: u8,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let mut m = self.take_machines().ok_or(NwkStatus::InvalidRequest)?;
         let r = m
             .initiator

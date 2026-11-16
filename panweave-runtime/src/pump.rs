@@ -135,6 +135,9 @@ impl<
 {
     /// Runs the inter-layer pump until nothing moves.
     pub(crate) fn pump(&mut self) {
+        if self.recovery_needed() {
+            return;
+        }
         for _ in 0..64 {
             let mut progressed = false;
             progressed |= self.pump_mac_events();
@@ -145,7 +148,7 @@ impl<
             progressed |= self.pump_zdo();
             progressed |= self.pump_zcl_actions();
             progressed |= self.service_network_key_relays();
-            if !progressed {
+            if !progressed || self.recovery_needed() {
                 break;
             }
         }
@@ -242,6 +245,9 @@ impl<
         npdu: &[u8],
         assume_security: bool,
     ) {
+        if self.recovery_needed() {
+            return;
+        }
         if !self
             .nwk
             .interfaces
@@ -265,6 +271,9 @@ impl<
     /// Zigbee Direct the BLE connection handle). NPDUs for neighbours
     /// behind it are reported as [`StackEvent::TrustedLinkNpdu`].
     pub fn add_trusted_link(&mut self, link: u8, handle: u16) -> bool {
+        if self.recovery_needed() {
+            return false;
+        }
         self.nwk
             .interfaces
             .insert(MacInterfaceEntry::trusted_link(link, handle))
@@ -290,6 +299,9 @@ impl<
         extended_pan_id: ExtendedAddress,
         mode: crate::JoinMode,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         if matches!(
             self.phase,
             Phase::Discovering(_) | Phase::Joining(_) | Phase::Forming | Phase::AwaitingKey
@@ -537,7 +549,9 @@ impl<
 
     fn pump_mac_events(&mut self) -> bool {
         let mut any = false;
-        while let Some(e) = self.mac.next_event() {
+        while !self.recovery_needed()
+            && let Some(e) = self.mac.next_event()
+        {
             any = true;
             match e {
                 MacEvent::DataConfirm { handle, status, .. } => {
@@ -601,7 +615,9 @@ impl<
 
     fn pump_nwk_actions(&mut self) -> bool {
         let mut any = false;
-        while let Some(a) = self.nwk.next_action() {
+        while !self.recovery_needed()
+            && let Some(a) = self.nwk.next_action()
+        {
             any = true;
             match a {
                 NwkAction::MacData {
@@ -782,7 +798,9 @@ impl<
 
     fn pump_nwk_events(&mut self) -> bool {
         let mut any = false;
-        while let Some(e) = self.nwk.next_event() {
+        while !self.recovery_needed()
+            && let Some(e) = self.nwk.next_event()
+        {
             any = true;
             match e {
                 NwkEvent::DataConfirm { id, status } => {
@@ -2024,7 +2042,9 @@ impl<
 
     fn pump_aps_actions(&mut self) -> bool {
         let mut any = false;
-        while let Some(a) = self.aps.next_action() {
+        while !self.recovery_needed()
+            && let Some(a) = self.aps.next_action()
+        {
             any = true;
             match a {
                 ApsAction::NwkData {
@@ -2099,7 +2119,9 @@ impl<
 
     fn pump_aps_events(&mut self) -> bool {
         let mut any = false;
-        while let Some(e) = self.aps.next_event() {
+        while !self.recovery_needed()
+            && let Some(e) = self.aps.next_event()
+        {
             any = true;
             match e {
                 ApsEvent::DataConfirm { id, status } => {
@@ -2587,12 +2609,17 @@ impl<
 
     /// Submits as many relays as APS can retain, preserving the rest on Busy.
     fn service_network_key_relays(&mut self) -> bool {
-        if self.phase != Phase::Operating {
+        if self.recovery_needed() {
+            return false;
+        }
+        if !self.is_operating() {
             self.network_key_relays = None;
             return false;
         }
         let mut progressed = false;
-        while let Some(batch) = self.network_key_relays.as_ref() {
+        while !self.recovery_needed()
+            && let Some(batch) = self.network_key_relays.as_ref()
+        {
             let Some((index, child)) = batch
                 .children
                 .iter()
@@ -2825,7 +2852,9 @@ impl<
 
     fn pump_zdo(&mut self) -> bool {
         let mut any = false;
-        while let Some(a) = self.zdo.next_action() {
+        while !self.recovery_needed()
+            && let Some(a) = self.zdo.next_action()
+        {
             any = true;
             let ZdoAction::Send {
                 dst,
@@ -2863,7 +2892,9 @@ impl<
                 options,
             );
         }
-        while let Some(e) = self.zdo.next_event() {
+        while !self.recovery_needed()
+            && let Some(e) = self.zdo.next_event()
+        {
             any = true;
             match e {
                 ZdoEvent::Timeout { seq, cluster, dst } => {
@@ -2913,7 +2944,9 @@ impl<
 
     fn pump_zcl_actions(&mut self) -> bool {
         let mut any = false;
-        while let Some(a) = self.zcl.next_action() {
+        while !self.recovery_needed()
+            && let Some(a) = self.zcl.next_action()
+        {
             any = true;
             let ZclAction::Send {
                 destination,
@@ -2925,7 +2958,9 @@ impl<
             } = a;
             self.send_aps(destination, profile, cluster, src_endpoint, &frame, options);
         }
-        while let Some(e) = self.zcl.next_event() {
+        while !self.recovery_needed()
+            && let Some(e) = self.zcl.next_event()
+        {
             any = true;
             if let ZclEvent::StartupSetsChanged { endpoint } = e {
                 let _ = self.persist_startup_sets(endpoint);
@@ -3149,6 +3184,9 @@ impl<
         header: &panweave_zcl::Header,
         payload: &[u8],
     ) -> Result<(), panweave_zcl::ZclError> {
+        if self.recovery_needed() {
+            return Err(panweave_zcl::ZclError::Busy);
+        }
         let ack = matches!(destination, Destination::Short { address, .. } if address.is_unicast());
         self.zcl.send(
             destination,
@@ -3173,6 +3211,9 @@ impl<
         cluster: panweave_types::ClusterId,
         payload: &impl Encode,
     ) -> Result<TransactionSequence, panweave_zdo::ZdoError> {
+        if self.recovery_needed() {
+            return Err(panweave_zdo::ZdoError::Busy);
+        }
         let seq = self.zdo.request(dst, cluster, payload)?;
         self.pump();
         Ok(seq)

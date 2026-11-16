@@ -397,6 +397,9 @@ impl<
     /// network key goes out the way it would have right after key
     /// verification. `Err` when no such joiner is pending.
     pub fn admit_joiner(&mut self, device: ExtendedAddress) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let Some(i) = self.dlk.joins.iter().position(|j| j.device == device) else {
             return Err(NwkStatus::UnknownDevice);
         };
@@ -417,6 +420,9 @@ impl<
     /// entry is dropped and it is removed from the network (a NWK Leave
     /// to our own child, an APS Remove Device through its parent).
     pub fn reject_joiner(&mut self, device: ExtendedAddress) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let Some(i) = self.dlk.joins.iter().position(|j| j.device == device) else {
             return Err(NwkStatus::UnknownDevice);
         };
@@ -450,7 +456,7 @@ impl<
             self.abort_key_negotiation();
         }
         let mut i = 0;
-        while i < self.dlk.joins.len() {
+        while !self.recovery_needed() && i < self.dlk.joins.len() {
             if self
                 .dlk
                 .joins

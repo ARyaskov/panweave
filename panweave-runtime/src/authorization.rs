@@ -428,6 +428,9 @@ impl<
         device: ExtendedAddress,
         exempt: bool,
     ) -> Result<(), ApsStatus> {
+        if self.recovery_needed() {
+            return Err(ApsStatus::IllegalRequest);
+        }
         if !exempt {
             self.authorization.exempt.retain(|e| e.device != device);
             return Ok(());
@@ -464,6 +467,9 @@ impl<
         device: ExtendedAddress,
         window: Duration,
     ) -> Result<(), ApsStatus> {
+        if self.recovery_needed() {
+            return Err(ApsStatus::IllegalRequest);
+        }
         if window.as_millis() == 0
             || window.as_secs() > MAX_COMMISSIONING_EXEMPTION_S
             || !device.is_valid_device_address()
@@ -498,6 +504,9 @@ impl<
     /// Withdraws every exemption (the application re-applies the ones it
     /// keeps, for example after a factory reset of its own data).
     pub fn clear_key_exchange_exemptions(&mut self) {
+        if self.recovery_needed() {
+            return;
+        }
         self.authorization.exempt.clear();
     }
 
@@ -830,11 +839,12 @@ impl<
         self.authorization
             .resolving
             .retain(|(_, t)| !now.has_reached(*t));
-        while let Some(i) = self
-            .authorization
-            .pending
-            .iter()
-            .position(|p| now.has_reached(p.deadline))
+        while !self.recovery_needed()
+            && let Some(i) = self
+                .authorization
+                .pending
+                .iter()
+                .position(|p| now.has_reached(p.deadline))
         {
             let p = self.authorization.pending.swap_remove(i);
             self.expire_key_exchange(p);

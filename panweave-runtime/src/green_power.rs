@@ -634,6 +634,9 @@ impl<
     /// Drains the proxy's and sink's events into stack events,
     /// persistence, group membership, announcements and local execution.
     fn pump_green_power_events(&mut self, rejected: &mut Option<PairingError>) -> bool {
+        if self.recovery_needed() {
+            return false;
+        }
         let mut persist_proxy = false;
         let mut persist_sink = false;
         let pending = self.green_power.as_mut().and_then(|g| g.effects.take());
@@ -785,11 +788,17 @@ impl<
         }
         for e in events {
             self.push_event(e);
+            if self.recovery_needed() {
+                return false;
+            }
         }
         for c in commands {
+            if self.recovery_needed() {
+                return false;
+            }
             self.execute_gpd_command(&c);
         }
-        true
+        !self.recovery_needed()
     }
 
     fn flush_green_power_persistence(&mut self) -> bool {
@@ -930,6 +939,9 @@ impl<
             payload,
             group: c.group,
         });
+        if self.recovery_needed() {
+            return;
+        }
         if c.command_id == panweave_green_power::command::COMPACT_ATTRIBUTE_REPORTING {
             for (cluster, manufacturer, rec) in reports {
                 let mut h = Header::global(
@@ -1043,6 +1055,9 @@ impl<
     /// Queues the proxy's and sink's outgoing frames and sends the ones
     /// whose delay elapsed.
     pub(crate) fn pump_green_power(&mut self) {
+        if self.recovery_needed() {
+            return;
+        }
         let mut rejected = None;
         if !self.pump_green_power_events(&mut rejected) {
             return;

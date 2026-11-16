@@ -221,6 +221,45 @@ channel, and never exposes the network key over an unauthenticated session.
 * Frame processing is bounded by frame size (127 octets on 2.4 GHz); no
   algorithm is worse than O(table size) per frame.
 
+## Event delivery and recovery
+
+Runtime, facade and Lite observer queues use the same bounded admission
+policy (`panweave-runtime::event_buffer`). Attribute reports and
+replaceable radio diagnostics are telemetry; commands, commissioning,
+persistence and security outcomes are control events. New event kinds
+default to control. A new control event may evict the oldest telemetry
+entry, while retained events keep their order. A telemetry event never
+displaces control.
+
+Every discard is counted and reported through `EventQueueLoss`, latched
+outside the queue so that saturation cannot hide the notification. A
+telemetry-only gap allows protocol operation to continue; consumers must
+resynchronize any report-derived state. The hub cancels partial state
+syncs and starts them again from their first read.
+
+A full queue containing only control events cannot retain another
+transition. It discards the now-incomplete control backlog, latches
+`recovery_needed()` and stops subsequent radio input, transmissions,
+protocol pumping and timers after the current transition. This is an
+availability trade-off: a stalled consumer may require recovery, but
+the owner does not keep operating with an incomplete security history.
+Reading a gap notification does not clear this latch. An external
+consumer with its own control loss calls `Stack::halt_for_event_loss()`.
+
+The facade and Lite feed their internal state machines before publishing
+observer events. On critical loss they reset commissioning to off-network;
+the facade also invalidates transient Zigbee Direct sessions and tunnels
+and refuses further BLE admission. The hub reports NetworkDown, closes
+joining and invalidates cached device state while retaining registry
+records. The Smart Energy Trust Center suspends its schedules and reports
+RecoveryRequired while preserving provisioned records and key material.
+
+Integrators must drain events after each input, handle the gap notification
+on every transport, and stop their external radio/BLE services on critical
+loss. Recovery requires reconstructing the affected stack and adapters and
+following their ordinary persisted-state restoration path. Queues provide
+bounded overload handling, not an unbounded lossless stream.
+
 ## Logging
 
 Logging back-ends receive structured events with addresses, identifiers,

@@ -12,7 +12,7 @@
     clippy::panic
 )]
 
-use panweave::cbke::CbkeDriver;
+use panweave::cbke::{CbkeDriver, CbkeOutcome};
 use panweave::mac::service::MacServiceConfig;
 use panweave::runtime::{JoinMode, StackConfig, StackEvent};
 use panweave::security::key_hierarchy::link_key_from_install_code;
@@ -477,4 +477,192 @@ fn the_trust_center_provisions_opens_authenticates_and_prunes() {
             .status,
         Registration::Left
     );
+}
+
+fn event_loss_network() -> (Simulator, usize) {
+    let mut sim = Simulator::new();
+    let cfg = StackConfig::new(LogicalDeviceType::Coordinator, ESI_IEEE);
+    let e = sim.add_stack("esi", node(cfg, 201, &[]), Box::new(OnOffApp::default()));
+    sim.stack(e).form_network_with_key(NETWORK_KEY).unwrap();
+    assert!(sim.run_until(Duration::from_secs(30), |s| s.stack_ref(e).is_operating()));
+    (sim, e)
+}
+
+#[test]
+fn a_control_event_gap_preserves_keys_and_stops_trust_center_actions() {
+    let (mut sim, e) = event_loss_network();
+    let mut tc = SeTrustCenter::<4>::new();
+    let provisioned = ExtendedAddress(0x1234);
+    let code = InstallCode::new(&IHD_CODE).unwrap();
+    let now = sim.stack_ref(e).now();
+    for ieee in [provisioned, IHD_IEEE, LCD_IEEE] {
+        tc.provision(sim.stack(e), ieee, &code).unwrap();
+    }
+    for ieee in [IHD_IEEE, LCD_IEEE] {
+        assert_eq!(
+            tc.on_event(
+                sim.stack(e),
+                &StackEvent::DeviceAuthorized {
+                    ieee,
+                    short: ShortAddress(0x1234),
+                },
+            ),
+            Some(SeTrustCenterEvent::Joined(ieee)),
+        );
+    }
+    assert_eq!(
+        tc.on_key_establishment(
+            sim.stack(e),
+            &CbkeOutcome::Established { partner: IHD_IEEE },
+            Suite::Suite1.bit(),
+        ),
+        Some(SeTrustCenterEvent::Authenticated(IHD_IEEE)),
+    );
+    assert_eq!(
+        tc.permit_join(sim.stack(e), Duration::from_mins(10)),
+        Some(SeTrustCenterEvent::PermitJoin(254)),
+    );
+    tc.link_key_lifetime = Some(Duration::from_secs(1));
+    tc.network_key_period = Some(Duration::from_secs(1));
+    tc.removal_after = Duration::from_secs(1);
+    let keys: Vec<_> = tc
+        .devices()
+        .iter()
+        .map(|d| {
+            (
+                d.ieee,
+                d.install_code_key.clone(),
+                d.key_hash.clone(),
+                d.key,
+                d.suites,
+                sim.stack_ref(e)
+                    .aps
+                    .security
+                    .entry(d.ieee)
+                    .unwrap()
+                    .key
+                    .clone(),
+            )
+        })
+        .collect();
+    let mut backup = heapless::Vec::new();
+    tc.backup(&mut backup);
+    let gap = StackEvent::EventQueueLoss {
+        telemetry: 5,
+        control: 1,
+    };
+    assert_eq!(
+        tc.on_event(sim.stack(e), &gap),
+        Some(SeTrustCenterEvent::RecoveryRequired {
+            telemetry: 5,
+            control: 1,
+        }),
+    );
+    assert_eq!(tc.on_event(sim.stack(e), &gap), None);
+    assert_eq!(tc.deadline(now), None);
+    assert_eq!(tc.devices().len(), 3);
+    assert_eq!(
+        tc.registry.get(provisioned).unwrap().status,
+        Registration::Provisioned
+    );
+    assert_eq!(
+        tc.registry.get(IHD_IEEE).unwrap().status,
+        Registration::Left
+    );
+    assert_eq!(
+        tc.registry.get(LCD_IEEE).unwrap().status,
+        Registration::Left
+    );
+    assert_eq!(tc.permit_join(sim.stack(e), Duration::from_secs(30)), None);
+    assert_eq!(
+        tc.on_key_establishment(
+            sim.stack(e),
+            &CbkeOutcome::Established { partner: IHD_IEEE },
+            Suite::Suite1.bit(),
+        ),
+        None,
+    );
+    assert_eq!(
+        tc.on_event(
+            sim.stack(e),
+            &StackEvent::DeviceAuthorized {
+                ieee: LCD_IEEE,
+                short: ShortAddress(0x5678),
+            },
+        ),
+        None,
+    );
+    for seconds in [2, 241, 601] {
+        assert_eq!(
+            tc.poll(sim.stack(e), now + Duration::from_secs(seconds)),
+            None
+        );
+    }
+    tc.retire_key(sim.stack(e), IHD_IEEE);
+    for (ieee, install_code_key, key_hash, key_state, suites, aps_key) in keys {
+        let record = tc.registry.get(ieee).unwrap();
+        assert_eq!(record.install_code_key, install_code_key);
+        assert_eq!(record.key_hash, key_hash);
+        assert_eq!(record.key, key_state);
+        assert_eq!(record.suites, suites);
+        assert_eq!(
+            sim.stack_ref(e).aps.security.entry(ieee).unwrap().key,
+            aps_key
+        );
+    }
+    let mut after = heapless::Vec::new();
+    tc.backup(&mut after);
+    assert_eq!(after.len(), backup.len());
+    for (before, after) in backup.iter().zip(after.iter()) {
+        assert_eq!(after.ieee, before.ieee);
+        assert_eq!(after.hashed_key, before.hashed_key);
+        assert_eq!(after.install_code_key, before.install_code_key);
+    }
+    assert!(sim.stack_ref(e).recovery_needed());
+    assert!(!sim.stack_ref(e).config().trust_center_policy.allow_joins);
+}
+
+#[test]
+fn a_telemetry_event_gap_keeps_trust_center_presence_and_permit_schedule() {
+    let (mut sim, e) = event_loss_network();
+    let mut tc = SeTrustCenter::<4>::new();
+    tc.provision(
+        sim.stack(e),
+        IHD_IEEE,
+        &InstallCode::new(&IHD_CODE).unwrap(),
+    )
+    .unwrap();
+    tc.on_event(
+        sim.stack(e),
+        &StackEvent::DeviceAuthorized {
+            ieee: IHD_IEEE,
+            short: ShortAddress(0x1234),
+        },
+    );
+    let now = sim.stack_ref(e).now();
+    assert_eq!(
+        tc.permit_join(sim.stack(e), Duration::from_mins(10)),
+        Some(SeTrustCenterEvent::PermitJoin(254)),
+    );
+    let deadline = tc.deadline(now);
+    assert_eq!(
+        tc.on_event(
+            sim.stack(e),
+            &StackEvent::EventQueueLoss {
+                telemetry: 7,
+                control: 0
+            },
+        ),
+        None,
+    );
+    assert_eq!(
+        tc.registry.get(IHD_IEEE).unwrap().status,
+        Registration::Joined
+    );
+    assert_eq!(tc.deadline(now), deadline);
+    assert_eq!(
+        tc.poll(sim.stack(e), now + Duration::from_secs(240)),
+        Some(SeTrustCenterEvent::PermitJoin(254)),
+    );
+    assert!(sim.stack_ref(e).is_operating());
 }

@@ -357,6 +357,9 @@ impl<
             Kind::Groups,
             Kind::StartupSets,
         ] {
+            if self.recovery_needed() {
+                break;
+            }
             if dirty & (1u16 << kind.code()) == 0 {
                 continue;
             }
@@ -371,6 +374,9 @@ impl<
                 Kind::Groups => self.persist_groups(),
                 Kind::StartupSets => {
                     for endpoint in 0..=u8::MAX {
+                        if self.recovery_needed() {
+                            break;
+                        }
                         if self.persistence.startup[usize::from(endpoint / 8)]
                             & (1 << (endpoint % 8))
                             != 0
@@ -1094,7 +1100,7 @@ impl<
     /// routers resume on their network (routers re-announce), end devices
     /// perform a secured rejoin.
     pub fn resume(&mut self) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Operating {
+        if self.recovery_needed() || self.phase != Phase::Operating {
             return Err(NwkStatus::InvalidRequest);
         }
         self.sync_security_model();

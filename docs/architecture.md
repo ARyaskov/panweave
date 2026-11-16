@@ -157,9 +157,15 @@ stale non-child entries). See `docs/memory.md` once benchmarks exist.
 * No global mutable state. Each stack instance owns its tables.
 * Bounded queues everywhere; overflow policy is stated per queue
   (`docs/security-model.md` lists the drop policies).
-* Security-critical events (key transport, leave, TC rejection) are never
-  dropped silently; the runtime applies backpressure to the application
-  side instead.
+* Runtime and facade event queues admit control transitions ahead of
+  replaceable reports and diagnostics, preserving the order of retained
+  events. Loss is reported as `StackEvent::EventQueueLoss` (or
+  `LiteEvent::EventQueueLoss`) through a latch outside the bounded queue.
+  If an all-control queue exhausts its capacity, stale queued transitions
+  are discarded and the owner stops protocol progress. A gap notification
+  does not resume it: stop external transports, reconstruct the owner and
+  restore its persisted state. See the event-delivery policy in
+  `docs/security-model.md`.
 * The core is `Send` where the injected traits are `Send`; it does not
   require `Sync`.
 

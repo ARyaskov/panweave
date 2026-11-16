@@ -34,6 +34,7 @@ mod bdb;
 mod configuration;
 mod context;
 mod dlk;
+pub mod event_buffer;
 pub mod fragment_cache;
 #[cfg(feature = "green-power")]
 pub mod green_power;

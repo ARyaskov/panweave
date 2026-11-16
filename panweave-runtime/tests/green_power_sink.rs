@@ -185,6 +185,78 @@ fn count(events: &[StackEvent], f: impl Fn(&StackEvent) -> bool) -> usize {
 }
 
 #[test]
+fn a_command_that_overflows_control_events_never_changes_the_local_light() {
+    use panweave_green_power::proxy_table::SecurityOptions;
+    use panweave_green_power::sink_table::SinkEntry;
+    use panweave_mac::radio::RxMetadata;
+    use panweave_runtime::{AdoptParams, EVENT_CAPACITY};
+    use panweave_types::{AttributeId, Channel, KeySequenceNumber, PanId};
+    use panweave_zcl::{Role, Value};
+
+    let mut stack = node(LogicalDeviceType::Coordinator, COORD_IEEE, 43);
+    stack
+        .adopt_network(&AdoptParams {
+            extended_pan_id: COORD_IEEE,
+            pan_id: PanId(0x1234),
+            channel: Channel::DEFAULT_2_4GHZ,
+            network_address: Some(ShortAddress::COORDINATOR),
+            key: NETWORK_KEY.clone(),
+            key_sequence: KeySequenceNumber(0),
+            update_id: 0,
+            trust_center: COORD_IEEE,
+        })
+        .unwrap();
+    stack
+        .enable_green_power_sink(SinkOptions::default())
+        .unwrap();
+    let mut entry = SinkEntry::new(GPD, CommunicationMode::DerivedGroupcast, 2);
+    entry.security = Some(SecurityOptions {
+        level: SecurityLevel::Mic,
+        key_type: KeyType::Individual,
+        key: Some(OOB_KEY.clone()),
+    });
+    entry.frame_counter = 0x10;
+    stack
+        .green_power_sink()
+        .unwrap()
+        .table
+        .insert(entry)
+        .unwrap();
+    stack.persist_sink_table().unwrap();
+    while stack.next_event().is_some() {}
+    for _ in 0..EVENT_CAPACITY {
+        stack.zcl.set_identify_time(Endpoint(1), 60).unwrap();
+        stack.flush();
+    }
+    assert!(!stack.recovery_needed());
+    stack.on_radio_frame(
+        &gpdf(
+            2,
+            SecurityLevel::Mic,
+            Some(0x11),
+            &[command::TOGGLE],
+            Some((&OOB_KEY, true)),
+        ),
+        RxMetadata::default(),
+    );
+    assert!(stack.recovery_needed());
+    assert!(
+        matches!(stack.next_event(), Some(StackEvent::EventQueueLoss { control, .. }) if control > 0)
+    );
+    assert_eq!(
+        stack
+            .zcl
+            .cluster(Endpoint(1), on_off::ID, Role::Server)
+            .unwrap()
+            .attributes
+            .value(AttributeId(0)),
+        Some(Value::Bool(Some(false))),
+        "the command must stop at the event-loss boundary"
+    );
+    assert!(stack.next_radio_action().is_none());
+}
+
+#[test]
 fn combo_sink_commissions_a_gpd_through_a_proxy_and_runs_its_commands() {
     let mut sim = Simulator::new();
     let c = sim.add_stack(

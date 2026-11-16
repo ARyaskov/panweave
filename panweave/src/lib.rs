@@ -64,14 +64,15 @@ pub mod smart_energy_drivers;
 #[cfg(feature = "smart-energy")]
 pub mod smart_energy_endpoints;
 
-use heapless::Deque;
 use panweave_bdb::{Bdb, Config as BdbConfig, Failure, Outcome};
 use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacServiceConfig};
+use panweave_runtime::event_buffer::{EventBuffer, EventLoss, Prioritized};
 use panweave_runtime::{EndpointError, Restored, Stack, StackConfig, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::trust_center::TrustCenterPolicy;
 use panweave_storage::{Storage, StorageError};
+use panweave_types::capacity::Cap;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     ChannelMask, ClusterId, CryptoRng, Endpoint, ExtendedAddress, GroupAddress, Key128,
@@ -134,6 +135,15 @@ pub enum Event {
     },
 }
 
+impl Prioritized for Event {
+    fn is_control(&self) -> bool {
+        match self {
+            Self::Stack(event) => event.is_control(),
+            _ => true,
+        }
+    }
+}
+
 /// A device: the stack plus its commissioning machine.
 pub struct Node<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// The protocol stack.
@@ -143,7 +153,7 @@ pub struct Node<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// Zigbee Direct device state.
     #[cfg(feature = "direct")]
     pub direct: direct::DirectState,
-    events: Deque<Event, 16>,
+    events: EventBuffer<Event, Cap<16>>,
     /// Events dropped because the queue was full.
     pub dropped_events: u32,
 }
@@ -235,7 +245,7 @@ impl Builder {
             bdb: Bdb::new(self.bdb, false),
             #[cfg(feature = "direct")]
             direct: direct::DirectState::default(),
-            events: Deque::new(),
+            events: EventBuffer::default(),
             dropped_events: 0,
         }
     }
@@ -301,14 +311,43 @@ impl EndDevice {
 
 impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     fn push(&mut self, e: Event) {
-        if self.events.push_back(e).is_err() {
-            self.dropped_events = self.dropped_events.saturating_add(1);
+        let dropped = match e {
+            Event::Stack(StackEvent::EventQueueLoss { telemetry, control }) => {
+                self.events.observe_loss(EventLoss { telemetry, control })
+            }
+            event => self.events.push(event),
+        };
+        self.dropped_events = self.dropped_events.saturating_add(dropped);
+        if self.events.recovery_needed() {
+            self.stack.halt_for_event_loss();
         }
+        if self.recovery_needed() {
+            self.reconcile_event_loss();
+        }
+    }
+
+    /// Whether this node stopped after a control-event gap. Reconstruct
+    /// and initialize it before accepting more radio or BLE traffic.
+    pub fn recovery_needed(&self) -> bool {
+        self.events.recovery_needed() || self.stack.recovery_needed()
+    }
+
+    fn reconcile_event_loss(&mut self) {
+        self.bdb = Bdb::new(self.bdb.config, false);
+        #[cfg(feature = "direct")]
+        self.direct_invalidate_on_event_loss();
     }
 
     /// Drains stack events, feeding the commissioning machine.
     fn collect(&mut self) {
         while let Some(e) = self.stack.next_event() {
+            if matches!(e, StackEvent::EventQueueLoss { .. }) {
+                self.push(Event::Stack(e));
+                continue;
+            }
+            if self.recovery_needed() {
+                continue;
+            }
             if let Some(b) = Stack::<C, R, S>::bdb_event(&e)
                 && let Some(o) = self.bdb.on_event(&mut self.stack, &b)
             {
@@ -318,20 +357,35 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 }
                 self.push(Event::Commissioning(o));
             }
+            if self.recovery_needed() {
+                break;
+            }
             #[cfg(feature = "direct")]
             if let Some(d) = self.direct_outcome(&e) {
                 self.push(d);
+            }
+            if self.recovery_needed() {
+                break;
             }
             #[cfg(feature = "direct")]
             if let Some(t) = self.direct_tunnel_out(&e) {
                 self.push(t);
             }
+            if self.recovery_needed() {
+                break;
+            }
             #[cfg(feature = "direct")]
             {
                 self.direct_on_configured(&e);
+                if self.recovery_needed() {
+                    break;
+                }
                 self.direct_on_aware_answer(&e);
                 self.direct_on_tclk_update(&e);
                 self.direct_on_security_event(&e);
+            }
+            if self.recovery_needed() {
+                break;
             }
             #[cfg(feature = "direct")]
             if let StackEvent::NetworkKeySwitched { previous, .. } = &e {
@@ -345,6 +399,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
                 _ => {}
             }
             self.push(Event::Stack(e));
+        }
+        if self.recovery_needed() {
+            self.reconcile_event_loss();
         }
     }
 
@@ -478,7 +535,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Next event.
     pub fn next_event(&mut self) -> Option<Event> {
         self.collect();
-        self.events.pop_front()
+        if let Some(loss) = self.events.take_loss() {
+            return Some(Event::Stack(StackEvent::EventQueueLoss {
+                telemetry: loss.telemetry,
+                control: loss.control,
+            }));
+        }
+        self.events.pop()
     }
 
     /// A frame received by the radio.
@@ -508,10 +571,20 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Advances time: runs every layer's timers and the commissioning
     /// timeouts.
     pub fn poll(&mut self, now: Instant) {
+        if self.recovery_needed() {
+            self.collect();
+            return;
+        }
         // BDB 3.1 §6.6: a sleepy end device polls fast while a
         // commissioning procedure runs.
         self.stack.set_fast_polling(self.bdb.is_busy());
         self.stack.poll(now);
+        // Deliver stack outcomes before advancing dependent machines or
+        // accepting more observer-visible transitions in this call.
+        self.collect();
+        if self.recovery_needed() {
+            return;
+        }
         #[cfg(feature = "direct")]
         self.direct_poll(now);
         if let Some(o) = self.bdb.poll(&mut self.stack, now) {
@@ -526,6 +599,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
 
     /// Earliest time [`Node::poll`] must be called again.
     pub fn next_deadline(&self) -> Option<Instant> {
+        if self.recovery_needed() {
+            return None;
+        }
         match (self.stack.next_deadline(), self.bdb.next_deadline()) {
             (Some(a), Some(b)) => Some(if a.as_millis() <= b.as_millis() { a } else { b }),
             (a, b) => a.or(b),

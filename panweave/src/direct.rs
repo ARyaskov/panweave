@@ -175,7 +175,24 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Whether Zigbee Direct requests are processed (§11.3.5.4.3): the
     /// host stops advertising and drops service requests when not.
     pub fn direct_interface_enabled(&self) -> bool {
-        self.direct.interface_enabled
+        !self.recovery_needed() && self.direct.interface_enabled
+    }
+
+    /// Invalidates transient BLE authorization after a control-event gap.
+    /// Persistent configuration and past keys remain available for the
+    /// replacement node's normal restoration path.
+    pub(crate) fn direct_invalidate_on_event_loss(&mut self) {
+        while let Some((link, _)) = self.direct.tunnels.pop() {
+            self.stack.remove_trusted_link(link);
+        }
+        self.direct.last_join.clear();
+        self.direct.legacy.clear();
+        self.direct.pending = None;
+        self.direct.aware_seq = None;
+        self.direct.trust_center_aware = None;
+        self.direct.tclk_update_retry = None;
+        self.direct.anonymous_join_until = None;
+        self.direct.security = SecurityState::new(NEW_ZDD_PROVISIONING_TIMEOUT);
     }
 
     /// Whether a provisioning session with the Anonymous Well-Known
@@ -183,7 +200,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// network is open to new devices and the Anonymous Join Countdown
     /// Timer has not expired.
     pub fn anonymous_join_allowed(&self) -> bool {
-        if !self.stack.permit_joining_active() {
+        if self.recovery_needed() || !self.stack.permit_joining_active() {
             return false;
         }
         match self.direct.anonymous_join_timeout {
@@ -310,6 +327,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// on a centralized network; `None` on a distributed network without
     /// a provisioned key (no admin access, §7.7.2.7.1).
     pub fn admin_key_for(&self, zvd: ExtendedAddress) -> Option<Key128> {
+        if self.recovery_needed() {
+            return None;
+        }
         if let Some(k) = &self.direct.admin_key {
             return Some(k.clone());
         }
@@ -403,6 +423,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// advertisement starts, for `NEW_ZDD_PROVISIONING_TIMEOUT` when the
     /// ZDD has no network. Called by [`Node::initialize`].
     pub fn direct_power_up(&mut self) {
+        if self.recovery_needed() {
+            self.direct_invalidate_on_event_loss();
+            return;
+        }
         let now = self.stack.now();
         let provisioned = self.stack.is_operating();
         let t = self.direct.security.power_up(now, provisioned);
@@ -423,6 +447,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// at which authorization level (§6.3.1, §6.6): the host's secret
     /// resolver refuses the secret (and closes the connection) on `Err`.
     pub fn direct_admit(&self, peer: ExtendedAddress, psk: Psk) -> Result<Level, Refusal> {
+        if self.recovery_needed() {
+            return Err(Refusal::InterfaceOff);
+        }
         self.direct.security.admit(
             peer,
             psk,
@@ -433,6 +460,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
 
     /// A session with `peer` was established at `level`.
     pub fn direct_session_opened(&mut self, peer: ExtendedAddress, level: Level) {
+        if self.recovery_needed() {
+            return;
+        }
         self.direct.security.session_opened(peer, level);
     }
 
@@ -506,6 +536,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// The legacy-network authorization session of the ZVD on `link`
     /// (ZD 1.1 §10.1), when the Trust Center predates Zigbee Direct.
     pub fn direct_legacy_session(&self, link: u8) -> Option<EphemeralSession> {
+        if self.recovery_needed() {
+            return None;
+        }
         self.direct
             .legacy
             .iter()
@@ -749,6 +782,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
         session: SessionKind,
         payload: &[u8],
     ) -> Result<(), TunnelError> {
+        if self.recovery_needed() {
+            return Err(TunnelError::Malformed);
+        }
         let peer = self
             .direct
             .tunnels
@@ -942,7 +978,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
         let stack = &self.stack;
         let joined = if stack.is_operating() {
             JoinedStatus::Commissioned
-        } else if stack.is_idle() {
+        } else if stack.is_idle() || self.recovery_needed() {
             JoinedStatus::NotCommissioned
         } else {
             JoinedStatus::InProgress
@@ -977,6 +1013,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn form_network(&mut self, p: &FormNetwork) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         // The ZVD chooses the security model (§7.7.2.5, Table 36); a
         // centralized network needs a coordinator-capable ZDD.
         if self.stack.set_security_model(p.distributed).is_err() {
@@ -1005,6 +1044,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn join_network(&mut self, p: &JoinNetwork) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         if let Some(lk) = &p.link_key {
             self.install_direct_link_key(p.trust_center, lk);
         }
@@ -1094,6 +1136,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn permit_joining(&mut self, seconds: u8) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         if self.stack.config().role == LogicalDeviceType::EndDevice {
             return STATUS_FAILURE;
         }
@@ -1107,6 +1152,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn leave_network(&mut self, p: LeaveNetwork) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         match self.stack.leave_with(p.rejoin, p.remove_children) {
             Ok(()) => {
                 self.direct.pending = Some(Domain::LeaveNetwork);
@@ -1118,6 +1166,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn manage_joiners(&mut self, cmd: &ManageJoiners) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         if !self.can_be_coordinator() {
             return STATUS_FAILURE;
         }
@@ -1153,6 +1204,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn identify(&mut self, seconds: u16) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         let Some(ep) = self.identify_endpoint() else {
             return STATUS_FAILURE;
         };
@@ -1172,6 +1226,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Zdd for Node<C, R, S> {
     }
 
     fn finding_binding(&mut self, p: FindingBinding) -> u8 {
+        if self.recovery_needed() {
+            return STATUS_FAILURE;
+        }
         let r = if p.initiator {
             self.bdb
                 .find_and_bind_initiator(&mut self.stack, p.endpoint, None, &[])

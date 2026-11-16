@@ -57,6 +57,14 @@ pub enum SeTrustCenterEvent {
     /// number (§5.4.4); the switch follows after
     /// nwkNetworkBroadcastDeliveryTime.
     NetworkKeyUpdated(KeySequenceNumber),
+    /// A control event was lost. Reconstruct and restore the stack and
+    /// driver before serving the network again.
+    RecoveryRequired {
+        /// Replaceable reports or diagnostics lost with the gap.
+        telemetry: u32,
+        /// Control events lost with the gap.
+        control: u32,
+    },
 }
 
 /// The driver, tracking up to `N` devices.
@@ -75,6 +83,7 @@ pub struct SeTrustCenter<const N: usize = 16> {
     /// device is removed (§5.5.5.5 item 6).
     pub removal_after: Duration,
     permit: Option<PermitJoinSchedule>,
+    recovery_required: bool,
 }
 
 impl<const N: usize> Default for SeTrustCenter<N> {
@@ -94,6 +103,7 @@ impl<const N: usize> SeTrustCenter<N> {
             network_key_retry_at: None,
             removal_after: TRUST_CENTER_REMOVAL_AFTER,
             permit: None,
+            recovery_required: false,
         }
     }
 
@@ -121,6 +131,9 @@ impl<const N: usize> SeTrustCenter<N> {
         stack: &mut Stack<C, R, S>,
         period: Duration,
     ) -> Option<SeTrustCenterEvent> {
+        if self.recovery_required || stack.recovery_needed() {
+            return None;
+        }
         let now = stack.now();
         let mut schedule = PermitJoinSchedule::open(now, period);
         let seconds = schedule.broadcast(now, false);
@@ -131,6 +144,9 @@ impl<const N: usize> SeTrustCenter<N> {
     /// Closes the network.
     pub fn close<C: BlockCipher, R: CryptoRng, S: Storage>(&mut self, stack: &mut Stack<C, R, S>) {
         self.permit = None;
+        if self.recovery_required || stack.recovery_needed() {
+            return;
+        }
         let _ = stack.permit_join_network(0);
         stack.flush();
     }
@@ -154,6 +170,9 @@ impl<const N: usize> SeTrustCenter<N> {
         outcome: &CbkeOutcome,
         suites: u16,
     ) -> Option<SeTrustCenterEvent> {
+        if self.recovery_required || stack.recovery_needed() {
+            return None;
+        }
         let CbkeOutcome::Established { partner } = outcome else {
             return None;
         };
@@ -171,6 +190,9 @@ impl<const N: usize> SeTrustCenter<N> {
         stack: &mut Stack<C, R, S>,
         ieee: ExtendedAddress,
     ) {
+        if self.recovery_required || stack.recovery_needed() {
+            return;
+        }
         self.registry.mark_stale(ieee, stack.now());
         stack.aps.mark_key_stale(ieee);
     }
@@ -183,6 +205,9 @@ impl<const N: usize> SeTrustCenter<N> {
         ieee: ExtendedAddress,
         parent: Option<ExtendedAddress>,
     ) -> bool {
+        if self.recovery_required || stack.recovery_needed() {
+            return false;
+        }
         if !self.registry.deregister(ieee, stack.now()) {
             return false;
         }
@@ -206,6 +231,17 @@ impl<const N: usize> SeTrustCenter<N> {
         stack: &mut Stack<C, R, S>,
         event: &StackEvent,
     ) -> Option<SeTrustCenterEvent> {
+        if let StackEvent::EventQueueLoss { telemetry, control } = event
+            && *control > 0
+        {
+            return self.require_recovery(stack, *telemetry, *control);
+        }
+        if stack.recovery_needed() {
+            return self.require_recovery(stack, 0, 0);
+        }
+        if self.recovery_required {
+            return None;
+        }
         let now = stack.now();
         match event {
             StackEvent::StaleLinkKeyUsed { ieee } => {
@@ -236,6 +272,36 @@ impl<const N: usize> SeTrustCenter<N> {
         }
     }
 
+    fn require_recovery<C: BlockCipher, R: CryptoRng, S: Storage>(
+        &mut self,
+        stack: &mut Stack<C, R, S>,
+        telemetry: u32,
+        control: u32,
+    ) -> Option<SeTrustCenterEvent> {
+        if self.recovery_required {
+            return None;
+        }
+        stack.halt_for_event_loss();
+        stack.trust_center_policy_mut().allow_joins = false;
+        self.recovery_required = true;
+        self.permit = None;
+        self.network_key_at = None;
+        self.network_key_retry_at = None;
+        // Presence was inferred from the lost event stream. Keep the
+        // provisioned identities and all key material for restoration.
+        let online: Vec<ExtendedAddress, N> = self
+            .registry
+            .devices()
+            .iter()
+            .filter(|d| matches!(d.status, Registration::Joined | Registration::Authenticated))
+            .map(|d| d.ieee)
+            .collect();
+        for ieee in online {
+            self.registry.on_device_left(ieee, stack.now());
+        }
+        Some(SeTrustCenterEvent::RecoveryRequired { telemetry, control })
+    }
+
     /// Runs the permit-join schedule and removes devices that never
     /// completed Key Establishment.
     pub fn poll<C: BlockCipher, R: CryptoRng, S: Storage>(
@@ -243,6 +309,12 @@ impl<const N: usize> SeTrustCenter<N> {
         stack: &mut Stack<C, R, S>,
         now: Instant,
     ) -> Option<SeTrustCenterEvent> {
+        if stack.recovery_needed() {
+            return self.require_recovery(stack, 0, 0);
+        }
+        if self.recovery_required {
+            return None;
+        }
         if let Some(p) = self.permit.as_mut() {
             if !p.is_open(now) {
                 self.permit = None;
@@ -302,6 +374,9 @@ impl<const N: usize> SeTrustCenter<N> {
 
     /// The next instant [`Self::poll`] has something to do.
     pub fn deadline(&self, now: Instant) -> Option<Instant> {
+        if self.recovery_required {
+            return None;
+        }
         let permit = self.permit.and_then(|p| p.next_broadcast(now));
         let overdue = self
             .registry

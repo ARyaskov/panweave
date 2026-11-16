@@ -1,5 +1,6 @@
 //! The [`Stack`] type: configuration, events and the public control API.
 
+use crate::event_buffer::EventBuffer;
 use crate::profile::StackProfile;
 use heapless::Vec;
 use panweave_aps::layer::NwkView;
@@ -253,6 +254,14 @@ pub struct ZclFrame {
 /// Application-level events.
 #[derive(Clone, Debug)]
 pub enum StackEvent {
+    /// Event delivery lost observations. A nonzero `control` count means
+    /// protocol progress has stopped; reconstruct and restore the owner.
+    EventQueueLoss {
+        /// Replaceable reports or diagnostics discarded.
+        telemetry: u32,
+        /// Control transitions discarded, including invalidated backlog.
+        control: u32,
+    },
     /// A persistent state update failed and requires recovery or retry.
     PersistenceFailed {
         /// Record category that could not be committed.
@@ -1053,7 +1062,7 @@ macro_rules! stack_literal {
             storage: $storage,
             config: $config,
             now: Instant::from_millis(0),
-            events: P::Events::deque(),
+            events: EventBuffer::default(),
             mac_handles: P::Handles::vec(),
             aps_handles: P::Handles::vec(),
             phase: Phase::Idle,
@@ -1147,7 +1156,7 @@ pub struct Stack<
     /// Effective settings; startup identity is read through `config()`.
     pub(crate) config: StackConfig,
     pub(crate) now: Instant,
-    pub(crate) events: DequeOf<StackEvent, P::Events>,
+    pub(crate) events: EventBuffer<StackEvent, P::Events>,
     pub(crate) mac_handles: VecOf<(TxHandle, TxHandle), P::Handles>,
     pub(crate) aps_handles: VecOf<(TxId, NwkHandle), P::Handles>,
     pub(crate) phase: Phase,
@@ -1481,7 +1490,13 @@ impl<
 
     /// Next application event.
     pub fn next_event(&mut self) -> Option<StackEvent> {
-        self.events.pop_front()
+        if let Some(loss) = self.events.take_loss() {
+            return Some(StackEvent::EventQueueLoss {
+                telemetry: loss.telemetry,
+                control: loss.control,
+            });
+        }
+        self.events.pop()
     }
 
     /// Next join milestone ([`crate::join_trace`]).
@@ -1513,14 +1528,26 @@ impl<
     }
 
     pub(crate) fn push_event(&mut self, e: StackEvent) {
-        if self.events.push_back(e).is_err() {
-            self.dropped_events = self.dropped_events.saturating_add(1);
-        }
+        self.dropped_events = self.dropped_events.saturating_add(self.events.push(e));
+    }
+
+    /// Whether a control-event gap has stopped this stack. Drain the gap
+    /// notification, stop external transports, then reconstruct and
+    /// restore the stack; reading the notification does not resume it.
+    pub fn recovery_needed(&self) -> bool {
+        self.events.recovery_needed()
+    }
+
+    /// Stops this stack after an external consumer lost control events.
+    /// The consumer retains its own loss notification. Pending radio
+    /// actions and future inputs are suppressed until reconstruction.
+    pub fn halt_for_event_loss(&mut self) {
+        self.dropped_events = self.dropped_events.saturating_add(self.events.halt());
     }
 
     /// True when joined and authorized.
     pub fn is_operating(&self) -> bool {
-        self.phase == Phase::Operating
+        self.phase == Phase::Operating && !self.recovery_needed()
     }
 
     /// Local network address.
@@ -1548,7 +1575,7 @@ impl<
         channels: ChannelMask,
         scan_duration: u8,
     ) -> Result<(), NwkStatus> {
-        if self.phase != Phase::Idle || self.persistence_reset_pending() {
+        if self.recovery_needed() || self.phase != Phase::Idle || self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
         self.network_key_sequence = KeySequenceNumber(0);
@@ -1592,6 +1619,9 @@ impl<
         channels: ChannelMask,
         scan_duration: u8,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let mut k = [0u8; 16];
         self.nwk.rng().fill_bytes(&mut k);
         self.form_network_with_key_on(Key128::from_bytes(k), channels, scan_duration)
@@ -1624,6 +1654,9 @@ impl<
         scan_duration: u8,
         attempts: u8,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         if self.persistence_reset_pending() {
             return Err(NwkStatus::InvalidRequest);
         }
@@ -1650,6 +1683,9 @@ impl<
 
     /// Permits joining on this device for `seconds` (0 closes, 0xff → 0xfe).
     pub fn permit_join(&mut self, seconds: u8) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         let s = if seconds == 0xff { 0xfe } else { seconds };
         self.nwk
             .permit_joining(s)
@@ -1802,6 +1838,9 @@ impl<
 
     /// Leaves the network.
     pub fn leave(&mut self, rejoin: bool) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         self.nwk
             .leave(None, rejoin, false)
             .map_err(|_| NwkStatus::InvalidRequest)
@@ -1818,41 +1857,65 @@ impl<
 
     /// A received PHY frame (without FCS).
     pub fn on_radio_frame(&mut self, bytes: &[u8], meta: RxMetadata) {
+        if self.recovery_needed() {
+            return;
+        }
         self.handle_radio_frame(bytes, meta);
         self.pump();
     }
 
     /// Completion of the last [`MacAction::Transmit`].
     pub fn on_tx_complete(&mut self, result: Result<TxResult, RadioError>) {
+        if self.recovery_needed() {
+            return;
+        }
         self.mac.on_tx_complete(result);
         self.pump();
     }
 
     /// Energy detection result for [`MacAction::EnergyDetect`].
     pub fn on_energy_result(&mut self, level: u8) {
+        if self.recovery_needed() {
+            return;
+        }
         self.mac.on_energy_result(level);
         self.pump();
     }
 
     /// Next radio action.
     pub fn next_radio_action(&mut self) -> Option<MacAction> {
+        if self.recovery_needed() {
+            return None;
+        }
         self.mac.next_action()
     }
 
     /// Advances time and runs every layer.
     pub fn poll(&mut self, now: Instant) {
+        if self.recovery_needed() {
+            return;
+        }
         if now.as_millis() > self.now.as_millis() {
             self.now = now;
         }
         let now = self.now;
         self.poll_persistence();
+        if self.recovery_needed() {
+            return;
+        }
         self.mac.poll_timers(now);
         self.nwk.poll_timers(now);
         self.aps.poll_timers(now);
         self.zdo.poll_timers(now);
         self.zcl.poll_timers(now);
         self.poll_dlk(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_authorization(now);
+        if self.recovery_needed() {
+            return;
+        }
         if self.challenge.is_some_and(|c| now.has_reached(c.deadline)) {
             self.challenge = None;
         }
@@ -1871,21 +1934,57 @@ impl<
                 self.push_event(StackEvent::JoinFailed(NwkStatus::NoNetworks));
             }
         }
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_keep_alive(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_key_update(now);
+        if self.recovery_needed() {
+            return;
+        }
         if self.tclk_update.is_some_and(|t| now.has_reached(t)) {
             self.tclk_update = None;
             self.push_event(StackEvent::LinkKeyUpdateFailed);
         }
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_parent_annce(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_ota_discovery(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_agility(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_fragmentation(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_pending_restart(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_parent_loss_rejoin(now);
+        if self.recovery_needed() {
+            return;
+        }
         #[cfg(feature = "green-power")]
         self.poll_green_power(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.poll_touchlink(now);
+        if self.recovery_needed() {
+            return;
+        }
         self.service_polling(now);
         self.pump();
     }
@@ -1946,6 +2045,9 @@ impl<
 
     /// Earliest time [`Stack::poll`] should run again.
     pub fn next_deadline(&self) -> Option<Instant> {
+        if self.recovery_needed() {
+            return None;
+        }
         [
             self.mac.next_deadline(),
             self.nwk.next_deadline(),
@@ -1979,7 +2081,7 @@ impl<
     /// Whether the receiver must stay on (routers, rx-on end devices, or
     /// a sleepy device with a poll in progress).
     pub fn needs_receiver(&self) -> bool {
-        !self.config.sleepy || self.mac.needs_receiver()
+        !self.recovery_needed() && (!self.config.sleepy || self.mac.needs_receiver())
     }
 }
 

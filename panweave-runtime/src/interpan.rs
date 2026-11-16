@@ -87,6 +87,9 @@ impl<
         asdu: &[u8],
         secured: bool,
     ) -> Result<(), NwkStatus> {
+        if self.recovery_needed() {
+            return Err(NwkStatus::InvalidRequest);
+        }
         if asdu.len() > MAX_INTER_PAN_ASDU {
             return Err(NwkStatus::InvalidParameter);
         }

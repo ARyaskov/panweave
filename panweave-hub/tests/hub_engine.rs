@@ -12,8 +12,10 @@
 mod common;
 
 use common::*;
-use panweave_hub::model::{InterviewStatus, LeakState};
-use panweave_hub::protocol::{ErrorCode, Event, Request, Response, SensorEvent};
+use panweave_hub::model::{DeviceState, InterviewStatus, LeakState};
+use panweave_hub::protocol::{
+    ErrorCode, Event, LightCommand, NetworkState, Request, Response, SensorEvent,
+};
 use panweave_hub::registry::{MAX_DEVICES, zone_type};
 use panweave_runtime::StackEvent;
 use panweave_sim::Simulator;
@@ -232,6 +234,165 @@ fn a_full_event_queue_reports_how_many_events_were_lost() {
             .sum();
         assert_eq!(reported, dropped, "every loss is reported: {seen:?}");
     }
+}
+
+#[test]
+fn a_telemetry_gap_restarts_a_partly_completed_state_synchronization() {
+    use panweave_types::Endpoint;
+    use panweave_zcl::clusters::on_off;
+    use panweave_zcl::{Role, Value};
+
+    let (mut sim, c) = engine_network();
+    let b = join(&mut sim, c, "bulb", bulb(), BULB);
+    // Poll only the hub and settle radio traffic. Device reporting timers
+    // do not run, so the oracle can only be satisfied by an actual read.
+    inject(
+        &mut sim,
+        c,
+        StackEvent::EventQueueLoss {
+            telemetry: 1,
+            control: 0,
+        },
+    );
+    {
+        let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+        app.hub.poll(stack);
+        stack.flush();
+    }
+    sim.settle();
+    let Response::DeviceState { state, .. } =
+        request(&mut sim, c, &Request::GetDeviceState { ieee: BULB })
+    else {
+        panic!()
+    };
+    assert_eq!(state.on, Some(false));
+    sim.stack(b)
+        .zcl
+        .cluster_mut(Endpoint(1), on_off::ID, Role::Server)
+        .unwrap()
+        .set(on_off::ON_OFF.id, &Value::Bool(Some(true)));
+    // The On/Off read already finished; Level Control remains. A gap
+    // must restart at On/Off rather than finish the remaining cluster.
+    inject(
+        &mut sim,
+        c,
+        StackEvent::EventQueueLoss {
+            telemetry: 2,
+            control: 0,
+        },
+    );
+    {
+        let (stack, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+        app.hub.poll(stack);
+        stack.flush();
+    }
+    sim.settle();
+    let Response::DeviceState { state, .. } =
+        request(&mut sim, c, &Request::GetDeviceState { ieee: BULB })
+    else {
+        panic!()
+    };
+    assert_eq!(state.on, Some(true));
+    assert!(sim.stack_ref(c).is_operating());
+}
+
+#[test]
+fn a_control_gap_invalidates_state_and_refuses_work_until_reconstruction() {
+    let (mut sim, c) = engine_network();
+    join(&mut sim, c, "bulb", bulb(), BULB);
+    let short = sim.stack_ref(c).short_of(ExtendedAddress(BULB)).unwrap();
+    assert_eq!(request(&mut sim, c, &Request::ClearTrace), Response::Done);
+    let Response::Accepted { command } = request(
+        &mut sim,
+        c,
+        &Request::ReadAttribute {
+            ieee: BULB,
+            endpoint: 1,
+            cluster: 0x0006,
+            attribute: 0,
+        },
+    ) else {
+        panic!()
+    };
+    take_hub_events(&mut sim, c);
+    inject(
+        &mut sim,
+        c,
+        StackEvent::EventQueueLoss {
+            telemetry: 3,
+            control: 2,
+        },
+    );
+    let events = take_hub_events(&mut sim, c);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::CommandFailed {
+            command: id,
+            error: ErrorCode::NetworkDown,
+            ..
+        } if *id == command
+    )));
+    assert!(events.contains(&Event::HubError {
+        error: ErrorCode::NetworkDown,
+        detail: 2,
+    }));
+    assert!(events.contains(&Event::PermitJoinChanged { seconds: 0 }));
+    assert!(!events.contains(&Event::DeviceLeft { ieee: BULB }));
+    inject(&mut sim, c, announce(BULB, short.0));
+    sim.run_for(Duration::from_secs(90));
+    let Response::NetworkStatus(status) = request(&mut sim, c, &Request::GetNetworkStatus) else {
+        panic!()
+    };
+    assert_eq!(status.state, NetworkState::Down);
+    assert_eq!(status.permit_join_s, 0);
+    assert_eq!(status.devices, 1);
+    let Response::Device(device) = request(&mut sim, c, &Request::GetDevice { ieee: BULB }) else {
+        panic!()
+    };
+    assert!(!device.summary.present);
+    assert_eq!(device.state, DeviceState::default());
+    assert!(device.summary.interview.is_finished());
+    let Response::Diagnostics(diagnostics) = request(&mut sim, c, &Request::GetDiagnostics) else {
+        panic!()
+    };
+    assert_eq!(diagnostics.pending, 0);
+    assert_eq!(diagnostics.commands, 0);
+    let Response::TracePage(trace) = request(
+        &mut sim,
+        c,
+        &Request::ReadTrace {
+            from: 0,
+            max: 12,
+            ieee: None,
+        },
+    ) else {
+        panic!()
+    };
+    assert!(trace.records.iter().any(|record| {
+        record.code == panweave_hub::diag::code::STACK_EVENTS_DROPPED
+            && record.severity == panweave_hub::diag::Severity::Critical
+    }));
+    for work in [
+        Request::PermitJoin { seconds: 10 },
+        Request::Light {
+            ieee: BULB,
+            endpoint: 1,
+            command: LightCommand::TurnOn,
+        },
+        Request::ReadAttribute {
+            ieee: BULB,
+            endpoint: 1,
+            cluster: 0x0006,
+            attribute: 0,
+        },
+    ] {
+        assert_eq!(
+            request(&mut sim, c, &work),
+            Response::Error(ErrorCode::NetworkDown)
+        );
+    }
+    assert!(sim.stack_ref(c).recovery_needed());
+    assert!(!sim.stack_ref(c).config().trust_center_policy.allow_joins);
 }
 
 #[test]

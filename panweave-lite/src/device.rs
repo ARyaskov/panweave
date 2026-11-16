@@ -28,14 +28,15 @@
 //! that forgot its CIE after a power loss could never report again. A
 //! failed write is reported ([`LiteEvent::StorageFailed`]) and retried.
 
-use heapless::Deque;
 use panweave_bdb::{Bdb, Config as BdbConfig, Failure, Outcome};
 use panweave_mac::radio::{RadioError, RxMetadata, TxResult};
 use panweave_mac::service::{MacAction, MacServiceConfig};
+use panweave_runtime::event_buffer::{EventBuffer, EventLoss, Prioritized};
 use panweave_runtime::{EndpointError, Restored, StackConfig, StackEvent};
 use panweave_security::cipher::BlockCipher;
 use panweave_security::material::LinkKeyKind;
 use panweave_storage::{Key, Kind, Storage, StorageError};
+use panweave_types::capacity::Cap;
 use panweave_types::time::{Duration, Instant};
 use panweave_types::{
     CryptoRng, ExtendedAddress, Key128, LogicalDeviceType, ManufacturerCode, ProfileId,
@@ -135,6 +136,14 @@ impl LiteConfig {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LiteEvent {
+    /// Event delivery lost observations. Nonzero `control` stops the
+    /// device; reconstruct and initialize it before processing more input.
+    EventQueueLoss {
+        /// Replaceable observations discarded.
+        telemetry: u32,
+        /// Control transitions discarded.
+        control: u32,
+    },
     /// A commissioning procedure finished.
     Commissioning(Outcome),
     /// Joined (or rejoined) and authorized.
@@ -168,6 +177,12 @@ pub enum LiteEvent {
     StorageFailed(StorageError),
 }
 
+impl Prioritized for LiteEvent {
+    fn is_control(&self) -> bool {
+        true
+    }
+}
+
 /// A battery IAS Zone sensor (see the module documentation).
 pub struct LiteDevice<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// The protocol stack.
@@ -184,7 +199,7 @@ pub struct LiteDevice<C: BlockCipher, R: CryptoRng, S: Storage> {
     /// [`SAVE_RETRY`], one [`LiteEvent::StorageFailed`] per episode).
     save_retry_at: Option<Instant>,
     delivery: Delivery,
-    events: Deque<LiteEvent, EVENT_CAPACITY>,
+    events: EventBuffer<LiteEvent, Cap<EVENT_CAPACITY>>,
     /// Events dropped because the application did not drain them.
     pub dropped_events: u32,
 }
@@ -223,7 +238,7 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
             save_due: false,
             save_retry_at: None,
             delivery: Delivery::Confirmed,
-            events: Deque::new(),
+            events: EventBuffer::default(),
             dropped_events: 0,
         }
     }
@@ -276,6 +291,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     /// Network steering (BDB 3.1 §9.8): finds an open network and joins
     /// it (the commissioning button of a factory-new sensor).
     pub fn start_commissioning(&mut self) -> Result<(), Failure> {
+        if self.recovery_needed() {
+            return Err(Failure::Busy);
+        }
         let r = self.bdb.steer(&mut self.stack);
         self.collect();
         r
@@ -283,6 +301,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
 
     /// Rejoin procedure (BDB 3.1 §10.1), e.g. after the parent was lost.
     pub fn rejoin(&mut self) -> Result<(), Failure> {
+        if self.recovery_needed() {
+            return Err(Failure::Busy);
+        }
         let r = self.bdb.rejoin(&mut self.stack, false);
         self.collect();
         r
@@ -308,6 +329,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     /// New sensor inputs (a GPIO or comparator edge): a change is
     /// notified to the CIE now.
     pub fn set_inputs(&mut self, inputs: Inputs) {
+        if self.recovery_needed() {
+            return;
+        }
         self.inputs = inputs;
         let now = self.stack.now();
         let p = self.reporter.set_inputs(inputs, now);
@@ -324,6 +348,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     /// half percent); the reporting configuration decides when it is
     /// sent.
     pub fn set_battery(&mut self, voltage: Option<u8>, percentage: Option<u8>) {
+        if self.recovery_needed() {
+            return;
+        }
         if let Some(c) =
             self.stack
                 .zcl
@@ -373,6 +400,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     // Not inlined: its frame would otherwise add to every caller's.
     #[inline(never)]
     fn apply(&mut self, p: Option<Publish>) {
+        if self.recovery_needed() {
+            return;
+        }
         match p {
             Some(Publish::Status(s)) => {
                 let _ = self.stack.zcl.set_zone_status(SENSOR_ENDPOINT, s);
@@ -389,6 +419,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     }
 
     fn note_delivery(&mut self) {
+        if self.recovery_needed() {
+            return;
+        }
         let d = self.reporter.delivery();
         if d != self.delivery {
             self.delivery = d;
@@ -397,9 +430,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     }
 
     fn push(&mut self, e: LiteEvent) {
-        if self.events.push_back(e).is_err() {
-            self.dropped_events = self.dropped_events.saturating_add(1);
+        let dropped = match e {
+            LiteEvent::EventQueueLoss { telemetry, control } => {
+                self.events.observe_loss(EventLoss { telemetry, control })
+            }
+            event => self.events.push(event),
+        };
+        self.dropped_events = self.dropped_events.saturating_add(dropped);
+        if self.events.recovery_needed() {
+            self.stack.halt_for_event_loss();
         }
+        if self.recovery_needed() {
+            self.bdb = Bdb::new(self.bdb.config, false);
+        }
+    }
+
+    /// Whether a control-event gap stopped this device. Reading the gap
+    /// notification never clears it; reconstruct and initialize instead.
+    pub fn recovery_needed(&self) -> bool {
+        self.events.recovery_needed() || self.stack.recovery_needed()
     }
 
     /// Drains the stack events into the commissioning machine, the
@@ -408,16 +457,29 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     #[inline(never)]
     fn collect(&mut self) {
         while let Some(e) = self.stack.next_event() {
+            if let StackEvent::EventQueueLoss { telemetry, control } = e {
+                self.push(LiteEvent::EventQueueLoss { telemetry, control });
+                continue;
+            }
+            if self.recovery_needed() {
+                continue;
+            }
             if let Some(b) = LiteStack::<C, R, S>::bdb_event(&e)
                 && let Some(o) = self.bdb.on_event(&mut self.stack, &b)
             {
                 self.push(LiteEvent::Commissioning(o));
+            }
+            if self.recovery_needed() {
+                break;
             }
             let now = self.stack.now();
             match e {
                 StackEvent::Joined { short, rejoin, .. } => {
                     self.bdb.set_on_network(true);
                     self.push(LiteEvent::Joined { short, rejoin });
+                    if self.recovery_needed() {
+                        break;
+                    }
                     let p = self.reporter.on_reachable(now);
                     self.apply(p);
                 }
@@ -428,6 +490,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
                 StackEvent::ZoneEnrolled { zone_id, .. } => {
                     self.save_due = true;
                     self.push(LiteEvent::Enrolled { zone_id });
+                    if self.recovery_needed() {
+                        break;
+                    }
                     let p = self.reporter.on_reachable(now);
                     self.apply(p);
                 }
@@ -449,6 +514,10 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
                 StackEvent::FactoryReset => self.push(LiteEvent::AttributesReset),
                 _ => {}
             }
+        }
+        if self.recovery_needed() {
+            self.bdb = Bdb::new(self.bdb.config, false);
+            return;
         }
         self.save_enrollment();
     }
@@ -493,7 +562,13 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     /// Next event.
     pub fn next_event(&mut self) -> Option<LiteEvent> {
         self.collect();
-        self.events.pop_front()
+        if let Some(loss) = self.events.take_loss() {
+            return Some(LiteEvent::EventQueueLoss {
+                telemetry: loss.telemetry,
+                control: loss.control,
+            });
+        }
+        self.events.pop()
     }
 
     /// A frame received by the radio.
@@ -522,11 +597,25 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
     /// Advances time: the stack and commissioning timers and the
     /// reporter's retransmissions.
     pub fn poll(&mut self, now: Instant) {
+        if self.recovery_needed() {
+            self.collect();
+            return;
+        }
         // BDB 3.1 §6.6: poll fast while a commissioning procedure runs.
         self.stack.set_fast_polling(self.bdb.is_busy());
         self.stack.poll(now);
+        // Apply stack outcomes, including observer overflow, before a
+        // commissioning timeout or the reporter can advance further.
+        self.collect();
+        if self.recovery_needed() {
+            return;
+        }
         if let Some(o) = self.bdb.poll(&mut self.stack, now) {
             self.push(LiteEvent::Commissioning(o));
+        }
+        if self.recovery_needed() {
+            self.collect();
+            return;
         }
         let reachable = self.reachable();
         let p = self.reporter.poll(now, reachable);
@@ -536,6 +625,9 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> LiteDevice<C, R, S> {
 
     /// Earliest time [`LiteDevice::poll`] must run again.
     pub fn next_deadline(&self) -> Option<Instant> {
+        if self.recovery_needed() {
+            return None;
+        }
         [
             self.stack.next_deadline(),
             self.bdb.next_deadline(),
