@@ -118,14 +118,89 @@ def thumb_expand(imm12):
 
 
 def qemu(path):
-    text = open(path, encoding="utf-8", errors="replace").read()
-    if "PANWEAVE-LITE-QEMU" not in text:
-        raise SystemExit(f"{path}: no probe output")
-    phases = {m.group(2): int(m.group(1)) for m in re.finditer(r"^phase (\d+) (.+)$", text, re.M)}
-    entries = {m.group(2): int(m.group(1)) for m in re.finditer(r"^entry (\d+) (.+)$", text, re.M)}
-    result = re.search(r"^result (.+)$", text, re.M).group(1)
-    dropped = re.search(r"^dropped (.+)$", text, re.M).group(1)
-    dlk = re.search(r"^dlk (\w+)$", text, re.M).group(1)
+    with open(path, encoding="utf-8", errors="replace") as source:
+        lines = source.read().splitlines()
+
+    def invalid(reason):
+        raise SystemExit(f"{path}: invalid QEMU probe log: {reason}")
+
+    marker = "PANWEAVE-LITE-QEMU"
+    if lines.count(marker) != 1:
+        invalid("expected exactly one PANWEAVE-LITE-QEMU marker")
+    lines = lines[lines.index(marker) + 1:]
+
+    def single(prefix):
+        values = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+        if len(values) != 1:
+            invalid(f"expected exactly one {prefix.strip()} line")
+        return values[0]
+
+    def fields(prefix, names, pattern):
+        raw = single(prefix)
+        values = {}
+        for token in raw.split():
+            match = re.fullmatch(rf"([a-z_]+)=({pattern})", token)
+            if match is None:
+                invalid(f"malformed {prefix.strip()} field")
+            name, value = match.groups()
+            if name in values:
+                invalid(f"duplicate {prefix.strip()} field: {name}")
+            values[name] = value
+        missing = set(names) - values.keys()
+        unexpected = values.keys() - set(names)
+        if missing or unexpected:
+            invalid(f"{prefix.strip()} fields differ: missing {sorted(missing)}, unexpected {sorted(unexpected)}")
+        return raw, values
+
+    result, outcomes = fields(
+        "result ",
+        ("formed", "joined", "reported", "rejoined", "restarted"),
+        "true|false",
+    )
+    failed = [name for name, value in outcomes.items() if value != "true"]
+    if failed:
+        invalid(f"scenario failed: {', '.join(failed)}")
+    dropped, losses = fields(
+        "dropped ",
+        ("device", "stack", "zcl", "zdo", "aps_actions", "aps_events"),
+        "[0-9]+",
+    )
+    lost = [name for name, value in losses.items() if int(value) != 0]
+    if lost:
+        invalid(f"dropped queue entries: {', '.join(lost)}")
+    dlk = single("dlk ")
+    if dlk not in ("true", "false"):
+        invalid("dlk must be true or false")
+
+    def measurements(prefix, names):
+        values = {}
+        for line in lines:
+            if not line.startswith(prefix):
+                continue
+            match = re.fullmatch(r"([0-9]+) (.+)", line[len(prefix):])
+            if match is None:
+                invalid(f"malformed {prefix.strip()} measurement")
+            raw_value, name = match.groups()
+            if name in values:
+                invalid(f"duplicate {prefix.strip()} measurement: {name}")
+            value = int(raw_value)
+            if value == 0:
+                invalid(f"unmeasured {prefix.strip()}: {name}")
+            values[name] = value
+        missing = set(names) - values.keys()
+        unexpected = values.keys() - set(names)
+        if missing or unexpected:
+            invalid(f"{prefix.strip()} measurements differ: missing {sorted(missing)}, unexpected {sorted(unexpected)}")
+        return values
+
+    phases = measurements("phase ", (
+        "construction", "initialization", "commissioning", "report",
+        "parent loss and rejoin", "restart from flash",
+    ))
+    entries = measurements("entry ", (
+        "new", "initialize", "commission", "on_radio_frame", "on_tx_complete",
+        "next_radio_action", "poll", "set_inputs", "next_event",
+    ))
     return {"phases": phases, "entries": entries, "result": result, "dropped": dropped, "dlk": dlk}
 
 
