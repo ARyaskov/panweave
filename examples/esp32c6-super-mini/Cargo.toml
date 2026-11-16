@@ -2,7 +2,7 @@
 name = "panweave-esp32c6"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.100"
 publish = false
 description = "Panweave Zigbee 4.0 on the ESP32-C6 Super Mini: the radio, flash, RNG and clock adapters, and example firmware"
 license = "MIT OR Apache-2.0"

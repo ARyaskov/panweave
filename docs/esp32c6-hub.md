@@ -77,7 +77,7 @@ the previous type).
 
 ## Building
 
-Requirements: Rust 1.95 (the repository pins it in `rust-toolchain.toml`),
+Requirements: Rust 1.100 (the repository pins it in `rust-toolchain.toml`),
 the `riscv32imac-unknown-none-elf` target and `espflash`:
 
 ```bash

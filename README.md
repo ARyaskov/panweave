@@ -4,7 +4,7 @@ Panweave is an independent, open-source Rust implementation of
 IEEE 802.15.4-based Zigbee protocol functionality for embedded and host-side
 systems.
 
-* Rust 1.95, edition 2024, stable only.
+* Rust 1.100, edition 2024, stable only.
 * `no_std` by default; optional `alloc` and `std`.
 * Targets microcontrollers (ESP32-C6/H2, nRF52/nRF54, EFR32, generic
   802.15.4 radios) and host coordinators using an external 802.15.4 RCP.
