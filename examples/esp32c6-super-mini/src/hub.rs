@@ -130,22 +130,25 @@ impl UsbLink {
     }
 }
 
-/// The registry storage: the hub partition when the partition table has
-/// one, else none (the registry then lives in RAM only and is lost at
-/// every reset; the hub is configured non-persistent, never touches the
-/// storage, and reports it to hosts).
+/// Persistent storage for the hub's stack or registry. The registry may
+/// live in RAM when its partition is absent. An invalid partition layout
+/// disables all stack storage operations and keeps boot diagnostic-only.
 pub enum HubStore {
     /// The `hubdata` flash partition.
     Flash(SharedStore),
     /// No storage.
     None,
+    /// Storage is disabled because its region could not be validated or
+    /// opened. Loading must fail so boot cannot mistake it for an empty
+    /// network and form a replacement.
+    Unavailable,
 }
 
 impl Storage for HubStore {
     fn store(&mut self, key: Key, data: &[u8]) -> Result<(), StorageError> {
         match self {
             HubStore::Flash(s) => s.store(key, data),
-            HubStore::None => Err(StorageError::Io),
+            HubStore::None | HubStore::Unavailable => Err(StorageError::Io),
         }
     }
 
@@ -153,6 +156,7 @@ impl Storage for HubStore {
         match self {
             HubStore::Flash(s) => s.load(key, buf),
             HubStore::None => Ok(None),
+            HubStore::Unavailable => Err(StorageError::Io),
         }
     }
 
@@ -160,6 +164,7 @@ impl Storage for HubStore {
         match self {
             HubStore::Flash(s) => s.erase(key),
             HubStore::None => Ok(()),
+            HubStore::Unavailable => Err(StorageError::Io),
         }
     }
 
@@ -167,6 +172,7 @@ impl Storage for HubStore {
         match self {
             HubStore::Flash(s) => s.erase_kind(kind),
             HubStore::None => Ok(()),
+            HubStore::Unavailable => Err(StorageError::Io),
         }
     }
 }

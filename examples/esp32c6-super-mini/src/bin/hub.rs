@@ -81,7 +81,7 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
 }
 
 /// The hub's Zigbee node.
-type HubNode = panweave::Node<SoftwareAes, panweave_esp32c6::Rng, panweave_esp32c6::SharedStore>;
+type HubNode = panweave::Node<SoftwareAes, panweave_esp32c6::Rng, HubStore>;
 
 // `main` never returns, so its frame holds the stack for the firmware's
 // life. What exists only at boot stays out of it: the endpoints are
@@ -275,7 +275,10 @@ fn main() -> ! {
     let detail = node.stack.restore_detail();
     let outcome = NetworkRestore::decide(
         stored_network(restored, detail),
-        node.stack.storage.stats.corrupt_records,
+        match &node.stack.storage {
+            HubStore::Flash(store) => store.stats.corrupt_records,
+            HubStore::None | HubStore::Unavailable => 0,
+        },
     );
     match outcome {
         NetworkRestore::Restored => hub.network_restored(&node.stack),
@@ -417,10 +420,13 @@ fn main() -> ! {
         hub.platform.watchdog_s = Some(WATCHDOG_SECONDS);
         hub.platform.usb_rx_bytes = Some(usb.rx_bytes);
         hub.platform.usb_tx_bytes = Some(usb.tx_bytes);
-        hub.platform.stack_store = Some(store_usage(&node.stack.storage));
+        hub.platform.stack_store = match &node.stack.storage {
+            HubStore::Flash(store) => Some(store_usage(store)),
+            HubStore::None | HubStore::Unavailable => None,
+        };
         hub.platform.hub_store = match hub.storage() {
             HubStore::Flash(s) => Some(store_usage(s)),
-            HubStore::None => None,
+            HubStore::None | HubStore::Unavailable => None,
         };
         if now().as_millis() >= next_stack_scan {
             stack_peak = stack_monitor.peak();

@@ -224,6 +224,36 @@ pub fn validate(
     out
 }
 
+/// Runs `open` with the stack and optional registry regions only after
+/// the complete, readable partition table has passed validation.
+///
+/// The callback may open writable stores, including stores that format
+/// empty regions. An unreadable, truncated or invalid table never reaches
+/// it. A missing registry partition is permitted; the stack still has its
+/// validated NVS region.
+pub fn with_storage_regions<T>(
+    table: Option<&[Partition]>,
+    flash_size: u32,
+    open: impl FnOnce((u32, u32), Option<(u32, u32)>) -> T,
+) -> Option<T> {
+    let table = table?;
+    if table.len() > MAX_PARTITIONS
+        || validate(table, flash_size, None)
+            .iter()
+            .any(|finding| finding.is_fatal())
+    {
+        return None;
+    }
+    let registry = table
+        .iter()
+        .find(|partition| partition.label.as_str() == HUBDATA_LABEL)
+        .map(|partition| {
+            let len = partition.size / (2 * SECTOR) * (2 * SECTOR);
+            (partition.offset, len)
+        });
+    Some(open((NVS_OFFSET, NVS_SIZE), registry))
+}
+
 /// A CSV line that could not be read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CsvError {
@@ -374,6 +404,73 @@ mod tests {
         assert!(!f[0].is_fatal());
         let moved = [p("nvs", kind::DATA, 0x02, 0xa000, 0x6000)];
         assert!(validate(&moved, FLASH, None).contains(&Finding::NvsMoved));
+    }
+
+    #[test]
+    fn invalid_layouts_never_open_writable_stores() {
+        struct Flash {
+            erases: usize,
+            writes: usize,
+        }
+
+        let valid = parse_csv(HUB_CSV).unwrap();
+        let mut overlap = valid.clone();
+        overlap[3].offset = overlap[2].offset;
+        let mut moved = valid.clone();
+        moved[0].offset += SECTOR;
+        let mut outside = valid.clone();
+        outside[3].offset = FLASH;
+        let mut table_overlap = valid.clone();
+        table_overlap[3].offset = TABLE_OFFSET;
+        let mut overflow = valid.clone();
+        overflow[3].offset = u32::MAX - SECTOR + 1;
+        let mut too_many: Vec<Partition, { MAX_PARTITIONS + 1 }> = Vec::new();
+        for partition in &valid {
+            too_many.push(partition.clone()).unwrap();
+        }
+        while too_many.len() <= MAX_PARTITIONS {
+            too_many.push(valid[0].clone()).unwrap();
+        }
+        for table in [
+            None,
+            Some(overlap.as_slice()),
+            Some(moved.as_slice()),
+            Some(outside.as_slice()),
+            Some(table_overlap.as_slice()),
+            Some(overflow.as_slice()),
+            Some(too_many.as_slice()),
+        ] {
+            let mut flash = Flash {
+                erases: 0,
+                writes: 0,
+            };
+            let opened = with_storage_regions(table, FLASH, |_, registry| {
+                // Opening a fresh NOR store formats its region.
+                flash.erases += 2;
+                flash.writes += 1;
+                if registry.is_some() {
+                    flash.erases += 2;
+                    flash.writes += 1;
+                }
+            });
+            assert!(opened.is_none());
+            assert_eq!((flash.erases, flash.writes), (0, 0));
+        }
+    }
+
+    #[test]
+    fn valid_regions_are_opened_after_validation() {
+        let mut table = parse_csv(HUB_CSV).unwrap();
+        assert_eq!(
+            with_storage_regions(Some(&table), FLASH, |stack, registry| (stack, registry)),
+            Some(((NVS_OFFSET, NVS_SIZE), Some((0x31_0000, 0x1_0000))))
+        );
+        table.pop();
+        assert_eq!(
+            with_storage_regions(Some(&table), FLASH, |stack, registry| (stack, registry)),
+            Some(((NVS_OFFSET, NVS_SIZE), None))
+        );
+        assert!(with_storage_regions(Some(&table), 0x20_0000, |_, _| ()).is_none());
     }
 
     #[test]

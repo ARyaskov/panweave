@@ -34,9 +34,10 @@ use esp_hal::tsens::{self, TemperatureSensor};
 use esp_storage::FlashStorage;
 use panweave::types::ExtendedAddress;
 use panweave::types::rng::{CryptoRng, Rng as PanweaveRng};
-use panweave_hub::partitions::{MAX_PARTITIONS, Partition, kind as partition_kind};
+use panweave_hub::partitions::{MAX_PARTITIONS, Partition, with_storage_regions};
 use panweave_storage::nor_flash::{NorFlashStore, SharedNorFlash};
 
+use crate::hub::HubStore;
 use crate::radio::Radio;
 
 /// The LED pin.
@@ -99,7 +100,7 @@ fn time_flash<T>(counter: &AtomicU32, operation: impl FnOnce() -> T) -> T {
     let started = esp_hal::time::Instant::now();
     let result = operation();
     let us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sum| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |sum| {
         Some(sum.saturating_add(us))
     });
     result
@@ -278,12 +279,12 @@ impl Board {
     }
 }
 
-impl Board<SharedStore> {
+impl Board<HubStore> {
     /// The hub's board: the stack's store in the default region, as for
     /// every other image, and the registry store in the [`HUB_PARTITION`]
     /// partition — `None` when the flashed partition table has no such
-    /// partition (or a malformed one), in which case nothing is written
-    /// outside the stack's region.
+    /// partition. An unreadable or invalid table disables both stores;
+    /// the hub can then report diagnostics without writing any flash.
     pub fn init_hub() -> (Self, Option<SharedStore>, PartitionScan) {
         Self::init_hub_inner(None)
     }
@@ -300,13 +301,21 @@ impl Board<SharedStore> {
             crate::startup::mark(panweave_hub::boot::StartupStage::Storage);
         }
         let scan = scan_partitions(&mut flash);
-        let hub_region = scan.hubdata;
         let flash: &'static RefCell<FlashStorage<'static>> =
             alloc::boxed::Box::leak(alloc::boxed::Box::new(RefCell::new(flash)));
         let shared = SharedFlash(SharedNorFlash::new(flash));
-        let storage = NorFlashStore::new(shared, STORE_OFFSET, STORE_LEN)
-            .unwrap_or_else(|_| panic!("storage region {STORE_OFFSET:#x}+{STORE_LEN:#x}"));
-        let hub = hub_region.and_then(|(offset, len)| NorFlashStore::new(shared, offset, len).ok());
+        let (storage, hub) = with_storage_regions(
+            scan.read.then_some(scan.table.as_slice()),
+            scan.flash_size,
+            |(offset, len), registry| {
+                let storage = NorFlashStore::new(shared, offset, len)
+                    .map_or(HubStore::Unavailable, HubStore::Flash);
+                let hub =
+                    registry.and_then(|(offset, len)| NorFlashStore::new(shared, offset, len).ok());
+                (storage, hub)
+            },
+        )
+        .unwrap_or((HubStore::Unavailable, None));
         (parts.with_storage(storage), hub, scan)
     }
 }
@@ -325,9 +334,8 @@ pub struct PartitionScan {
     pub hubdata: Option<(u32, u32)>,
 }
 
-/// Reads the partition table and picks the registry region: the data
-/// partition labelled [`HUB_PARTITION`], trimmed to whole pairs of
-/// sectors, provided it does not overlap the stack's region.
+/// Reads the complete partition table and picks the registry region only
+/// when the full layout passes validation. No store is opened here.
 fn scan_partitions(flash: &mut FlashStorage<'static>) -> PartitionScan {
     use esp_bootloader_esp_idf::partitions::{self, PARTITION_TABLE_MAX_LEN};
     let flash_size = u32::try_from(flash.capacity()).unwrap_or(u32::MAX);
@@ -341,7 +349,6 @@ fn scan_partitions(flash: &mut FlashStorage<'static>) -> PartitionScan {
     let Ok(table) = partitions::read_partition_table(flash, &mut buf) else {
         return scan;
     };
-    scan.read = true;
     for e in table.iter() {
         let p = Partition {
             label: heapless::String::try_from(e.label_as_str()).unwrap_or_default(),
@@ -350,18 +357,13 @@ fn scan_partitions(flash: &mut FlashStorage<'static>) -> PartitionScan {
             offset: e.offset(),
             size: e.len(),
         };
-        let _ = scan.table.push(p);
+        if scan.table.push(p).is_err() {
+            return scan;
+        }
     }
-    let sector = FlashStorage::SECTOR_SIZE;
-    scan.hubdata = table
-        .iter()
-        .find(|p| p.label_as_str() == HUB_PARTITION && p.raw_type() == partition_kind::DATA)
-        .and_then(|entry| {
-            let offset = entry.offset();
-            let len = entry.len() / (2 * sector) * (2 * sector);
-            let overlaps = offset < STORE_OFFSET + STORE_LEN && STORE_OFFSET < offset + len;
-            (offset % sector == 0 && len >= 2 * sector && !overlaps).then_some((offset, len))
-        });
+    scan.read = true;
+    scan.hubdata =
+        with_storage_regions(Some(&scan.table), scan.flash_size, |_, registry| registry).flatten();
     scan
 }
 
