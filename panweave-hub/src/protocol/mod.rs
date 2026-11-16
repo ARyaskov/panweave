@@ -393,7 +393,7 @@ impl LightCommand {
 // No allocator to box the large variant (`SetAlertConfig`): requests are
 // decoded and handled one at a time on the stack.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Request {
     /// Hub identity and protocol version.
     GetHubInfo,
@@ -677,7 +677,71 @@ pub enum Request {
 /// Longest install code with its CRC (ZD 1.1 / BDB §10.1).
 pub const MAX_INSTALL_CODE: usize = 18;
 
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Requests may carry credentials; diagnostics expose only operation metadata.
+        f.debug_struct("Request")
+            .field("operation", &self.name())
+            .field("access", &self.required_access())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Request {
+    /// The operation name, safe to include in diagnostics without its payload.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::GetHubInfo => "GetHubInfo",
+            Self::GetNetworkStatus => "GetNetworkStatus",
+            Self::PermitJoin { .. } => "PermitJoin",
+            Self::CloseNetwork => "CloseNetwork",
+            Self::ListDevices { .. } => "ListDevices",
+            Self::GetDevice { .. } => "GetDevice",
+            Self::InterviewDevice { .. } => "InterviewDevice",
+            Self::GetDeviceState { .. } => "GetDeviceState",
+            Self::ReadAttribute { .. } => "ReadAttribute",
+            Self::ConfigureReporting { .. } => "ConfigureReporting",
+            Self::Bind { .. } => "Bind",
+            Self::Light { .. } => "Light",
+            Self::RemoveDevice { .. } => "RemoveDevice",
+            Self::GetDiagnostics => "GetDiagnostics",
+            Self::GetBootReport => "GetBootReport",
+            Self::GetRadioDiagnostics => "GetRadioDiagnostics",
+            Self::GetStorageDiagnostics => "GetStorageDiagnostics",
+            Self::GetRuntimeDiagnostics => "GetRuntimeDiagnostics",
+            Self::GetTraceConfiguration => "GetTraceConfiguration",
+            Self::SetTraceConfiguration { .. } => "SetTraceConfiguration",
+            Self::ReadTrace { .. } => "ReadTrace",
+            Self::ClearTrace => "ClearTrace",
+            Self::StartCapture { .. } => "StartCapture",
+            Self::StopCapture => "StopCapture",
+            Self::ReadCapture { .. } => "ReadCapture",
+            Self::SetKeyExchangeExemption { .. } => "SetKeyExchangeExemption",
+            Self::GetSecurityStatus => "GetSecurityStatus",
+            Self::GetAlertStatus => "GetAlertStatus",
+            Self::SetAlertConfig(..) => "SetAlertConfig",
+            Self::QueueTestAlert => "QueueTestAlert",
+            Self::RunRadioProbe => "RunRadioProbe",
+            Self::GetWifiScan => "GetWifiScan",
+            Self::GetLightColor { .. } => "GetLightColor",
+            Self::AddGroup { .. } => "AddGroup",
+            Self::RemoveGroup { .. } => "RemoveGroup",
+            Self::GroupLight { .. } => "GroupLight",
+            Self::StoreScene { .. } => "StoreScene",
+            Self::RecallScene { .. } => "RecallScene",
+            Self::OtaOffer(..) => "OtaOffer",
+            Self::OtaData { .. } => "OtaData",
+            Self::OtaCancel => "OtaCancel",
+            Self::GetOtaStatus => "GetOtaStatus",
+            Self::AddInstallCode { .. } => "AddInstallCode",
+            Self::GreenPowerCommission { .. } => "GreenPowerCommission",
+            Self::ListGreenPowerDevices { .. } => "ListGreenPowerDevices",
+            Self::RemoveGreenPowerDevice { .. } => "RemoveGreenPowerDevice",
+            Self::ScanEnergy { .. } => "ScanEnergy",
+            Self::ChangeChannel { .. } => "ChangeChannel",
+        }
+    }
+
     /// The access a session needs to issue this request.
     pub const fn required_access(&self) -> Access {
         match self {

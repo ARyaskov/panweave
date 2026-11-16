@@ -1029,7 +1029,7 @@ impl Bridge {
                 }
             }
             (r, Response::Error(e)) => {
-                self.log("error", format!("{r:?}: {}", e.name()));
+                self.log("error", format!("{}: {}", r.name(), e.name()));
             }
             _ => {}
         }

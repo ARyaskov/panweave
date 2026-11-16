@@ -1144,3 +1144,31 @@ fn an_older_hub_answers_new_requests_with_unknown_request() {
         Err(ProtocolError::UnknownTag(0x7f))
     ));
 }
+
+#[test]
+fn credential_payloads_are_redacted_from_nested_debug_output() {
+    let install = Request::AddInstallCode {
+        ieee: 1,
+        code: HVec::from_slice(b"credential-marker").unwrap(),
+    };
+    let update = AlertConfigUpdate {
+        password: Some(HVec::from_slice(b"credential-marker").unwrap()),
+        token: Some(HVec::from_slice(b"credential-marker").unwrap()),
+        ..AlertConfigUpdate::default()
+    };
+    for debug in [
+        format!("{install:?}"),
+        format!("{update:?}"),
+        format!(
+            "{:?}",
+            Message::Request {
+                id: 1,
+                request: install
+            }
+        ),
+        format!("{:?}", Request::SetAlertConfig(update)),
+    ] {
+        assert!(!debug.contains("credential-marker"));
+        assert!(!debug.contains("99, 114, 101, 100"));
+    }
+}

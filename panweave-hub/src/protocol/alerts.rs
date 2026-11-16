@@ -715,7 +715,7 @@ impl Default for AlertStatus {
 }
 
 /// A configuration change: every `None` keeps the stored value.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct AlertConfigUpdate {
     /// Turn the experimental mode on or off.
     pub enabled: Option<bool>,
@@ -750,6 +750,17 @@ pub struct AlertConfigUpdate {
     /// Heartbeat interval towards the server, seconds ([`HEARTBEAT_S`],
     /// or 0 for none).
     pub heartbeat_s: Option<u32>,
+}
+
+impl core::fmt::Debug for AlertConfigUpdate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AlertConfigUpdate")
+            .field("enabled", &self.enabled)
+            .field("destination", &self.destination)
+            .field("password_set", &self.password.is_some())
+            .field("token_set", &self.token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AlertConfigUpdate {

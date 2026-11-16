@@ -260,7 +260,7 @@ fn home_assistant_restart_gets_everything_again() {
     // `offline` (Home Assistant stopping) changes nothing.
     h.published.clear();
     h.mqtt("homeassistant/status", "offline");
-    assert!(h.published.is_empty());
+    assert_eq!(h.published.len(), 0);
 }
 
 #[test]
@@ -593,4 +593,28 @@ fn green_power_devices_are_event_entities() {
         h.requests
             .contains(&Request::RemoveGreenPowerDevice { gpd })
     );
+}
+
+#[test]
+fn rejected_install_codes_never_enter_error_publications() {
+    use panweave_hub::protocol::{ErrorCode, Response};
+    let mut bridge = Bridge::new(Config::default());
+    let request = Request::AddInstallCode {
+        ieee: 0x50,
+        code: heapless::Vec::from_slice(b"credential-marker").unwrap(),
+    };
+    for error in [
+        ErrorCode::InvalidArgument,
+        ErrorCode::RegistryFull,
+        ErrorCode::StorageFailure,
+    ] {
+        let actions = bridge.on_response(&request, Response::Error(error), 1);
+        let Action::Publish(publication) = actions.first().unwrap() else {
+            panic!("an error must publish a log");
+        };
+        let text = String::from_utf8_lossy(&publication.payload);
+        assert!(text.contains("AddInstallCode"));
+        assert!(!text.contains("credential-marker"));
+        assert!(!text.contains("99, 114, 101, 100"));
+    }
 }
