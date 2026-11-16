@@ -17,7 +17,9 @@ fuzz_target!(|data: &[u8]| {
         let _ = set.configuration_parameters();
         let _ = set.device_capability_extension();
         let _ = set.joiner_encapsulation().map(|s| s.iter().count());
-        let _ = set.beacon_appendix_encapsulation().map(|s| s.iter().count());
+        let _ = set
+            .beacon_appendix_encapsulation()
+            .map(|s| s.iter().count());
     }
     let _ = TlvSet::validate(data, is_global_encapsulation);
 });

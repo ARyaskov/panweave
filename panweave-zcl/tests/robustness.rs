@@ -58,90 +58,44 @@ proptest! {
     }
 }
 
-/// The dispatcher with every layer-executed cluster: arbitrary frames,
-/// deliveries and timer advances never panic (mirrors the `zcl_dispatch`
-/// fuzz target).
-fn drive_dispatcher(data: &[u8]) {
-    use panweave_aps::layer::{DataIndication, Delivery, SecurityStatus};
-    use panweave_aps::tables::GroupTable;
-    use panweave_types::time::{Duration, Instant};
-    use panweave_types::{ClusterId, Endpoint, GroupAddress, ProfileId, ShortAddress};
-    use panweave_zcl::clusters::{basic, groups, identify, level, on_off, poll_control, scenes};
-    use panweave_zcl::layer::{EndpointInstance, Zcl};
+#[path = "support/dispatcher.rs"]
+mod dispatcher;
 
-    let mut zcl: Zcl<1, 8, 16> = Zcl::new();
-    let mut ep = EndpointInstance::new(Endpoint(1), ProfileId::HOME_AUTOMATION);
-    ep.add_instance(basic::server(1, b"test", b"test").unwrap())
-        .unwrap();
-    ep.add_instance(identify::server().unwrap()).unwrap();
-    ep.add_instance(groups::server().unwrap()).unwrap();
-    ep.add_instance(scenes::server().unwrap()).unwrap();
-    ep.add_instance(on_off::server().unwrap()).unwrap();
-    ep.add_instance(level::server(1, 254).unwrap()).unwrap();
-    ep.add_instance(poll_control::server(2, 4, 480).unwrap())
-        .unwrap();
-    zcl.add_endpoint(ep).unwrap();
-    let mut groups = GroupTable::<panweave_types::capacity::Cap<4>>::new();
-    groups.add(GroupAddress(1), Endpoint(1)).unwrap();
-    let mut now = Instant::from_millis(1000);
-    zcl.poll_timers(now);
-    for chunk in data.chunks(24) {
-        let Some((&ctl, frame)) = chunk.split_first() else {
-            break;
-        };
-        let cluster = match ctl & 0x07 {
-            0 => basic::ID,
-            1 => identify::ID,
-            2 => groups::ID,
-            3 => scenes::ID,
-            4 => on_off::ID,
-            5 => level::ID,
-            6 => poll_control::ID,
-            _ => ClusterId(0x0402),
-        };
-        let delivery = match (ctl >> 3) & 0x03 {
-            0 => Delivery::Endpoint(Endpoint(1)),
-            1 => Delivery::Group(GroupAddress(1)),
-            2 => Delivery::AllEndpoints,
-            _ => Delivery::Endpoint(Endpoint(7)),
-        };
-        let ind = DataIndication {
-            src: ShortAddress(0x1234),
-            src_endpoint: Endpoint(5),
-            src_ieee: None,
-            delivery,
-            profile: ProfileId::HOME_AUTOMATION,
-            cluster,
-            asdu: frame,
-            security: if ctl & 0x20 != 0 {
-                SecurityStatus::LinkKey
-            } else {
-                SecurityStatus::NwkKey
-            },
-            lqi: 200,
-            relayed: None,
-            counter: 0,
-            nwk_broadcast: ctl & 0x40 != 0,
-        };
-        let _ = zcl.on_data(&ind, &mut groups);
-        while zcl.next_action().is_some() {}
-        while zcl.next_event().is_some() {}
-        now += Duration::from_millis(u64::from(ctl >> 5) * 100 + 1);
-        zcl.poll_timers(now);
-        let _ = zcl.next_deadline();
+#[test]
+fn dispatcher_harness_reaches_every_server_and_full_length_frames() {
+    for (index, expected) in dispatcher::CLUSTERS.iter().enumerate() {
+        let selector = u8::try_from(index).unwrap();
+        let mut input = vec![selector, 0, 0];
+        input.extend_from_slice(&[0x01, 0, 0]);
+        input.resize(259, 0);
+        let (cluster, frames, max_length, _) = dispatcher::drive(&input);
+        assert_eq!(cluster, *expected);
+        assert_eq!(frames, 1);
+        assert_eq!(max_length, 256);
     }
-    for _ in 0..64 {
-        now += Duration::from_millis(250);
-        zcl.poll_timers(now);
-        while zcl.next_action().is_some() {}
-        while zcl.next_event().is_some() {}
+}
+
+#[test]
+fn dispatcher_harness_executes_a_long_weekly_schedule() {
+    let mut frame = vec![0x01, 0, 0x01, 4, 1, 3];
+    for minute in [0u16, 360, 720, 1080] {
+        frame.extend_from_slice(&minute.to_le_bytes());
+        frame.extend_from_slice(&2000i16.to_le_bytes());
+        frame.extend_from_slice(&2600i16.to_le_bytes());
     }
+    assert!(frame.len() > 23);
+    let mut input = vec![8, 0, u8::try_from(frame.len()).unwrap()];
+    input.extend_from_slice(&frame);
+    let (_, frames, max_length, schedules) = dispatcher::drive(&input);
+    assert_eq!(frames, 1);
+    assert_eq!(max_length, frame.len());
+    assert_eq!(schedules, 1);
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
     #[test]
-    fn dispatcher_is_total(data in proptest::collection::vec(any::<u8>(), 0..200)) {
-        drive_dispatcher(&data);
+    fn dispatcher_is_total(data in proptest::collection::vec(any::<u8>(), 0..600)) {
+        let _ = dispatcher::drive(&data);
     }
 }

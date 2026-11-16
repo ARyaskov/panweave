@@ -6,8 +6,9 @@
 //!   `conformance/*.toml` and verify that every referenced test exists.
 //! * `codegen [--check]` — render `panweave-device-library/src/generated.rs`
 //!   from `panweave-device-library/metadata/devices.toml`.
-//! * `gate` — run the full quality gate (fmt, check, clippy, tests, no_std
-//!   builds, conformance and codegen checks).
+//! * `gate [--require-no-std]` — run the shared local/CI quality gate
+//!   (fmt, check, clippy, tests, fuzz target checks, no_std builds,
+//!   conformance and codegen checks).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -68,9 +69,11 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("conformance") => conformance(args.iter().any(|a| a == "--check")),
         Some("codegen") => codegen(args.iter().any(|a| a == "--check")),
-        Some("gate") => gate(),
+        Some("gate") => gate(args.iter().any(|a| a == "--require-no-std")),
         _ => {
-            eprintln!("usage: cargo xtask <conformance [--check] | codegen [--check] | gate>");
+            eprintln!(
+                "usage: cargo xtask <conformance [--check] | codegen [--check] | gate [--require-no-std]>"
+            );
             Err("unknown sub-command".to_string())
         }
     };
@@ -107,86 +110,133 @@ fn load_inventories(root: &Path) -> Result<Vec<(String, Inventory)>, String> {
     Ok(out)
 }
 
-/// Collects `fn <name>()` test names from every Rust source under the
-/// workspace so that `tests = [...]` references can be validated.
-fn collect_test_names(root: &Path) -> Vec<String> {
+#[derive(Deserialize)]
+struct WorkspaceManifest {
+    workspace: WorkspaceMembers,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceMembers {
+    members: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct PackageManifest {
+    package: PackageName,
+}
+
+#[derive(Deserialize)]
+struct PackageName {
+    name: String,
+}
+
+fn read_manifest<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let source = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    toml::from_str(&source).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn source_names(text: &str, package: &str, names: &mut Vec<String>) {
+    let mut pending_test = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("#[test]") || line.starts_with("#[tokio::test") {
+            pending_test = true;
+            continue;
+        }
+        if !pending_test {
+            continue;
+        }
+        if let Some(rest) = line
+            .strip_prefix("fn ")
+            .or_else(|| line.strip_prefix("async fn "))
+        {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                names.push(format!("{package}::{name}"));
+                names.push(name);
+            }
+            pending_test = false;
+        } else if !line.starts_with("#[") && !line.is_empty() && !line.starts_with("//") {
+            pending_test = false;
+        }
+    }
+}
+
+fn walk_test_sources(dir: &Path, package: &str, names: &mut Vec<String>) -> Result<(), String> {
+    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        // Never descend into private metadata, build output, dependencies
+        // or linked directories outside the selected workspace sources.
+        if name.starts_with('.') || matches!(name.as_ref(), "target" | "vendor" | "node_modules") {
+            continue;
+        }
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            walk_test_sources(&path, package, names)?;
+        } else if kind.is_file() && path.extension().is_some_and(|x| x == "rs") {
+            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            source_names(&text, package, names);
+        }
+    }
+    Ok(())
+}
+
+/// Collects test names only from source and test directories of explicit
+/// Cargo workspace members. Excluded examples, metadata and linked trees
+/// cannot accidentally satisfy conformance references.
+fn collect_test_names(root: &Path) -> Result<Vec<String>, String> {
+    let manifest: WorkspaceManifest = read_manifest(&root.join("Cargo.toml"))?;
     let mut names = Vec::new();
-    fn walk(dir: &Path, names: &mut Vec<String>) {
-        let Ok(rd) = fs::read_dir(dir) else { return };
-        for entry in rd.filter_map(Result::ok) {
-            let path = entry.path();
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if path.is_dir() {
-                if file_name == "target" || file_name == ".git" {
-                    continue;
+    for member in manifest.workspace.members {
+        let relative = Path::new(&member);
+        if relative.components().any(|component| {
+            !matches!(component, std::path::Component::Normal(name) if !name.to_string_lossy().starts_with('.'))
+        }) {
+            return Err(format!("workspace member must be a local source directory: {member}"));
+        }
+        let dir = root.join(relative);
+        if fs::symlink_metadata(&dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(format!(
+                "workspace member cannot be a linked directory: {member}"
+            ));
+        }
+        let package: PackageManifest = read_manifest(&dir.join("Cargo.toml"))?;
+        for sources in ["src", "tests"] {
+            let path = dir.join(sources);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    walk_test_sources(&path, &package.package.name, &mut names)?;
                 }
-                walk(&path, names);
-            } else if path.extension().is_some_and(|x| x == "rs") {
-                let Ok(text) = fs::read_to_string(&path) else {
-                    continue;
-                };
-                let crate_name = path
-                    .components()
-                    .filter_map(|c| c.as_os_str().to_str())
-                    .find(|c| c.starts_with("panweave"))
-                    .unwrap_or("")
-                    .to_string();
-                let mut pending_test = false;
-                for line in text.lines() {
-                    let t = line.trim();
-                    if t.starts_with("#[test]") || t.starts_with("#[tokio::test") {
-                        pending_test = true;
-                        continue;
-                    }
-                    if pending_test {
-                        if let Some(rest) = t.strip_prefix("fn ") {
-                            let name: String = rest
-                                .chars()
-                                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                .collect();
-                            names.push(format!("{crate_name}::{name}"));
-                            names.push(name);
-                            pending_test = false;
-                        } else if t.starts_with("#[") || t.starts_with("async fn") {
-                            if let Some(rest) = t.strip_prefix("async fn ") {
-                                let name: String = rest
-                                    .chars()
-                                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                    .collect();
-                                names.push(format!("{crate_name}::{name}"));
-                                names.push(name);
-                                pending_test = false;
-                            }
-                        } else {
-                            pending_test = false;
-                        }
-                    }
-                    // proptest! blocks: `fn name(` inside macro
-                    if text.contains("proptest!")
-                        && let Some(rest) = t.strip_prefix("fn ")
-                    {
-                        let name: String = rest
-                            .chars()
-                            .take_while(|c| c.is_alphanumeric() || *c == '_')
-                            .collect();
-                        names.push(format!("{crate_name}::{name}"));
-                        names.push(name);
-                    }
-                }
+                Ok(_) => return Err(format!("{} is not a source directory", path.display())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("{}: {error}", path.display())),
             }
         }
     }
-    walk(root, &mut names);
     names.sort();
     names.dedup();
-    names
+    Ok(names)
 }
 
 fn conformance(check: bool) -> Result<(), String> {
     let root = workspace_root();
     let inventories = load_inventories(&root)?;
-    let tests = collect_test_names(&root);
+    let tests = collect_test_names(&root)?;
     let mut errors = Vec::new();
     let mut ids = std::collections::HashSet::new();
 
@@ -330,7 +380,7 @@ fn run(root: &Path, program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn gate() -> Result<(), String> {
+fn gate(require_no_std: bool) -> Result<(), String> {
     let root = workspace_root();
     run(&root, "cargo", &["fmt", "--all", "--check"])?;
     run(&root, "cargo", &["check", "--workspace", "--all-targets"])?;
@@ -347,7 +397,11 @@ fn gate() -> Result<(), String> {
             "warnings",
         ],
     )?;
-    run(&root, "cargo", &["test", "--workspace"])?;
+    run(
+        &root,
+        "cargo",
+        &["test", "--workspace", "--lib", "--bins", "--tests"],
+    )?;
     run(&root, "cargo", &["test", "--doc", "--workspace"])?;
     // Feature-gated tests the workspace run does not reach.
     run(
@@ -361,20 +415,37 @@ fn gate() -> Result<(), String> {
             "nor-flash,std",
         ],
     )?;
-    // The hub with radio capture compiled in (capture tests, the
-    // synthetic-secret leakage tests); the workspace run covers the hub
-    // without it (capture requests answer NotSupported).
+    // Run both feature-gated hub suites, including their interactions.
+    // The workspace run covers capture requests returning NotSupported.
     run(
         &root,
         "cargo",
-        &["test", "-p", "panweave-hub", "--features", "radio-capture"],
+        &[
+            "test",
+            "-p",
+            "panweave-hub",
+            "--features",
+            "radio-capture,alerts",
+        ],
     )?;
-    // The experimental Wi-Fi notifications (queue, schedule, Telegram,
-    // attempt orchestrator, end to end with mocked radio switching).
+    // The fuzz package is excluded from the workspace. A stable type
+    // check catches API drift locally; CI additionally runs the targets
+    // under libFuzzer with nightly and sanitizer instrumentation.
     run(
         &root,
         "cargo",
-        &["test", "-p", "panweave-hub", "--features", "alerts"],
+        &[
+            "fmt",
+            "--manifest-path",
+            "fuzz/Cargo.toml",
+            "--all",
+            "--check",
+        ],
+    )?;
+    run(
+        &root,
+        "cargo",
+        &["check", "--manifest-path", "fuzz/Cargo.toml", "--bins"],
     )?;
     // The small-tables profile changes the dimensions of every endpoint
     // type: it must at least build with every feature (CI tests it).
@@ -439,6 +510,20 @@ fn gate() -> Result<(), String> {
         run(
             &root,
             "cargo",
+            &[
+                "check",
+                "-p",
+                "panweave-storage",
+                "--no-default-features",
+                "--features",
+                "nor-flash",
+                "--target",
+                &target,
+            ],
+        )?;
+        run(
+            &root,
+            "cargo",
             &["check", "-p", "panweave-hub", "--target", &target],
         )?;
         run(
@@ -454,6 +539,10 @@ fn gate() -> Result<(), String> {
                 &target,
             ],
         )?;
+    } else if require_no_std {
+        return Err(format!(
+            "required bare-metal target {target} is not installed"
+        ));
     } else {
         println!("gate: target {target} not installed; skipping bare-metal no_std check");
     }
@@ -679,4 +768,78 @@ fn codegen(check: bool) -> Result<(), String> {
         devices.len()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "panweave-xtask-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, relative: &str, source: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn conformance_sources_are_scoped_to_declared_workspace_members() {
+        let fixture = Fixture::new();
+        fixture.write("Cargo.toml", "[workspace]\nmembers = [\"member\"]\n");
+        fixture.write(
+            "member/Cargo.toml",
+            "[package]\nname = \"actual-package\"\n",
+        );
+        fixture.write("member/src/lib.rs", "#[test]\nfn real_test() {}\n");
+        fixture.write(
+            "member/tests/integration.rs",
+            "#[tokio::test]\nasync fn async_test() {}\n",
+        );
+        let ignored = "#[test]\nfn ignored_test() {}\n";
+        fixture.write("excluded/src/lib.rs", ignored);
+        fixture.write("member/src/.private/private.rs", ignored);
+        fixture.write("member/src/vendor/dependency.rs", ignored);
+        fixture.write("member/src/target/generated.rs", ignored);
+        let names = collect_test_names(&fixture.0).unwrap();
+        assert_eq!(
+            names,
+            [
+                "actual-package::async_test",
+                "actual-package::real_test",
+                "async_test",
+                "real_test",
+            ]
+        );
+    }
+
+    #[test]
+    fn proptest_helpers_do_not_count_as_test_functions() {
+        let mut names = Vec::new();
+        source_names(
+            "fn helper() {}\nproptest! {\n#[test]\nfn property(value in any::<u8>()) {}\n}\nfn other_helper() {}\n",
+            "package",
+            &mut names,
+        );
+        assert_eq!(names, ["package::property", "property"]);
+    }
 }

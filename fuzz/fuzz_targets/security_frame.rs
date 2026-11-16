@@ -23,6 +23,12 @@ fuzz_target!(|data: &[u8]| {
         SecurityLevel::EncMic128,
     ] {
         let mut b = buf;
-        let _ = unprotect_in_place(&cipher, level, ExtendedAddress(0x1234), &mut b[..n], header_len);
+        let _ = unprotect_in_place(
+            &cipher,
+            level,
+            ExtendedAddress(0x1234),
+            &mut b[..n],
+            header_len,
+        );
     }
 });

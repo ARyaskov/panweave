@@ -7,7 +7,7 @@ use panweave_types::time::Instant;
 use panweave_types::{Channel, ChannelPage, ExtendedAddress, PanId, ShortAddress};
 
 fuzz_target!(|data: &[u8]| {
-    let mut s = MacService::new(MacServiceConfig::default(), ExtendedAddress(0xAA));
+    let mut s: MacService = MacService::new(MacServiceConfig::default(), ExtendedAddress(0xAA));
     s.start(
         PanId(0x1234),
         ChannelPage::PAGE_0,

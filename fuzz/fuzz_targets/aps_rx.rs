@@ -2,7 +2,7 @@
 //! without a link key installed) and never panics.
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use panweave_aps::layer::{Aps, ApsConfig, DeviceState, NwkView};
+use panweave_aps::layer::{Aps, ApsConfig, DeviceState, Dims, NwkView};
 use panweave_security::cipher::SoftwareAes;
 use panweave_security::material::{LinkKeyEntry, LinkKeyKind};
 use panweave_types::time::Instant;
@@ -23,7 +23,7 @@ impl NwkView for View {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let mut aps = Aps::<SoftwareAes, 4, 4, 4, 4>::new(
+    let mut aps = Aps::<SoftwareAes, Dims<4, 4, 4, 4>>::new(
         ExtendedAddress(0xA),
         ApsConfig {
             is_trust_center: data.first().is_some_and(|b| b & 1 != 0),
