@@ -1846,6 +1846,51 @@ impl<
             .map_err(|_| NwkStatus::InvalidRequest)
     }
 
+    /// Cancels MAC work left by a completed persistent factory reset.
+    ///
+    /// The caller must own a quiescent hardware radio: no transmit/completion
+    /// callback may remain outstanding. Call only after leaving and successfully
+    /// erasing persistent network state. This drops old queued frames, scans,
+    /// confirmations and MAC-to-NWK handles before a new formation can run.
+    /// Learned APS keys/ciphers, bindings/groups and AIB state are also rebuilt
+    /// from declared configuration. The outgoing NWK counter, endpoints, device
+    /// configuration and event-loss recovery latch are preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidRequest` if the network has not reached Idle or a control
+    /// event gap requires reconstructing the stack instead of continuing it.
+    pub fn cancel_radio_work_for_factory_reset(&mut self) -> Result<(), NwkStatus> {
+        if self.recovery_needed() || self.phase != Phase::Idle {
+            return Err(NwkStatus::InvalidRequest);
+        }
+        self.mac.reset();
+        while self.mac.next_action().is_some() {}
+        while self.mac.next_event().is_some() {}
+        self.mac_handles.clear();
+        self.clear_reset_associations();
+        Ok(())
+    }
+
+    fn clear_reset_associations(&mut self) {
+        // Preserve declared transport/security policy and endpoint/device
+        // configuration; rebuild every learned APS association and cipher cache.
+        self.aps = Aps::new(self.config.ieee, self.aps.config);
+        let seed = self.nwk.rng().next_u8();
+        Self::configure_aps(&mut self.aps, &self.config, seed);
+        self.aps_handles.clear();
+        self.pending_children.clear();
+        self.zone_deliveries.clear();
+        self.challenge = None;
+        self.dlk = crate::dlk::DlkState::default();
+        self.authorization = crate::authorization::AuthorizationState::default();
+        self.fragmentation = crate::fragment_cache::FragmentationCache::default();
+        self.key_update = None;
+        self.network_key_relays = None;
+        self.pending_channel_change = None;
+        self.application_key_request_list.clear();
+    }
+
     /// Current stack time.
     pub const fn now(&self) -> Instant {
         self.now

@@ -520,10 +520,17 @@ impl<C: BlockCipher, R: CryptoRng, S: Storage> Node<C, R, S> {
     /// Leaves the network and erases the persisted network state
     /// (BDB 3.1 §13.3 reset via a local action).
     pub fn factory_reset(&mut self) -> Result<(), StorageError> {
+        if self.recovery_needed() {
+            return Err(StorageError::Io);
+        }
         let _ = self.stack.leave(false);
         self.stack.flush();
         self.bdb.set_on_network(false);
         self.stack.erase_persisted()?;
+        self.stack
+            .cancel_radio_work_for_factory_reset()
+            .map_err(|_| StorageError::Io)?;
+        self.bdb = Bdb::new(self.bdb.config, false);
         #[cfg(feature = "direct")]
         {
             self.direct = direct::DirectState::default();
