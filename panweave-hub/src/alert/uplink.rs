@@ -17,7 +17,7 @@ use heapless::Vec;
 
 use super::Config;
 use super::message::{self, Sensor};
-use super::queue::{AlertEvent, CAPACITY, EventId, Overflow};
+use super::queue::{AlertEvent, CAPACITY, EventId, Overflow, OverflowCheckpoint};
 use super::telegram;
 
 /// A pending event with what the hub knows about its sensor.
@@ -168,6 +168,23 @@ pub trait Uplink {
         out: &mut [u8],
     ) -> Result<(Built, usize), BuildError> {
         self.build(ctx, pending, out).map(|built| (built, 0))
+    }
+
+    /// Builds with a stable cumulative overflow checkpoint. Destinations
+    /// that support idempotent loss reports can encode it independently of
+    /// event batching. Other uplinks keep their existing format.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError`].
+    fn build_with_metadata(
+        &mut self,
+        ctx: &Context<'_>,
+        pending: &[Pending<'_>],
+        _overflow: Option<OverflowCheckpoint>,
+        out: &mut [u8],
+    ) -> Result<(Built, usize), BuildError> {
+        self.build_with_snapshots(ctx, pending, out)
     }
 
     /// Reads a complete HTTP response; returns its status (when it is

@@ -37,6 +37,7 @@ pub const CAPACITY: usize = 16;
 pub const MAX_ACK: usize = CAPACITY;
 
 const FORMAT: u8 = 1;
+const META_EXTENSION: u8 = 1;
 /// Configuration record id.
 pub(crate) const CONFIG_ID: u64 = 0xFFFF_FFFF_FFFF_FF10;
 const META_ID: u64 = 0xFFFF_FFFF_FFFF_FF11;
@@ -93,6 +94,17 @@ pub struct Overflow {
     pub last: Option<EventId>,
 }
 
+/// Stable cumulative loss accounting for an idempotent destination.
+/// The epoch changes when the queue's persistent identity is reset; its total
+/// never decreases when individual reports are acknowledged.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OverflowCheckpoint {
+    /// Opaque random queue identity, retained across ordinary reboots.
+    pub epoch: [u8; 16],
+    /// All losses in this epoch, including already acknowledged reports.
+    pub total: u64,
+}
+
 /// The last delivery acknowledgement.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Ack {
@@ -111,6 +123,9 @@ pub struct Queue {
     boot: u32,
     next_seq: u32,
     overflow: Overflow,
+    overflow_total: u64,
+    overflow_epoch: Option<[u8; 16]>,
+    meta_committed: bool,
     last_ack: Option<Ack>,
     /// Flash writes that failed (the event is then kept in RAM only).
     pub storage_errors: u32,
@@ -145,6 +160,16 @@ fn read_opt_id(r: &mut Reader<'_>) -> Option<EventId> {
         1 => read_id(r),
         _ => None,
     }
+}
+
+fn read_overflow_extension(r: &mut Reader<'_>) -> Option<(u64, Option<[u8; 16]>)> {
+    let total = r.u64_le().ok()?;
+    let epoch = match r.u8().ok()? {
+        0 => None,
+        1 => Some(r.bytes(16).ok()?.try_into().ok()?),
+        _ => return None,
+    };
+    Some((total, epoch))
 }
 
 fn encode_event(e: &AlertEvent, out: &mut [u8]) -> Option<usize> {
@@ -199,6 +224,9 @@ impl Queue {
             boot: 0,
             next_seq: 0,
             overflow: Overflow::default(),
+            overflow_total: 0,
+            overflow_epoch: None,
+            meta_committed: false,
             last_ack: None,
             storage_errors: 0,
         };
@@ -210,6 +238,16 @@ impl Queue {
                 q.overflow.count = r.u32_le().unwrap_or(0);
                 q.overflow.first = read_opt_id(&mut r);
                 q.overflow.last = read_opt_id(&mut r);
+                // Old meta ends here. Seed its lifetime counter from the
+                // still-pending losses when upgrading the record in place.
+                q.overflow_total = u64::from(q.overflow.count);
+                if r.u8().ok() == Some(META_EXTENSION)
+                    && let Some((total, epoch)) = read_overflow_extension(&mut r)
+                    && total >= u64::from(q.overflow.count)
+                {
+                    q.overflow_total = total;
+                    q.overflow_epoch = epoch;
+                }
             }
         }
         q.boot = q.boot.wrapping_add(1);
@@ -236,19 +274,25 @@ impl Queue {
     }
 
     fn store_meta<S: Storage>(&mut self, storage: &mut S) {
-        let mut buf = [0u8; 40];
+        let mut buf = [0u8; 64];
         let mut w = Writer::new(&mut buf);
         let ok = w.u8(FORMAT).is_ok()
             && w.u32_le(self.boot).is_ok()
             && w.u32_le(self.overflow.count).is_ok()
             && write_opt_id(&mut w, self.overflow.first).is_ok()
-            && write_opt_id(&mut w, self.overflow.last).is_ok();
+            && write_opt_id(&mut w, self.overflow.last).is_ok()
+            && w.u8(META_EXTENSION).is_ok()
+            && w.u64_le(self.overflow_total).is_ok()
+            && match self.overflow_epoch {
+                Some(epoch) => w.u8(1).is_ok() && w.bytes(&epoch).is_ok(),
+                None => w.u8(0).is_ok(),
+            };
         let n = w.position();
-        if !ok
-            || storage
+        self.meta_committed = ok
+            && storage
                 .store(key(META_ID), buf.get(..n).unwrap_or(&[]))
-                .is_err()
-        {
+                .is_ok();
+        if !self.meta_committed {
             self.storage_errors = self.storage_errors.saturating_add(1);
         }
     }
@@ -288,6 +332,62 @@ impl Queue {
         self.overflow
     }
 
+    /// Cumulative overflow identity, after the hub supplies randomness.
+    pub const fn overflow_checkpoint(&self) -> Option<OverflowCheckpoint> {
+        if !self.meta_committed {
+            return None;
+        }
+        match self.overflow_epoch {
+            Some(epoch) => Some(OverflowCheckpoint {
+                epoch,
+                total: self.overflow_total,
+            }),
+            None => None,
+        }
+    }
+
+    pub(crate) fn initialize_overflow_epoch<S: Storage>(
+        &mut self,
+        storage: &mut S,
+        epoch: [u8; 16],
+    ) {
+        if self.overflow_epoch.is_none() {
+            self.overflow_epoch = Some(epoch);
+            self.meta_committed = false;
+        }
+        if !self.meta_committed {
+            self.store_meta(storage);
+        }
+    }
+
+    pub(crate) const fn current_overflow_epoch(&self) -> Option<[u8; 16]> {
+        self.overflow_epoch
+    }
+
+    pub(crate) const fn meta_is_committed(&self) -> bool {
+        self.meta_committed
+    }
+
+    pub(crate) fn overflow_covered_by(
+        &self,
+        checkpoint: Option<OverflowCheckpoint>,
+        reported: u32,
+    ) -> u32 {
+        let Some(checkpoint) = checkpoint else {
+            return reported.min(self.overflow.count);
+        };
+        if self.overflow_epoch != Some(checkpoint.epoch) {
+            return 0;
+        }
+        let pending_start = self
+            .overflow_total
+            .saturating_sub(u64::from(self.overflow.count));
+        let covered = checkpoint.total.saturating_sub(pending_start);
+        reported
+            .min(self.overflow.count)
+            .min(u32::try_from(covered).unwrap_or(u32::MAX))
+    }
+
     /// The last acknowledgement.
     pub const fn last_ack(&self) -> Option<&Ack> {
         self.last_ack.as_ref()
@@ -317,6 +417,7 @@ impl Queue {
         self.next_seq = self.next_seq.wrapping_add(1);
         let Some(slot) = self.slots.iter().position(Option::is_none) else {
             self.overflow.count = self.overflow.count.saturating_add(1);
+            self.overflow_total = self.overflow_total.saturating_add(1);
             self.overflow.first.get_or_insert(id);
             self.overflow.last = Some(id);
             self.store_meta(storage);
@@ -551,5 +652,119 @@ mod tests {
         q.push(&mut s, AlertKind::WaterLeak, 1, None, 1).unwrap();
         assert_eq!(q.storage_errors, 1);
         assert_eq!(q.len(), 1, "kept in RAM rather than dropped");
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use panweave_storage::MemoryStorage;
+
+    type Store = MemoryStorage<32, 512>;
+
+    #[test]
+    fn overflow_checkpoint_retains_lifetime_total_when_receipts_clear_only_the_prepared_count() {
+        let mut storage = Store::new();
+        let mut queue = Queue::open(&mut storage);
+        queue.initialize_overflow_epoch(&mut storage, [1; 16]);
+        let mut ids = Vec::<_, CAPACITY>::new();
+        for _ in 0..CAPACITY {
+            ids.push(
+                queue
+                    .push(&mut storage, AlertKind::Test, 0, None, 0)
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            assert!(
+                queue
+                    .push(&mut storage, AlertKind::Test, 0, None, 1)
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            queue.overflow_checkpoint(),
+            Some(OverflowCheckpoint {
+                epoch: [1; 16],
+                total: 2
+            })
+        );
+        let prepared = queue.overflow_checkpoint();
+        // The report was prepared with two losses; a third arrives in flight.
+        assert!(
+            queue
+                .push(&mut storage, AlertKind::Test, 0, None, 2)
+                .is_err()
+        );
+        assert_eq!(queue.overflow_covered_by(prepared, 2), 2);
+        queue.acknowledge(&mut storage, 0, &ids, 2);
+        assert_eq!(queue.overflow_covered_by(prepared, 2), 0);
+        assert_eq!(
+            queue.overflow_covered_by(
+                Some(OverflowCheckpoint {
+                    epoch: [2; 16],
+                    total: 3
+                }),
+                1
+            ),
+            0
+        );
+        assert!(queue.is_empty());
+        assert_eq!(queue.overflow().count, 1);
+        let n = storage.load(key(META_ID), &mut [0; 64]).unwrap().unwrap();
+        assert_eq!(
+            n, 53,
+            "the additive meta record remains within its 64-byte reader"
+        );
+        let mut queue = Queue::open(&mut storage);
+        queue.initialize_overflow_epoch(&mut storage, [2; 16]);
+        assert_eq!(
+            queue.overflow_checkpoint(),
+            Some(OverflowCheckpoint {
+                epoch: [1; 16],
+                total: 3
+            })
+        );
+        assert_eq!(queue.overflow().count, 1);
+        queue.acknowledge(&mut storage, 0, &[], 1);
+        assert_eq!(queue.overflow(), Overflow::default());
+        let queue = Queue::open(&mut storage);
+        assert_eq!(
+            queue.overflow_checkpoint(),
+            Some(OverflowCheckpoint {
+                epoch: [1; 16],
+                total: 3
+            })
+        );
+        assert_eq!(queue.overflow().count, 0);
+    }
+
+    #[test]
+    fn overflow_checkpoint_upgrades_legacy_meta_and_retains_its_pending_losses() {
+        let mut storage = Store::new();
+        let mut bytes = [0; 40];
+        let mut writer = Writer::new(&mut bytes);
+        writer.u8(FORMAT).unwrap();
+        writer.u32_le(7).unwrap();
+        writer.u32_le(4).unwrap();
+        write_opt_id(&mut writer, Some(EventId { boot: 7, seq: 9 })).unwrap();
+        write_opt_id(&mut writer, Some(EventId { boot: 7, seq: 12 })).unwrap();
+        let n = writer.position();
+        storage.store(key(META_ID), &bytes[..n]).unwrap();
+        let mut queue = Queue::open(&mut storage);
+        assert_eq!(queue.boot(), 8);
+        assert_eq!(queue.overflow().count, 4);
+        assert_eq!(queue.overflow_checkpoint(), None);
+        queue.initialize_overflow_epoch(&mut storage, [9; 16]);
+        let queue = Queue::open(&mut storage);
+        assert_eq!(
+            queue.overflow_checkpoint(),
+            Some(OverflowCheckpoint {
+                epoch: [9; 16],
+                total: 4
+            })
+        );
+        assert_eq!(queue.overflow().count, 4);
     }
 }

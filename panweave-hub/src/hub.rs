@@ -416,6 +416,9 @@ impl<HS: Storage> Hub<HS> {
             ));
             return Ok(0);
         }
+        // Alert records may exist before the first device registry index.
+        #[cfg(feature = "alerts")]
+        self.restore_alerts();
         let mut buf = [0u8; persist::MAX_RECORD];
         let index = match self.storage.load(persist::index_key(), &mut buf) {
             Ok(Some(n)) => n,
@@ -492,8 +495,6 @@ impl<HS: Storage> Hub<HS> {
             });
         }
         self.take_previous_stall_reset();
-        #[cfg(feature = "alerts")]
-        self.restore_alerts();
         Ok(self.registry.len())
     }
 
@@ -506,6 +507,8 @@ impl<HS: Storage> Hub<HS> {
         #[cfg(feature = "green-power")]
         Self::attach_green_power(stack);
         self.now = stack.now();
+        #[cfg(feature = "alerts")]
+        self.seed_alert_epoch(stack.nwk.rng());
     }
 
     /// The network was resumed from the stack's persistent data.
@@ -2237,6 +2240,8 @@ impl<HS: Storage> Hub<HS> {
         if let Some(r) = self.handle_green_power(stack, request) {
             return r.unwrap_or_else(Response::Error);
         }
+        #[cfg(feature = "alerts")]
+        self.seed_alert_epoch(stack.nwk.rng());
         #[cfg(feature = "alerts")]
         if let Some(r) = self.handle_alerts(request) {
             return r.unwrap_or_else(Response::Error);

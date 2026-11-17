@@ -15,7 +15,7 @@ use panweave_storage::Storage;
 use crate::alert::Config;
 use crate::alert::attempt::{Outcome, Report};
 use crate::alert::message::Sensor;
-use crate::alert::queue::{self, EventId, Queue};
+use crate::alert::queue::{self, EventId, OverflowCheckpoint, Queue};
 use crate::alert::schedule::{MIN_ZIGBEE_MS, Schedule};
 use crate::alert::uplink::{self, Acked, DeviceSnapshot, Pending, Telegram, Uplink};
 use crate::hub::Hub;
@@ -47,6 +47,11 @@ pub(crate) struct AlertEngine {
     heartbeat_due: Option<u64>,
     /// Next registry position to offer first; advanced only on delivery.
     snapshot_cursor: usize,
+    /// Fresh boot entropy for queue identities created without a restart.
+    overflow_seed: Option<[u8; 16]>,
+    overflow_generation: u64,
+    attempt_serial: u64,
+    active_attempt: Option<u64>,
 }
 
 /// After a failed heartbeat, the next one is tried this much later (or
@@ -71,6 +76,15 @@ pub struct PreparedAlert {
     ids: Vec<EventId, { queue::CAPACITY }>,
     overflow_reported: u32,
     snapshots_sent: usize,
+    overflow_checkpoint: Option<OverflowCheckpoint>,
+    attempt: u64,
+    owner: [u8; 16],
+    queue_epoch: Option<[u8; 16]>,
+}
+
+struct PreparedOverflow {
+    checkpoint: Option<OverflowCheckpoint>,
+    epoch: Option<[u8; 16]>,
 }
 
 fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
@@ -80,6 +94,22 @@ fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
         (_, ContactState::Open) => "open",
         (_, ContactState::Closed) => "closed",
         _ => "unknown",
+    }
+}
+
+fn server_overflow(config: &Config, queue: &Queue) -> bool {
+    config.destination == crate::protocol::AlertDestination::Server && queue.overflow().count > 0
+}
+
+fn report_overflow(
+    config: &Config,
+    queue: &Queue,
+    checkpoint: Option<OverflowCheckpoint>,
+) -> queue::Overflow {
+    if config.destination == crate::protocol::AlertDestination::Server && checkpoint.is_none() {
+        queue::Overflow::default()
+    } else {
+        queue.overflow()
     }
 }
 
@@ -108,15 +138,118 @@ impl<HS: Storage> Hub<HS> {
     pub(crate) fn reset_alerts_for_factory_reset(&mut self) {
         let supported = self.alerts.supported;
         let probe_supported = self.alerts.probe_supported;
+        let attempt_serial = self.alerts.attempt_serial;
+        let (overflow_seed, overflow_generation) = self
+            .alerts
+            .overflow_generation
+            .checked_add(1)
+            .map_or((None, 0), |generation| {
+                (self.alerts.overflow_seed, generation)
+            });
         // Replacing Config runs its Drop implementation, which wipes secrets.
         self.alerts = AlertEngine {
             supported,
             probe_supported,
+            overflow_seed,
+            overflow_generation,
+            attempt_serial,
             // Do not automatically reload pre-reset credentials if a later
             // persistent erase fails and a host supplies a partial new config.
             loaded: true,
             ..AlertEngine::default()
         };
+    }
+
+    pub(crate) fn seed_alert_epoch(&mut self, rng: &mut impl panweave_types::CryptoRng) {
+        if self.alerts.overflow_seed.is_none() {
+            let mut seed = [0; 16];
+            rng.fill_bytes(&mut seed);
+            self.alerts.overflow_seed = Some(seed);
+        }
+        let epoch = self.overflow_epoch();
+        if let (Some(q), Some(epoch)) = (self.alerts.queue.as_mut(), epoch) {
+            if q.current_overflow_epoch().is_none() {
+                q.initialize_overflow_epoch(&mut self.storage, epoch);
+            }
+            if !q.meta_is_committed() {
+                self.alerts.status.last_error = AlertError::Storage;
+            }
+        }
+    }
+
+    fn overflow_epoch(&self) -> Option<[u8; 16]> {
+        let mut epoch = self.alerts.overflow_seed?;
+        for (byte, generation) in epoch[8..]
+            .iter_mut()
+            .zip(self.alerts.overflow_generation.to_be_bytes())
+        {
+            *byte ^= generation;
+        }
+        Some(epoch)
+    }
+
+    fn claim_alert_attempt(&mut self) -> Option<(u64, [u8; 16])> {
+        let Some(owner) = self.overflow_epoch() else {
+            self.alerts.status.last_error = AlertError::Rejected;
+            return None;
+        };
+        let Some(attempt) = self.alerts.attempt_serial.checked_add(1) else {
+            self.alerts.status.last_error = AlertError::Rejected;
+            return None;
+        };
+        self.alerts.attempt_serial = attempt;
+        self.alerts.active_attempt = Some(attempt);
+        self.alerts.status.attempts = self.alerts.status.attempts.saturating_add(1);
+        Some((attempt, owner))
+    }
+
+    fn take_alert_receipt(&mut self, prepared: &PreparedAlert) -> bool {
+        let current = self
+            .alerts
+            .queue
+            .as_ref()
+            .and_then(Queue::current_overflow_epoch);
+        if self.alerts.active_attempt != Some(prepared.attempt)
+            || Some(prepared.owner) != self.overflow_epoch()
+            || current != prepared.queue_epoch
+        {
+            return false;
+        }
+        self.alerts.active_attempt = None;
+        true
+    }
+
+    fn prepare_overflow(&mut self, now: u64) -> Option<PreparedOverflow> {
+        let Some(owner) = self.overflow_epoch() else {
+            self.alerts.status.last_error = AlertError::Rejected;
+            return None;
+        };
+        let q = self.alerts.queue.as_mut()?;
+        q.initialize_overflow_epoch(&mut self.storage, owner);
+        let checkpoint = q.overflow_checkpoint();
+        let epoch = q.current_overflow_epoch();
+        if checkpoint.is_none() {
+            self.alerts.status.last_error = AlertError::Storage;
+            // Do not publish an ephemeral loss counter, nor fall back to a
+            // positive legacy count. Critical events remain deliverable.
+            if q.is_empty() && server_overflow(&self.alerts.config, q) {
+                let delay = u64::from(self.alerts.config.delay_ms);
+                self.alerts.schedule.on_failure(now, None, delay);
+                if let Some(hb) = self.alerts.config.heartbeat_ms() {
+                    let retry = HEARTBEAT_RETRY_MS.min(hb).max(MIN_ZIGBEE_MS);
+                    self.alerts.heartbeat_due = Some(now.saturating_add(retry));
+                }
+                return None;
+            }
+        }
+        Some(PreparedOverflow { checkpoint, epoch })
+    }
+
+    fn has_pending_alerts(&self) -> bool {
+        self.alerts
+            .queue
+            .as_ref()
+            .is_some_and(|q| !q.is_empty() || server_overflow(&self.alerts.config, q))
     }
 
     /// Loads the notification settings, and the queue when enabled. Part
@@ -135,11 +268,14 @@ impl<HS: Storage> Hub<HS> {
 
     fn open_alert_queue(&mut self) {
         if self.alerts.queue.is_none() {
-            let q = Queue::open(&mut self.storage);
+            let mut q = Queue::open(&mut self.storage);
+            if let Some(epoch) = self.overflow_epoch() {
+                q.initialize_overflow_epoch(&mut self.storage, epoch);
+            }
             let now = self.now.as_millis();
             self.alerts.schedule.on_boot(
                 now,
-                !q.is_empty(),
+                !q.is_empty() || server_overflow(&self.alerts.config, &q),
                 u64::from(self.alerts.config.delay_ms),
             );
             self.alerts.queue = Some(q);
@@ -330,8 +466,7 @@ impl<HS: Storage> Hub<HS> {
     /// heartbeat is.
     pub fn alert_due(&self) -> bool {
         self.alerts_can_run()
-            && ((self.alerts.queue.as_ref().is_some_and(|q| !q.is_empty())
-                && self.alerts.schedule.is_due(self.now.as_millis()))
+            && ((self.has_pending_alerts() && self.alerts.schedule.is_due(self.now.as_millis()))
                 || self.heartbeat_is_due())
     }
 
@@ -341,10 +476,7 @@ impl<HS: Storage> Hub<HS> {
             return None;
         }
         let a = &self.alerts;
-        let queued = a
-            .schedule
-            .due()
-            .filter(|_| a.queue.as_ref().is_some_and(|q| !q.is_empty()));
+        let queued = a.schedule.due().filter(|_| self.has_pending_alerts());
         let heartbeat = a
             .heartbeat_due
             .filter(|_| a.config.heartbeat_ms().is_some());
@@ -380,7 +512,9 @@ impl<HS: Storage> Hub<HS> {
 
     /// Builds the request for the pending events — or, when none is
     /// pending and a heartbeat is due, an empty one — with `uplink` into
-    /// `out` (which then holds the token).
+    /// `out` (which then holds the token). One attempt is outstanding per
+    /// hub: preparing another supersedes the previous receipt. Finish only
+    /// the most recently prepared attempt; stale or duplicate results are ignored.
     pub fn prepare_alert_with<U: Uplink>(
         &mut self,
         uplink: &mut U,
@@ -388,10 +522,13 @@ impl<HS: Storage> Hub<HS> {
     ) -> Option<PreparedAlert> {
         let now = self.now.as_millis();
         let heartbeat_due = self.heartbeat_is_due() && uplink.accepts_heartbeat();
+        let overflow = self.prepare_overflow(now)?;
         let built = {
             let q = self.alerts.queue.as_ref()?;
             let pending = q.pending();
-            if pending.is_empty() && !heartbeat_due {
+            let overflow_only =
+                server_overflow(&self.alerts.config, q) && uplink.accepts_heartbeat();
+            if pending.is_empty() && !heartbeat_due && !overflow_only {
                 return None;
             }
             let registry = &self.registry;
@@ -440,12 +577,12 @@ impl<HS: Storage> Hub<HS> {
                 config: &self.alerts.config,
                 boot: q.boot(),
                 uptime_ms: now,
-                overflow: q.overflow(),
+                overflow: report_overflow(&self.alerts.config, q, overflow.checkpoint),
                 firmware: self.config.firmware,
                 devices: &devices,
             };
             uplink
-                .build_with_snapshots(&ctx, &items, out)
+                .build_with_metadata(&ctx, &items, overflow.checkpoint, out)
                 .map(|(b, snapshots)| {
                     let ids: Vec<EventId, { queue::CAPACITY }> =
                         pending.iter().take(b.events).map(|e| e.id).collect();
@@ -462,7 +599,7 @@ impl<HS: Storage> Hub<HS> {
             self.alerts.status.last_error = AlertError::Rejected;
             return None;
         }
-        self.alerts.status.attempts = self.alerts.status.attempts.saturating_add(1);
+        let (attempt, owner) = self.claim_alert_attempt()?;
         Some(PreparedAlert {
             len: built.len,
             budget_ms: self.alerts.config.budget_ms,
@@ -472,6 +609,10 @@ impl<HS: Storage> Hub<HS> {
             ids,
             overflow_reported: built.overflow_reported,
             snapshots_sent,
+            overflow_checkpoint: overflow.checkpoint,
+            attempt,
+            owner,
+            queue_epoch: overflow.epoch,
         })
     }
 
@@ -491,6 +632,9 @@ impl<HS: Storage> Hub<HS> {
         report: &Report,
         response: &[u8],
     ) {
+        if !self.take_alert_receipt(prepared) {
+            return;
+        }
         let now = self.now.as_millis();
         let delay = u64::from(self.alerts.config.delay_ms);
         let st = &mut self.alerts.status;
@@ -581,8 +725,8 @@ impl<HS: Storage> Hub<HS> {
         let Some(q) = self.alerts.queue.as_mut() else {
             return;
         };
-        if prepared.ids.is_empty() {
-            // A heartbeat: nothing queued was involved.
+        if prepared.ids.is_empty() && prepared.overflow_reported == 0 {
+            // A plain heartbeat: no event or loss receipt was involved.
             return;
         }
         if let Some(acked) = acked {
@@ -596,12 +740,13 @@ impl<HS: Storage> Hub<HS> {
                     .collect(),
             };
             let message_id = self.alerts.status.last_message_id.unwrap_or(0);
-            q.acknowledge(
-                &mut self.storage,
-                message_id,
-                &taken,
-                prepared.overflow_reported,
-            );
+            let overflow_reported =
+                q.overflow_covered_by(prepared.overflow_checkpoint, prepared.overflow_reported);
+            q.acknowledge(&mut self.storage, message_id, &taken, overflow_reported);
+            if !q.meta_is_committed() {
+                self.alerts.status.last_error = AlertError::Storage;
+                self.alerts.status.last_error_stage = None;
+            }
             // Sent but not taken: the destination may still have them.
             let left: Vec<EventId, { queue::CAPACITY }> = prepared
                 .ids
@@ -623,7 +768,8 @@ impl<HS: Storage> Hub<HS> {
                         now.saturating_sub(delay)
                     }
                 })
-                .min();
+                .min()
+                .or_else(|| server_overflow(&self.alerts.config, q).then_some(now));
             self.alerts.schedule.on_success(now, oldest, delay);
         } else {
             q.note_attempt(&mut self.storage, &prepared.ids, ambiguous);
@@ -641,7 +787,7 @@ impl<HS: Storage> Hub<HS> {
             AlertState::Unsupported
         } else if !a.config.is_complete() {
             AlertState::NotConfigured
-        } else if a.queue.as_ref().is_none_or(Queue::is_empty) {
+        } else if !self.has_pending_alerts() {
             AlertState::ZigbeeOperational
         } else if a.schedule.failures() > 0 {
             AlertState::RetryScheduled
@@ -687,7 +833,7 @@ impl<HS: Storage> Hub<HS> {
             s.next_attempt_ms = a
                 .schedule
                 .remaining(self.now.as_millis())
-                .filter(|_| !q.is_empty())
+                .filter(|_| !q.is_empty() || server_overflow(&a.config, q))
                 .map(|r| u32::try_from(r).unwrap_or(u32::MAX));
             if s.last_message_id.is_none() {
                 s.last_message_id = q.last_ack().map(|a| a.message_id);
@@ -719,11 +865,11 @@ impl<HS: Storage> Hub<HS> {
             self.schedule_heartbeat(now, delay);
             if u.delay_ms.is_some() || u.enabled == Some(true) {
                 self.alerts.schedule.clear();
-                if self.alerts.queue.as_ref().is_some_and(|q| !q.is_empty()) {
-                    self.alerts
-                        .schedule
-                        .on_event(self.now.as_millis(), u64::from(self.alerts.config.delay_ms));
-                }
+            }
+            if self.has_pending_alerts() {
+                self.alerts
+                    .schedule
+                    .on_event(self.now.as_millis(), u64::from(self.alerts.config.delay_ms));
             }
         }
         Ok(())
