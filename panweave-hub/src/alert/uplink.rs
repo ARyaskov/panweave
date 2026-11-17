@@ -151,6 +151,25 @@ pub trait Uplink {
         out: &mut [u8],
     ) -> Result<Built, BuildError>;
 
+    /// Builds a request and reports how many device snapshots, from
+    /// the start of [`Context::devices`], it encodes. The hub advances
+    /// its snapshot cursor by this count only after delivery succeeds.
+    ///
+    /// The default preserves existing uplinks: they report no snapshots.
+    /// An implementation must not report snapshots absent from its request.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError`].
+    fn build_with_snapshots(
+        &mut self,
+        ctx: &Context<'_>,
+        pending: &[Pending<'_>],
+        out: &mut [u8],
+    ) -> Result<(Built, usize), BuildError> {
+        self.build(ctx, pending, out).map(|built| (built, 0))
+    }
+
     /// Reads a complete HTTP response; returns its status (when it is
     /// HTTP) and what it means.
     fn parse(&mut self, response: &[u8]) -> (Option<u16>, Reply);

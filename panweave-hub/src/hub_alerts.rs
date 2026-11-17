@@ -45,6 +45,8 @@ pub(crate) struct AlertEngine {
     /// When the next heartbeat is due (monotonic ms), with a server
     /// destination and a heartbeat interval.
     heartbeat_due: Option<u64>,
+    /// Next registry position to offer first; advanced only on delivery.
+    snapshot_cursor: usize,
 }
 
 /// After a failed heartbeat, the next one is tried this much later (or
@@ -68,6 +70,7 @@ pub struct PreparedAlert {
     pub heartbeat: bool,
     ids: Vec<EventId, { queue::CAPACITY }>,
     overflow_reported: u32,
+    snapshots_sent: usize,
 }
 
 fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
@@ -77,6 +80,27 @@ fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
         (_, ContactState::Open) => "open",
         (_, ContactState::Closed) => "closed",
         _ => "unknown",
+    }
+}
+
+fn snapshot(
+    device: &crate::registry::Device,
+    now: panweave_types::time::Instant,
+) -> DeviceSnapshot<'_> {
+    DeviceSnapshot {
+        ieee: device.ieee,
+        model: core::str::from_utf8(&device.model).unwrap_or(""),
+        category: device.category.name(),
+        present: device.present,
+        silent_s: device
+            .last_seen
+            .map(|t| u32::try_from(now.saturating_duration_since(t).as_secs()).unwrap_or(u32::MAX)),
+        battery_pct: device.state.battery_percent,
+        battery_mv: device.state.battery_mv,
+        battery_low: device.state.battery_low == Flag::Set,
+        state: sensor_state(device.state.water_leak, device.state.contact),
+        sleepy: device.rx_on_when_idle == Some(false),
+        lqi: device.lqi,
     }
 }
 
@@ -398,26 +422,19 @@ impl<HS: Storage> Hub<HS> {
                     },
                 })
                 .collect();
-            // Borrowed from the registry: no copies on the stack.
+            // Rotate borrowed snapshots so the request's capacity limit
+            // cannot permanently starve devices near the registry's end.
+            let start = self
+                .alerts
+                .snapshot_cursor
+                .checked_rem(registry.len())
+                .unwrap_or(0);
             let devices: Vec<DeviceSnapshot<'_>, { uplink::MAX_DEVICES }> = registry
                 .iter()
+                .skip(start)
+                .chain(registry.iter().take(start))
                 .take(uplink::MAX_DEVICES)
-                .map(|d| DeviceSnapshot {
-                    ieee: d.ieee,
-                    model: core::str::from_utf8(&d.model).unwrap_or(""),
-                    category: d.category.name(),
-                    present: d.present,
-                    silent_s: d.last_seen.map(|t| {
-                        u32::try_from(self.now.saturating_duration_since(t).as_secs())
-                            .unwrap_or(u32::MAX)
-                    }),
-                    battery_pct: d.state.battery_percent,
-                    battery_mv: d.state.battery_mv,
-                    battery_low: d.state.battery_low == Flag::Set,
-                    state: sensor_state(d.state.water_leak, d.state.contact),
-                    sleepy: d.rx_on_when_idle == Some(false),
-                    lqi: d.lqi,
-                })
+                .map(|d| snapshot(d, self.now))
                 .collect();
             let ctx = uplink::Context {
                 config: &self.alerts.config,
@@ -427,13 +444,15 @@ impl<HS: Storage> Hub<HS> {
                 firmware: self.config.firmware,
                 devices: &devices,
             };
-            uplink.build(&ctx, &items, out).map(|b| {
-                let ids: Vec<EventId, { queue::CAPACITY }> =
-                    pending.iter().take(b.events).map(|e| e.id).collect();
-                (b, ids)
-            })
+            uplink
+                .build_with_snapshots(&ctx, &items, out)
+                .map(|(b, snapshots)| {
+                    let ids: Vec<EventId, { queue::CAPACITY }> =
+                        pending.iter().take(b.events).map(|e| e.id).collect();
+                    (b, ids, snapshots.min(devices.len()))
+                })
         };
-        let Ok((built, ids)) = built else {
+        let Ok((built, ids, snapshots_sent)) = built else {
             self.alerts.status.last_error = AlertError::Rejected;
             return None;
         };
@@ -452,6 +471,7 @@ impl<HS: Storage> Hub<HS> {
             heartbeat: ids.is_empty(),
             ids,
             overflow_reported: built.overflow_reported,
+            snapshots_sent,
         })
     }
 
@@ -530,6 +550,12 @@ impl<HS: Storage> Hub<HS> {
         }
         let delivered = error == AlertError::None;
         if delivered {
+            let devices = self.registry.len();
+            self.alerts.snapshot_cursor = if devices == 0 {
+                0
+            } else {
+                (self.alerts.snapshot_cursor % devices + prepared.snapshots_sent) % devices
+            };
             st.successes = st.successes.saturating_add(1);
             st.last_error = AlertError::None;
             st.last_error_stage = None;
