@@ -85,6 +85,7 @@ pub struct PreparedAlert {
 struct PreparedOverflow {
     checkpoint: Option<OverflowCheckpoint>,
     epoch: Option<[u8; 16]>,
+    event_epoch: Option<[u8; 16]>,
 }
 
 fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
@@ -228,6 +229,11 @@ impl<HS: Storage> Hub<HS> {
         q.initialize_overflow_epoch(&mut self.storage, owner);
         let checkpoint = q.overflow_checkpoint();
         let epoch = q.current_overflow_epoch();
+        let event_epoch = if q.boot_is_reserved() {
+            epoch
+        } else {
+            Some(owner)
+        };
         if checkpoint.is_none() {
             self.alerts.status.last_error = AlertError::Storage;
             // Do not publish an ephemeral loss counter, nor fall back to a
@@ -242,7 +248,11 @@ impl<HS: Storage> Hub<HS> {
                 return None;
             }
         }
-        Some(PreparedOverflow { checkpoint, epoch })
+        Some(PreparedOverflow {
+            checkpoint,
+            epoch,
+            event_epoch,
+        })
     }
 
     fn has_pending_alerts(&self) -> bool {
@@ -445,6 +455,7 @@ impl<HS: Storage> Hub<HS> {
         let errors = q.storage_errors;
         if q.push(&mut self.storage, kind, ieee, zone_status, now)
             .is_ok()
+            || server_overflow(&self.alerts.config, q)
         {
             self.alerts.schedule.on_event(now, delay);
         }
@@ -582,7 +593,13 @@ impl<HS: Storage> Hub<HS> {
                 devices: &devices,
             };
             uplink
-                .build_with_metadata(&ctx, &items, overflow.checkpoint, out)
+                .build_with_queue_identity(
+                    &ctx,
+                    &items,
+                    overflow.checkpoint,
+                    overflow.event_epoch,
+                    out,
+                )
                 .map(|(b, snapshots)| {
                     let ids: Vec<EventId, { queue::CAPACITY }> =
                         pending.iter().take(b.events).map(|e| e.id).collect();

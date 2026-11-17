@@ -121,11 +121,12 @@ pub struct Ack {
 pub struct Queue {
     slots: [Option<AlertEvent>; CAPACITY],
     boot: u32,
-    next_seq: u32,
+    next_seq: Option<u32>,
     overflow: Overflow,
     overflow_total: u64,
     overflow_epoch: Option<[u8; 16]>,
     meta_committed: bool,
+    boot_reserved: bool,
     last_ack: Option<Ack>,
     /// Flash writes that failed (the event is then kept in RAM only).
     pub storage_errors: u32,
@@ -222,11 +223,12 @@ impl Queue {
         let mut q = Queue {
             slots: [None; CAPACITY],
             boot: 0,
-            next_seq: 0,
+            next_seq: Some(0),
             overflow: Overflow::default(),
             overflow_total: 0,
             overflow_epoch: None,
             meta_committed: false,
+            boot_reserved: false,
             last_ack: None,
             storage_errors: 0,
         };
@@ -252,6 +254,9 @@ impl Queue {
         }
         q.boot = q.boot.wrapping_add(1);
         q.store_meta(storage);
+        // Later retries cannot retroactively reserve this boot before events
+        // already published under its conservative fallback namespace.
+        q.boot_reserved = q.meta_committed;
         for (i, slot) in q.slots.iter_mut().enumerate() {
             if let Ok(Some(n)) = storage.load(slot_key(i), &mut buf) {
                 *slot = buf.get(..n).and_then(decode_event);
@@ -261,6 +266,26 @@ impl Queue {
         if let Ok(Some(n)) = storage.load(key(ACK_ID), &mut ack_buf) {
             q.last_ack = decode_ack(ack_buf.get(..n).unwrap_or(&[]));
         }
+        // A failed Meta boot reservation can repeat this boot number. Reserve
+        // IDs above both live slots and the only persisted ACK before replay
+        // erases delivered slots; a later new slot must never match that ACK.
+        let pending_seq = q
+            .slots
+            .iter()
+            .flatten()
+            .filter(|event| event.id.boot == q.boot)
+            .map(|event| event.id.seq)
+            .max();
+        let acked_seq = q.last_ack.as_ref().and_then(|ack| {
+            ack.ids
+                .iter()
+                .filter(|id| id.boot == q.boot)
+                .map(|id| id.seq)
+                .max()
+        });
+        q.next_seq = pending_seq
+            .max(acked_seq)
+            .map_or(Some(0), |seq| seq.checked_add(1));
         if let Some(ack) = q.last_ack.clone() {
             // An acknowledgement written before its slots were erased.
             for (i, slot) in q.slots.iter_mut().enumerate() {
@@ -364,6 +389,10 @@ impl Queue {
         self.overflow_epoch
     }
 
+    pub(crate) const fn boot_is_reserved(&self) -> bool {
+        self.boot_reserved
+    }
+
     pub(crate) const fn meta_is_committed(&self) -> bool {
         self.meta_committed
     }
@@ -400,8 +429,8 @@ impl Queue {
         v
     }
 
-    /// Queues an event, persisting it first. `Err` with the identifier it
-    /// would have had when every slot is taken (counted, never silent).
+    /// Queues an event, persisting it first. A full queue or exhausted
+    /// sequence space returns `Err` and accounts for the loss; IDs never wrap.
     pub fn push<S: Storage>(
         &mut self,
         storage: &mut S,
@@ -412,15 +441,15 @@ impl Queue {
     ) -> Result<EventId, EventId> {
         let id = EventId {
             boot: self.boot,
-            seq: self.next_seq,
+            seq: self.next_seq.unwrap_or(u32::MAX),
         };
-        self.next_seq = self.next_seq.wrapping_add(1);
+        let Some(seq) = self.next_seq else {
+            self.record_loss(storage, id);
+            return Err(id);
+        };
+        self.next_seq = seq.checked_add(1);
         let Some(slot) = self.slots.iter().position(Option::is_none) else {
-            self.overflow.count = self.overflow.count.saturating_add(1);
-            self.overflow_total = self.overflow_total.saturating_add(1);
-            self.overflow.first.get_or_insert(id);
-            self.overflow.last = Some(id);
-            self.store_meta(storage);
+            self.record_loss(storage, id);
             return Err(id);
         };
         self.slots[slot] = Some(AlertEvent {
@@ -434,6 +463,14 @@ impl Queue {
         });
         self.store_slot(storage, slot);
         Ok(id)
+    }
+
+    fn record_loss<S: Storage>(&mut self, storage: &mut S, id: EventId) {
+        self.overflow.count = self.overflow.count.saturating_add(1);
+        self.overflow_total = self.overflow_total.saturating_add(1);
+        self.overflow.first.get_or_insert(id);
+        self.overflow.last = Some(id);
+        self.store_meta(storage);
     }
 
     /// The events of `ids` were part of an attempt; `ambiguous`: it may
@@ -766,5 +803,30 @@ mod checkpoint_tests {
             })
         );
         assert_eq!(queue.overflow().count, 4);
+    }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+    use panweave_storage::MemoryStorage;
+
+    #[test]
+    fn exhausted_event_sequence_is_counted_as_loss_and_never_wraps_to_another_live_id() {
+        let mut storage = MemoryStorage::<32, 512>::new();
+        let mut queue = Queue::open(&mut storage);
+        queue.next_seq = Some(u32::MAX);
+        let final_id = queue
+            .push(&mut storage, AlertKind::Test, 0, None, 0)
+            .unwrap();
+        assert_eq!(final_id.seq, u32::MAX);
+        assert!(
+            queue
+                .push(&mut storage, AlertKind::Test, 0, None, 1)
+                .is_err()
+        );
+        assert_eq!(queue.pending().len(), 1);
+        assert_eq!(queue.pending()[0].id, final_id);
+        assert_eq!(queue.overflow().count, 1);
     }
 }

@@ -187,6 +187,24 @@ pub trait Uplink {
         self.build_with_snapshots(ctx, pending, out)
     }
 
+    /// Builds with an event namespace independent of overflow accounting.
+    /// Scope `(boot, seq)` by this queue epoch so a factory reset cannot
+    /// make distinct events look like retries. The default keeps legacy formats.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError`].
+    fn build_with_queue_identity(
+        &mut self,
+        ctx: &Context<'_>,
+        pending: &[Pending<'_>],
+        overflow: Option<OverflowCheckpoint>,
+        _event_epoch: Option<[u8; 16]>,
+        out: &mut [u8],
+    ) -> Result<(Built, usize), BuildError> {
+        self.build_with_metadata(ctx, pending, overflow, out)
+    }
+
     /// Reads a complete HTTP response; returns its status (when it is
     /// HTTP) and what it means.
     fn parse(&mut self, response: &[u8]) -> (Option<u16>, Reply);
