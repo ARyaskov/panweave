@@ -531,20 +531,41 @@ impl<HS: Storage> Hub<HS> {
         }
     }
 
-    /// Erases the registry (memory and storage). The firmware calls it
-    /// with `Node::factory_reset`.
-    pub fn factory_reset(&mut self) -> Result<(), StorageError> {
+    /// Stops volatile hub work before a durable factory-reset intent is written.
+    ///
+    /// Clears the registry, pending commands/events, joins, network snapshot and
+    /// notification credentials/queue/timers without accessing storage. Declared
+    /// radio-switch and probe capabilities survive. Calling this before the
+    /// first reset write ensures a failed erase cannot leave notifications active.
+    pub fn begin_factory_reset(&mut self) {
         self.registry.clear();
         self.pending.clear();
         self.commands.clear();
+        self.events.clear();
+        self.unreported_drops = 0;
         self.erase_queue.clear();
         self.index_dirty = false;
         self.persist_due = None;
         self.permit_until = None;
         self.joins_until = None;
         self.network = None;
+        self.network_restore = None;
         self.exemption_grants.clear();
         self.exemptions_applied = false;
+        #[cfg(feature = "alerts")]
+        self.reset_alerts_for_factory_reset();
+    }
+
+    /// Erases the registry (memory and storage). The firmware calls it
+    /// with `Node::factory_reset`. Volatile work and notification secrets are
+    /// cleared even when the persistent erase fails and must be retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns the registry storage error; persistent records may remain until
+    /// the caller retries, so a durable reset intent must precede this operation.
+    pub fn factory_reset(&mut self) -> Result<(), StorageError> {
+        self.begin_factory_reset();
         self.storage.erase_kind(panweave_storage::Kind::Application)
     }
 

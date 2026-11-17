@@ -255,6 +255,9 @@ pub mod code {
     pub const NETWORK_RESTORE_RETRY: u16 = 0x010b;
     /// Last startup stage retained across a warm reset; status is StartupStage.
     pub const PREVIOUS_BOOT_STAGE: u16 = 0x010c;
+    /// A factory-reset phase failed (`status`: firmware phase, `arg`: retrying).
+    /// The paired STORE_FAILED record retains an underlying storage error.
+    pub const FACTORY_RESET_FAILED: u16 = 0x010d;
 
     // USB.
     /// Queued output was dropped: the host took nothing for too long
@@ -502,6 +505,7 @@ pub const fn code_name(c: u16) -> &'static str {
         CAPTURE_STOPPED => "capture-stopped",
         BOOT_COMPLETED => "boot-completed",
         PREVIOUS_BOOT_STAGE => "previous-boot-stage",
+        FACTORY_RESET_FAILED => "factory-reset-failed",
         NETWORK_RESTORED => "network-restored",
         NETWORK_FORMED => "network-formed",
         NETWORK_RESTORE_FAILED => "network-restore-failed",

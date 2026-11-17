@@ -81,6 +81,20 @@ fn sensor_state(leak: LeakState, contact: ContactState) -> &'static str {
 }
 
 impl<HS: Storage> Hub<HS> {
+    pub(crate) fn reset_alerts_for_factory_reset(&mut self) {
+        let supported = self.alerts.supported;
+        let probe_supported = self.alerts.probe_supported;
+        // Replacing Config runs its Drop implementation, which wipes secrets.
+        self.alerts = AlertEngine {
+            supported,
+            probe_supported,
+            // Do not automatically reload pre-reset credentials if a later
+            // persistent erase fails and a host supplies a partial new config.
+            loaded: true,
+            ..AlertEngine::default()
+        };
+    }
+
     /// Loads the notification settings, and the queue when enabled. Part
     /// of [`Hub::restore`]; reads nothing else and writes only when the
     /// mode is enabled (one boot-counter write).

@@ -1146,3 +1146,85 @@ fn server_settings_travel_in_the_protocol_and_are_validated() {
     assert!(s.token_set);
     assert_eq!(s.heartbeat_s, 900);
 }
+
+#[test]
+fn factory_reset_clears_live_secrets_queue_and_heartbeat_even_when_erase_fails() {
+    for begin_only in [true, false] {
+        let (mut sim, c) = network();
+        enable_server(&mut sim, c, 120);
+        assert_eq!(
+            request(&mut sim, c, &Request::QueueTestAlert),
+            Response::Done
+        );
+        {
+            let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+            app.hub.set_radio_probe_supported(true);
+        }
+        assert_eq!(
+            request(&mut sim, c, &Request::RunRadioProbe),
+            Response::Done
+        );
+        let before = status(&mut sim, c);
+        assert!(before.password_set && before.token_set && before.enabled);
+        assert!(before.queue_depth > 0 && before.next_heartbeat_ms.is_some());
+        {
+            let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+            app.hub
+                .storage()
+                .fail_writes(Some(panweave_storage::StorageError::Io));
+            if begin_only {
+                app.hub.begin_factory_reset();
+            } else {
+                assert_eq!(
+                    app.hub.factory_reset(),
+                    Err(panweave_storage::StorageError::Io)
+                );
+            }
+            assert_eq!(
+                app.hub.alert_wifi_credentials(),
+                (b"".as_slice(), b"".as_slice())
+            );
+            assert!(!app.hub.alert_due());
+            assert!(!app.hub.take_radio_probe());
+        }
+        let after = status(&mut sim, c);
+        assert!(!after.enabled && !after.password_set && !after.token_set);
+        assert!(after.ssid.is_empty() && after.server_host.is_empty());
+        assert_eq!(after.queue_depth, 0);
+        assert_eq!(after.next_attempt_ms, None);
+        assert_eq!(after.next_heartbeat_ms, None);
+        // The capability remains present; only its old configuration is gone.
+        assert_eq!(
+            request(&mut sim, c, &Request::RunRadioProbe),
+            Response::Error(ErrorCode::InvalidArgument)
+        );
+        {
+            let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+            app.hub.storage().fail_writes(None);
+        }
+        // A partial update must not reload the old persistent credentials.
+        assert_eq!(
+            request(
+                &mut sim,
+                c,
+                &Request::SetAlertConfig(AlertConfigUpdate {
+                    delay_ms: Some(70_000),
+                    ..AlertConfigUpdate::default()
+                })
+            ),
+            Response::Done
+        );
+        let after = status(&mut sim, c);
+        assert!(!after.enabled && !after.password_set && !after.token_set);
+        assert_eq!(after.state, AlertState::Disabled);
+        // A failed persistent erase left the old durable queue intact. Retry
+        // successfully before checking an empty-queue reconfiguration control.
+        {
+            let (_, app) = sim.stack_and_app::<HubApp>(c).unwrap();
+            app.hub.factory_reset().unwrap();
+        }
+        // Reconfiguration still sees the previously declared delivery capability.
+        enable_server(&mut sim, c, 120);
+        assert_eq!(status(&mut sim, c).state, AlertState::ZigbeeOperational);
+    }
+}
