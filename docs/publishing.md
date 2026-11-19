@@ -10,13 +10,13 @@ firmware examples and fuzz targets are excluded from the workspace.
 First perform the packaging and build verification without uploading:
 
 ```powershell
-cargo +stable publish --workspace --exclude xtask --locked --dry-run
+cargo +stable publish --registry crates-io --locked --dry-run -p panweave-runtime -p panweave -p panweave-hub
 ```
 
 Then publish the same package set:
 
 ```powershell
-cargo +stable publish --workspace --exclude xtask --locked
+cargo +stable publish --registry crates-io --locked -p panweave-runtime -p panweave -p panweave-hub
 ```
 
 If the repository's local `target` junction is unavailable, select an
@@ -26,10 +26,9 @@ existing writable output location for this shell before either command:
 $env:CARGO_TARGET_DIR = Join-Path $env:TEMP 'panweave-publish-target'
 ```
 
-The current release batch increments the minor version of every public
-crate because all public manifests now require Rust 1.100. The runtime,
-facade, simulator and Lite are 0.5.0; the hub is 0.7.0. Other crate versions
-and all internal version requirements are recorded in the manifests.
+This patch release includes the runtime and facade at 0.5.1 and the hub
+at 0.7.1. It includes factory reset fixes, snapshot rotation and durable
+alert overflow checkpoints.
 
 Consumers must migrate direct configuration writes to `Stack::config()`
 and the dedicated runtime policy methods. A critical `EventQueueLoss`

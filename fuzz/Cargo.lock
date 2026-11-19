@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "panweave-hub"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "heapless",
  "panweave-codec",
